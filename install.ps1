@@ -27,6 +27,11 @@ Write-Host "torch wheel: $tag"
 $py = '.venv\Scripts\python.exe'
 Run @('uv', 'venv', '.venv', '--python', '3.11')
 Run @('uv', 'pip', 'install', '--python', $py, 'torch', '--index-url', "https://download.pytorch.org/whl/$tag")
-Run @('uv', 'pip', 'install', '--python', $py, '-e', '.[dev]', 'lightgbm', 'pyarrow')
+Run @('uv', 'pip', 'install', '--python', $py, '-e', '.[dev]')
+if (Test-Path '..\ashare-tcost\pyproject.toml') {
+    Run @('uv', 'pip', 'install', '--python', $py, '-e', '..\ashare-tcost')
+} else {
+    Write-Host 'note: ..\ashare-tcost not found; reports will skip the net-of-cost check'
+}
 Run @($py, '-X', 'utf8', '-m', 'qwb.cli', 'doctor')
-Write-Host 'done. activate with: .venv\Scripts\activate'
+Write-Host 'done. double-click start.bat to open the workbench'

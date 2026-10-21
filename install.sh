@@ -38,6 +38,11 @@ case "$(uname -s)" in
 esac
 run uv venv .venv --python 3.11
 run uv pip install --python "$PY" torch --index-url "https://download.pytorch.org/whl/$TAG"
-run uv pip install --python "$PY" -e ".[dev]" lightgbm pyarrow
+run uv pip install --python "$PY" -e ".[dev]"
+if [ -f ../ashare-tcost/pyproject.toml ]; then
+  run uv pip install --python "$PY" -e ../ashare-tcost
+else
+  echo "note: ../ashare-tcost not found; reports will skip the net-of-cost check"
+fi
 run "$PY" -X utf8 -m qwb.cli doctor
-echo "done. activate with: . .venv/bin/activate   (Windows: .venv\\Scripts\\activate)"
+echo "done. run: $PY -X utf8 -m qwb.cli ui    (or qwb run <config.yaml>)"

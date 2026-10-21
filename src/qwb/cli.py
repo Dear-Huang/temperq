@@ -60,6 +60,10 @@ def main(argv: list[str] | None = None) -> int:
 
     sub.add_parser("doctor", help="report environment and the matching torch wheel")
 
+    u = sub.add_parser("ui", help="open the local web UI (127.0.0.1 only)")
+    u.add_argument("--port", type=int, default=8765)
+    u.add_argument("--no-browser", action="store_true")
+
     r = sub.add_parser("run", help="run a whole training/evaluation from one YAML config")
     r.add_argument("config")
     r.add_argument("--check", action="store_true", help="validate and show the resolved config only")
@@ -67,6 +71,12 @@ def main(argv: list[str] | None = None) -> int:
     args = ap.parse_args(argv)
     if args.cmd == "run":
         return _run(args.config, args.check)
+    if args.cmd == "ui":
+        from pathlib import Path
+
+        from . import ui
+        ui.serve(Path.cwd(), port=args.port, open_browser=not args.no_browser)
+        return 0
     if args.cmd == "doctor":
         from . import env
         print("\n".join(env.doctor()))
