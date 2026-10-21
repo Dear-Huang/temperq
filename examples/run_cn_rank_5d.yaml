@@ -1,0 +1,12 @@
+# qwb run examples/run_cn_rank_5d.yaml
+# Everything not written here takes the default (qwb.daily.DEFAULTS);
+# every change is listed on the report's front page.
+name: cn_rank_5d_lgbm
+task: cn_rank_5d.yaml          # task card, relative to this file
+data:
+  source: snapshot             # local snapshot; dir comes from config.local.yaml
+model:
+  name: lightgbm
+train:
+  universe: all_ex_st          # default is all
+output: runs/cn_rank_5d_lgbm

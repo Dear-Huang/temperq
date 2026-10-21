@@ -1,0 +1,17 @@
+# Example task card: rank ST stocks by next 5-day open-to-open return.
+name: st_rank_5d
+market: cn_a
+template: daily
+target:
+  type: return_rank
+  horizon_days: 5
+  universe_note: stocks that are ST on the decision day (point-in-time)
+timing:
+  signal_available: {day: 0, time: "15:00"}
+  decision: {day: 0, time: "15:30"}
+  execution: {day: 1, time: "09:30", price: open}
+label:
+  start: {day: 1, time: "09:30", price: open}
+  end: {day: 6, time: "09:30", price: open}
+output: score
+metrics: [rank_ic, top_k_net_return]

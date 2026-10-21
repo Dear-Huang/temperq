@@ -1,0 +1,14 @@
+# qwb run examples/run_smoke.yaml   -- synthetic data, checks the pipeline in seconds
+name: smoke
+task: cn_rank_5d.yaml
+data:
+  source: synthetic
+model:
+  name: lightgbm
+  num_boost_round: 50
+train:
+  universe: all
+  min_age_days: 20
+  first_test_year: 2020
+  final_test_years: [2021]
+output: runs/smoke

@@ -1,0 +1,10 @@
+config.local.yaml
+.env*
+runs/
+.venv/
+third_party/
+__pycache__/
+*.pyc
+.pytest_cache/
+models/
+前期经验/

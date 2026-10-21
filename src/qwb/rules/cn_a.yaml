@@ -1,0 +1,21 @@
+# A-share rule pack (SPEC §3). Each rule carries its effective window.
+# Price limits are fractions of pre_close; the first matching rule wins.
+# Board is derived from the code: 688/689 star, 30x chinext, .BJ bse,
+# everything else main. Verified against vendor stk_limit, see
+# runs/m1_pilot/report.md; rules that the check could not cover are marked.
+market: cn_a
+timezone: Asia/Shanghai
+price_limits:
+  - {board: star, pct: 0.20, from: 2019-07-22}
+  - {board: chinext, pct: 0.20, from: 2020-08-24}
+  - {board: chinext, st: true, pct: 0.05, until: 2020-08-21}
+  - {board: chinext, pct: 0.10, until: 2020-08-21}
+  # BSE truncates: up price rounded down, down price rounded up (never beyond 30%)
+  - {board: bse, pct: 0.30, rounding: truncate, from: 2021-11-15}
+  - {board: main, st: true, pct: 0.05}
+  - {board: main, pct: 0.10}
+# Newly listed stocks have special limits in their first days; the price
+# limit check skips them instead of encoding every IPO regime.
+skip_first_trading_days: 5
+settlement: T+1
+lot_size: {default: 100, star: 200}

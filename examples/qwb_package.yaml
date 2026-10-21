@@ -1,0 +1,30 @@
+# Example model package manifest (SPEC §11).
+name: st_rank_5d_lgbm
+version: 0.1.0
+base_model: {name: lightgbm, version: "4.5.0"}
+task_card: task.yaml
+data_recipe: recipe.yaml
+train_config:
+  config_hash: sha256:0000000000000000
+  seeds: [0, 1, 2]
+  folds: folds.json            # fold manifests: fit_cutoff, label_end, snapshot id
+environment: {lockfile: uv.lock, hardware: cpu}
+report: report/index.html
+licenses:
+  model: Apache-2.0
+  code: Apache-2.0
+  data: "tushare: not redistributable; recipe only"
+custom_code: false
+includes_data: false
+consistency_sample: consistency/sample.json   # synthetic inputs + expected predictions
+deviations_from_default: []
+author_notes: notes.md
+files:
+  - task.yaml
+  - recipe.yaml
+  - folds.json
+  - uv.lock
+  - model.txt
+  - report/index.html
+  - consistency/sample.json
+  - notes.md

@@ -1,0 +1,15 @@
+# Example data recipe: daily bars for stocks that were ST at the time.
+source: tushare
+market: cn_a                 # naive timestamps are read as Asia/Shanghai
+universe:
+  type: status
+  field: st
+  value: true
+  point_in_time: true
+  history_source: stock_st   # preferred; coverage to be measured in M1
+  cross_check: namechange    # fallback and cross-check; gaps go to the report
+fields: [open, high, low, close, vol, amount, adj_factor]
+extras: [stk_limit, suspend]
+revision_policy: latest      # or first_release
+start: 2018-01-01
+freq: daily

@@ -1,0 +1,20 @@
+# M2 acceptance task: rank all A-shares (ex-ST) by next 5-day open-to-open return.
+name: cn_rank_5d
+market: cn_a
+template: daily
+target:
+  type: return_rank
+  horizon_days: 5
+timing:
+  signal_available: {day: 0, time: "15:00"}
+  decision: {day: 0, time: "15:30"}
+  execution: {day: 1, time: "09:30", price: open}
+label:
+  start: {day: 1, time: "09:30", price: open}
+  end: {day: 6, time: "09:30", price: open}
+output: score
+metrics: [rank_ic]
+acceptance:
+  confirmatory: {metric: rank_ic_mean, final_test_years: [2024, 2025]}
+  go: "rank_ic_mean > 0 with NW t > 2 on the final test years, and above every baseline"
+  no_go: "NW t < 2 or not above the best simple baseline"
