@@ -16,7 +16,7 @@ import numpy as np
 import pandas as pd
 import yaml
 
-from . import daily, env, metrics, netcost
+from . import daily, env, leakcheck, ledger, metrics, netcost
 
 TZ = {"cn_a": "Asia/Shanghai", "us": "America/New_York"}
 
@@ -175,11 +175,41 @@ def run(rc: dict, cwd: Path, log: Callable[[str], None] = print) -> dict:
                "go": go, "acceptance_hash": acc_hash, "acceptance_changed_after_lock": acc_changed,
                "deviations": rc["deviations"], "timing_s": {k: round(v, 1) for k, v in T.items()},
                "env": meta, "rows_predicted": int(len(pred_tab))}
+    # guardrails: look-ahead check, and how often this test period has been scored
+    summary["leak_check"] = leakcheck.prefix_invariance(P, cfg, st, F=res["F"], U=res["U"])
+    led = cwd / "runs" / "ledger.jsonl"
+    summary["ledger"] = ledger.history(led, card["name"], snap, final, rc["config_hash"],
+                                       f["mean"])
+    ledger.append(led, {"run": rc["name"], "task": card["name"], "snapshot": snap,
+                        "config_hash": rc["config_hash"], "final_test_years": final,
+                        "final_ic": f["mean"], "final_t": f["t"],
+                        "net_excess": (net or {}).get("signals", {}).get("lgbm_ensemble", {})
+                        .get("net_excess_ann"), "deviations": rc["deviations"]})
     (out / "metrics.json").write_text(json.dumps(summary, indent=2, default=str), encoding="utf-8")
     (out / "report.md").write_text(_report(rc, summary, rows, null, seed_corr, seed_overlap,
                                            valid, final, T, meta, len(seeds)), encoding="utf-8")
     summary["output"] = str(out)
     return summary
+
+
+def _guard_lines(s: dict) -> list[str]:
+    lc, lg = s.get("leak_check"), s.get("ledger")
+    out = []
+    if lc:
+        out.append(f"- 前视检查（截断数据重算特征与股票池，{len(lc['days'])} 天 × {lc['items']} 项）："
+                   + ("通过" if lc["ok"] else
+                      "**未通过** " + "; ".join(f"{v['date']} {v['item']} {v['cells']} 格"
+                                              for v in lc["violations"][:5])))
+    if lg:
+        msg = (f"- 最终测试期已被评估 {lg['views']} 次（{lg['configs']} 种配置，本地台账自报，不作认证）")
+        if lg["views"] > 1:
+            msg += "；**这不是首次查看，结果不能当作独立确认**"
+            if lg["is_best"]:
+                msg += "；本次是其中最好的一次，存在挑选偏差"
+        if lg["years_changed"]:
+            msg += f"；**测试期与首次运行 {lg['first_final_years']} 不同**"
+        out.append(msg)
+    return out
 
 
 def _net_section(net: dict | None, cfg: dict, final: list[int]) -> list[str]:
@@ -217,7 +247,7 @@ def _report(rc, s, rows, null, seed_corr, seed_overlap, valid, final, T, meta, n
         "- 偏离默认值：" + ("; ".join(devs) if devs else "无"),
         "- 未执行：冲击成本（大单）、优化型组合构建" if s.get("net_of_cost")
         else "- 未执行：扣成本检验（未安装 ashare-tcost），以下 IC 不代表收益",
-        "- 尝试次数：本地台账自报，不作认证（SPEC §14）", "",
+        *_guard_lines(s), "",
         f"## 结果（日度 Rank IC 均值，Newey-West t，lag 事先固定为 {s['nw_lag']}；"
         "MDE 为 80% 功效下可检出的最小均值）", "",
         f"| 信号 | 验证期 {valid[0] if valid else ''}–{valid[-1] if valid else ''} | "
