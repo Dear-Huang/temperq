@@ -6,6 +6,7 @@ import math
 from functools import lru_cache
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 import yaml
 
@@ -29,6 +30,39 @@ def stamp_tax_sell_bp(day, pack: dict | None = None) -> float:
             continue
         return float(r["bp"])
     raise ValueError(f"no stamp duty rule covers {d.date()}")
+
+
+def cn_board_vec(codes) -> np.ndarray:
+    s = pd.Series(codes, dtype="string").fillna("")
+    return np.select([s.str.endswith(".BJ"), s.str.startswith(("688", "689")),
+                      s.str.startswith("30")], ["bse", "star", "chinext"], "main")
+
+
+def limit_prices_vec(codes, is_st, days, pre_close, pack: dict | None = None):
+    """Vectorised limit_prices: (up, down) arrays in yuan, NaN where no rule applies."""
+    pack = pack or load("cn_a")
+    board = cn_board_vec(codes)
+    st = np.asarray(is_st, dtype=bool)
+    d = pd.to_datetime(pd.Series(days)).dt.normalize().to_numpy()
+    pc = np.asarray(pre_close, dtype=float)
+    pct = np.full(len(pc), np.nan)
+    trunc = np.zeros(len(pc), dtype=bool)
+    todo = np.ones(len(pc), dtype=bool)
+    for r in pack["price_limits"]:                  # first matching rule wins
+        m = todo & (board == r["board"])
+        if "st" in r:
+            m &= st == bool(r["st"])
+        if "from" in r:
+            m &= d >= np.datetime64(pd.Timestamp(r["from"]))
+        if "until" in r:
+            m &= d <= np.datetime64(pd.Timestamp(r["until"]))
+        pct[m] = r["pct"]
+        trunc[m] = r.get("rounding") == "truncate"
+        todo &= ~m
+    up_raw, dn_raw = pc * (1 + pct) * 100, pc * (1 - pct) * 100
+    up = np.where(trunc, np.floor(up_raw + 1e-6), np.floor(up_raw + 0.5 + 1e-6)) / 100
+    dn = np.where(trunc, np.ceil(dn_raw - 1e-6), np.floor(dn_raw + 0.5 + 1e-6)) / 100
+    return up, dn
 
 
 def cn_board(code: str) -> str:

@@ -23,7 +23,10 @@ if not _os.environ.get("QWB_SKIP_PRELOAD"):
         if _late:
             PRELOAD_SKIPPED.append(_mod)
             continue
-        __import__(_mod)
+        try:
+            __import__(_mod)
+        except Exception as _e:  # a broken GPU build must not stop CPU-only training
+            PRELOAD_SKIPPED.append(f"{_mod} ({type(_e).__name__})")
     if PRELOAD_SKIPPED:
         _warnings.warn(f"qwb imported after {_late}; skipped preloading {PRELOAD_SKIPPED}. "
                        "Import qwb (or torch, then osqp) before pandas if you need them.",
