@@ -212,6 +212,32 @@ def _guard_lines(s: dict) -> list[str]:
     return out
 
 
+def _ledger_table(s: dict) -> list[str]:
+    """Every earlier scoring of this test period, so no configuration can be left out."""
+    lg = s.get("ledger")
+    if not lg or not lg["earlier"]:
+        return []
+    lines = ["## 同一测试期的全部评估记录（本地台账）", "",
+             "| 时间 | 运行 | 配置 | 最终测试 IC | 净超额 | 偏离默认值 |", "|---|---|---|---|---|---|"]
+    for e in lg["earlier"]:
+        ne = e.get("net_excess")
+        lines.append(f"| {e.get('t', '')[:16]} | {e.get('run', '')} | `{str(e.get('config_hash', ''))[-8:]}` | "
+                     f"{e.get('final_ic', float('nan')):+.4f} | "
+                     f"{'n/a' if ne is None else f'{ne:+.1%}'} | "
+                     f"{'; '.join(e.get('deviations') or []) or '无'} |")
+    fic = s["ic"]["lgbm_ensemble"]["final_test"]["mean"]
+    lines.append(f"| 本次 | {s['run']} | `{s['config_hash'][-8:]}` | {fic:+.4f} | "
+                 f"{_net_str(s)} | {'; '.join(s['deviations']) or '无'} |")
+    if lg["earlier_total"] > len(lg["earlier"]):
+        lines.append(f"\n只列出最近 {len(lg['earlier'])} 条，共 {lg['earlier_total']} 条。")
+    return lines + [""]
+
+
+def _net_str(s: dict) -> str:
+    v = (s.get("net_of_cost") or {}).get("signals", {}).get("lgbm_ensemble")
+    return "n/a" if not v else f"{v['net_excess_ann']:+.1%}"
+
+
 def _net_section(net: dict | None, cfg: dict, final: list[int]) -> list[str]:
     if not net:
         return []
@@ -259,8 +285,9 @@ def _report(rc, s, rows, null, seed_corr, seed_overlap, valid, final, T, meta, n
         lines.append(f"种子噪声地板：种子间预测秩相关 {np.mean(seed_corr):.3f}，前 10% 持仓重叠 "
                      f"{np.mean(seed_overlap):.3f}")
     lines += ["", f"**预注册判定：{'Go' if s['go'] else 'No-Go'}**"
-              f"（{card.get('acceptance', {}).get('go', '未写门槛')}）", "",
-              "## 耗时（秒）", "", "| 阶段 | 秒 |", "|---|---|"]
+              f"（{card.get('acceptance', {}).get('go', '未写门槛')}）", ""]
+    lines += _ledger_table(s)
+    lines += ["## 耗时（秒）", "", "| 阶段 | 秒 |", "|---|---|"]
     lines += [f"| {k} | {v:.1f} |" for k, v in T.items()]
     lines += ["", f"环境：Python {meta['python']}，"
               + (f"{g['name']}（LightGBM 走 CPU，GPU 未使用）" if g else "无 GPU")

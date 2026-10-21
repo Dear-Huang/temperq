@@ -68,3 +68,10 @@ def test_cli_run_smoke_end_to_end(tmp_path, monkeypatch):
     report = (out / "report.md").read_text(encoding="utf-8")
     assert "num_boost_round = 50" in report and "合成数据" in report
     assert cli.main(["run", str(p), "--check"]) == 0
+
+    # second scoring of the same test period: front page warns, table lists both runs
+    assert cli.main(["run", str(p)]) == 0
+    report = (out / "report.md").read_text(encoding="utf-8")
+    assert "已被评估 2 次" in report and "不能当作独立确认" in report
+    assert "同一测试期的全部评估记录" in report and "| 本次 |" in report
+    assert "前视检查" in report and "通过" in report
