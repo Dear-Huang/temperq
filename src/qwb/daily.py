@@ -16,6 +16,7 @@ import pandas as pd
 from . import folds as foldlib
 
 FIELDS = ["open", "high", "low", "close", "amount", "adj_factor", "up_limit"]
+OPTIONAL_FIELDS = ["down_limit"]   # used by the net-of-cost check when present
 FEATURES = ["r1", "r5", "r20", "r60", "vol20", "amt20", "amt_ratio", "gap", "range",
             "to_limit"]
 
@@ -33,6 +34,8 @@ DEFAULTS = {
              "force_row_wise": True, "verbose": -1},
     "num_boost_round": 300,
     "shuffle_null_draws": 20,
+    # net-of-cost check (qwb.netcost): top share held, commission per side in bp
+    "portfolio": {"top": 0.1, "commission_bp": 3.0},
 }
 
 
@@ -56,8 +59,10 @@ def load_panel(data_dir: str | Path, start=None, end=None) -> dict:
     files = sorted((data_dir / "bars").glob("*.parquet"))
     if not files:
         raise FileNotFoundError(f"no bars under {data_dir / 'bars'}")
-    bars = pd.concat([pd.read_parquet(f, columns=["code", "date"] + FIELDS) for f in files],
-                     ignore_index=True)
+    import pyarrow.parquet as pq
+    have = set(pq.read_schema(files[0]).names)
+    cols = ["code", "date"] + FIELDS + [f for f in OPTIONAL_FIELDS if f in have]
+    bars = pd.concat([pd.read_parquet(f, columns=cols) for f in files], ignore_index=True)
     bars["date"] = pd.to_datetime(bars["date"])
     if start is not None:
         bars = bars[bars["date"] >= pd.Timestamp(start)]
@@ -67,7 +72,8 @@ def load_panel(data_dir: str | Path, start=None, end=None) -> dict:
 
 
 def panel_from_bars(bars: pd.DataFrame) -> dict:
-    wide = {f: bars.pivot(index="date", columns="code", values=f).sort_index() for f in FIELDS}
+    fields = FIELDS + [f for f in OPTIONAL_FIELDS if f in bars.columns]
+    wide = {f: bars.pivot(index="date", columns="code", values=f).sort_index() for f in fields}
     idx, cols = wide["close"].index, wide["close"].columns
     return {f: w.reindex(index=idx, columns=cols).astype("float64") for f, w in wide.items()}
 

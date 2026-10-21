@@ -16,7 +16,7 @@ import numpy as np
 import pandas as pd
 import yaml
 
-from . import daily, env, metrics
+from . import daily, env, metrics, netcost
 
 TZ = {"cn_a": "Asia/Shanghai", "us": "America/New_York"}
 
@@ -136,6 +136,16 @@ def run(rc: dict, cwd: Path, log: Callable[[str], None] = print) -> dict:
     fin = np.isin(dates.year, final)
     null = metrics.shuffle_null(np.where(fin[:, None], ens, np.nan), y,
                                 n=cfg["shuffle_null_draws"])
+    # guardrail "IC is not a return": same long-only net-of-cost test for model and baselines
+    pf = cfg["portfolio"]
+    try:
+        net = netcost.evaluate(
+            P, card, {"lgbm_ensemble": ens,
+                      **{k: np.where(tested, v, np.nan) for k, v in base.items()}},
+            res["U"], y, final, top=pf["top"], commission_bp=pf["commission_bp"])
+    except ImportError:
+        net = None
+        log("net-of-cost check skipped: ashare-tcost not installed")
     seed_corr, seed_overlap = [], []
     for i in range(len(seeds)):
         for j in range(i + 1, len(seeds)):
@@ -161,6 +171,7 @@ def run(rc: dict, cwd: Path, log: Callable[[str], None] = print) -> dict:
                "final_test_years": final, "nw_lag": lag, "ic": rows,
                "shuffle_null_mean": float(np.mean(null)), "shuffle_null_sd": float(np.std(null)),
                "seed_pred_rank_corr": seed_corr, "seed_top10_overlap": seed_overlap,
+               "net_of_cost": net,
                "go": go, "acceptance_hash": acc_hash, "acceptance_changed_after_lock": acc_changed,
                "deviations": rc["deviations"], "timing_s": {k: round(v, 1) for k, v in T.items()},
                "env": meta, "rows_predicted": int(len(pred_tab))}
@@ -169,6 +180,24 @@ def run(rc: dict, cwd: Path, log: Callable[[str], None] = print) -> dict:
                                            valid, final, T, meta, len(seeds)), encoding="utf-8")
     summary["output"] = str(out)
     return summary
+
+
+def _net_section(net: dict | None, cfg: dict, final: list[int]) -> list[str]:
+    if not net:
+        return []
+    pf = cfg["portfolio"]
+    lines = [f"## 扣成本后（最终测试 {final[0]}–{final[-1]}，年化）", "",
+             f"做法：每 {net['hold_days']} 个交易日按信号买入股票池前 {pf['top']:.0%}，等权，"
+             f"按标签的开仓价成交、持有到标签平仓价；涨停或停牌买不进，跌停或停牌卖不出则继续持有。"
+             f"成本＝STRUCT 半价差（上月日频数据估计，ashare-tcost）＋佣金 {pf['commission_bp']:g}bp/边"
+             f"＋卖出印花税（规则包）。超额相对股票池等权（年化 {net['benchmark_ann']:+.1%}）。", "",
+             "| 信号 | 毛超额 | 成本 | **净超额** | 净超额 t | 单边换手/期 |", "|---|---|---|---|---|---|"]
+    for k, v in net["signals"].items():
+        lines.append(f"| {k} | {v['gross_excess_ann']:+.1%} | {v['cost_ann']:.1%} | "
+                     f"**{v['net_excess_ann']:+.1%}** | {v['net_excess_t']:.2f} | "
+                     f"{v['turnover_one_way']:.0%} |")
+    lines += ["", "未计入大单冲击成本；资金规模越大，真实成本越高于此表。", ""]
+    return lines
 
 
 def _report(rc, s, rows, null, seed_corr, seed_overlap, valid, final, T, meta, n_seeds) -> str:
@@ -181,11 +210,13 @@ def _report(rc, s, rows, null, seed_corr, seed_overlap, valid, final, T, meta, n
         f"任务 `{card['name']}`　数据快照 `{s['data_snapshot_id']}`　股票池 `{cfg['universe']}`　"
         f"面板 {s['panel'][0]} 日 × {s['panel'][1]} 只　模型 LightGBM × {n_seeds} 种子，按年滚动重训　"
         f"配置 `{rc['config_hash']}`", "",
+        *_net_section(s.get("net_of_cost"), cfg, final),
         "## 首页标注",
         f"- 验收门槛哈希 `{s['acceptance_hash']}`"
         + ("；**门槛在锁定后被修改**" if s["acceptance_changed_after_lock"] else "，锁定后未改"),
         "- 偏离默认值：" + ("; ".join(devs) if devs else "无"),
-        "- 未执行：组合构建、成本、成交约束（首版只输出预测表，SPEC §10）",
+        "- 未执行：冲击成本（大单）、优化型组合构建" if s.get("net_of_cost")
+        else "- 未执行：扣成本检验（未安装 ashare-tcost），以下 IC 不代表收益",
         "- 尝试次数：本地台账自报，不作认证（SPEC §14）", "",
         f"## 结果（日度 Rank IC 均值，Newey-West t，lag 事先固定为 {s['nw_lag']}；"
         "MDE 为 80% 功效下可检出的最小均值）", "",

@@ -18,6 +18,19 @@ def load(market: str = "cn_a") -> dict:
         return yaml.safe_load(f)
 
 
+def stamp_tax_sell_bp(day, pack: dict | None = None) -> float:
+    """Sell-side stamp duty in bp on `day`; raises outside the rule pack's coverage."""
+    pack = pack or load("cn_a")
+    d = pd.Timestamp(day).normalize()
+    for r in pack["stamp_tax_sell_bp"]:
+        if "from" in r and d < pd.Timestamp(r["from"]):
+            continue
+        if "until" in r and d > pd.Timestamp(r["until"]):
+            continue
+        return float(r["bp"])
+    raise ValueError(f"no stamp duty rule covers {d.date()}")
+
+
 def cn_board(code: str) -> str:
     if code.endswith(".BJ"):
         return "bse"

@@ -30,7 +30,8 @@ SOURCES = {"snapshot", "synthetic"}
 MODELS = {"lightgbm"}
 MODEL = {"name", "params", "num_boost_round"}
 TRAIN = {"universe", "min_age_days", "min_amount_quantile", "label_transform",
-         "first_test_year", "final_test_years", "seeds", "shuffle_null_draws"}
+         "first_test_year", "final_test_years", "seeds", "shuffle_null_draws", "portfolio"}
+PORTFOLIO = {"top", "commission_bp"}
 UNIVERSES = {"all", "st", "all_ex_st"}
 
 
@@ -74,6 +75,14 @@ def resolve(raw: dict, base_dir: str | Path = ".") -> tuple[dict | None, Report]
         rep.add(ERROR, "BAD_MODEL", f"model.name must be one of {sorted(MODELS)}")
     if train.get("universe", daily.DEFAULTS["universe"]) not in UNIVERSES:
         rep.add(ERROR, "BAD_UNIVERSE", f"train.universe must be one of {sorted(UNIVERSES)}")
+    pf = train.get("portfolio") or {}
+    if not isinstance(pf, dict):
+        rep.add(ERROR, "BAD_CONFIG", "train.portfolio must be a mapping")
+    else:
+        _unknown(rep, "train.portfolio", pf, PORTFOLIO)
+        top = pf.get("top", daily.DEFAULTS["portfolio"]["top"])
+        if not (isinstance(top, (int, float)) and 0 < top <= 0.5):
+            rep.add(ERROR, "BAD_PORTFOLIO", "train.portfolio.top must be in (0, 0.5]")
     seeds = train.get("seeds", daily.DEFAULTS["seeds"])
     if not isinstance(seeds, list) or not seeds or not all(isinstance(s, int) for s in seeds):
         rep.add(ERROR, "BAD_SEEDS", "train.seeds must be a non-empty list of integers")
@@ -102,7 +111,8 @@ def resolve(raw: dict, base_dir: str | Path = ".") -> tuple[dict | None, Report]
         return None, rep
 
     cfg = copy.deepcopy(daily.DEFAULTS)
-    cfg.update({k: v for k, v in train.items()})
+    cfg.update({k: v for k, v in train.items() if k != "portfolio"})
+    cfg["portfolio"] = dict(cfg["portfolio"], **(train.get("portfolio") or {}))
     if "num_boost_round" in model:
         cfg["num_boost_round"] = model["num_boost_round"]
     cfg["lgbm"] = dict(cfg["lgbm"], **params)

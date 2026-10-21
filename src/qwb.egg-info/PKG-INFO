@@ -1,0 +1,9 @@
+Metadata-Version: 2.4
+Name: qwb
+Version: 0.0.1
+Summary: Quant model workbench: point-in-time data, task cards, validation, packaging
+Requires-Python: >=3.10
+Requires-Dist: pandas>=2.0
+Requires-Dist: pyyaml>=6.0
+Provides-Extra: dev
+Requires-Dist: pytest>=8.0; extra == "dev"

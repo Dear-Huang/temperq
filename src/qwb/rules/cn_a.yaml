@@ -17,5 +17,9 @@ price_limits:
 # Newly listed stocks have special limits in their first days; the price
 # limit check skips them instead of encoding every IPO regime.
 skip_first_trading_days: 5
+# Stamp duty, sell side only, bp of traded value (MoF announcements 2008-09-19, 2023-08-28).
+stamp_tax_sell_bp:
+  - {bp: 10, from: 2008-09-19, until: 2023-08-27}
+  - {bp: 5, from: 2023-08-28}
 settlement: T+1
 lot_size: {default: 100, star: 200}
