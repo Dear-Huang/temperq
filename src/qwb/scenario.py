@@ -93,8 +93,11 @@ def task_card(horizon: int, market: str = "cn_a") -> dict:
 
 
 def fmt_yuan(x: float) -> str:
+    """Readable amount: at most two decimals, trailing zeros dropped (7.14 万, 5 亿)."""
+    def num(v):
+        return f"{v:.2f}".rstrip("0").rstrip(".")
     if x >= 1e8:
-        return f"{x / 1e8:g} 亿"
+        return f"{num(x / 1e8)} 亿"
     if x >= 1e4:
-        return f"{x / 1e4:g} 万"
+        return f"{num(x / 1e4)} 万"
     return f"{x:,.0f} 元"

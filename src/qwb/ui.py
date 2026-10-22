@@ -888,8 +888,8 @@ def create_app(workdir: Path, task_dir: Path | None = None,
         cap_txt = scenario.fmt_yuan(r["capital"]) if r["capital"] else "未设定"
         cap_ph = f"{r['capital'] / 1e4:g}" if r["capital"] else ""
         body = (f'<p><a href="/models">← 全部模型</a></p><h2>{html.escape(run)}</h2>'
-                f'<p class="mut">{html.escape(sc.get("universe", ""))} · {html.escape(sc.get("horizon", ""))} · '
-                f'{html.escape(sc.get("model") or meta["model"])} · 训练数据到 {html.escape(meta.get("train_end", ""))}</p>'
+                f'<p class="mut">{html.escape(" · ".join(x for x in (sc.get("universe"), sc.get("horizon"), sc.get("model") or meta["model"]) if x))}'
+                f' · 训练数据到 {html.escape(meta.get("train_end", ""))}</p>'
                 + "".join(f'<div class="box bad">{html.escape(w)}</div>' for w in warn) +
                 f'<form method="get" class="box"><label class="f">清单日期 <input name="date" value="{html.escape(date)}" '
                 f'placeholder="{r["data_end"]}（最新）" size="14"></label>'
