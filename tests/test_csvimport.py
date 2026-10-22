@@ -76,3 +76,11 @@ def test_imported_csv_trains_end_to_end(tmp_path):
     s = pipeline.run(rc, tmp_path, log=lambda *_: None)
     assert s["data_snapshot_id"] == snap["data_snapshot_id"]
     assert s["net_of_cost"] is not None and s["leak_check"]["ok"]
+    assert s["ledger"]["views"] == 1
+
+    # second scoring of the same test period on real (non-synthetic) data: warned
+    s = pipeline.run(rc, tmp_path, log=lambda *_: None)
+    report = (tmp_path / "out" / "report.md").read_text(encoding="utf-8")
+    assert s["ledger"]["views"] == 2
+    assert "已被评估 2 次" in report and "不能当作独立确认" in report
+    assert "同一测试期的全部评估记录" in report and "| 本次 |" in report

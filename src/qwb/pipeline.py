@@ -177,14 +177,18 @@ def run(rc: dict, cwd: Path, log: Callable[[str], None] = print) -> dict:
                "env": meta, "rows_predicted": int(len(pred_tab))}
     # guardrails: look-ahead check, and how often this test period has been scored
     summary["leak_check"] = leakcheck.prefix_invariance(P, cfg, st, F=res["F"], U=res["U"])
-    led = cwd / "runs" / "ledger.jsonl"
-    summary["ledger"] = ledger.history(led, card["name"], snap, final, rc["config_hash"],
-                                       f["mean"])
-    ledger.append(led, {"run": rc["name"], "task": card["name"], "snapshot": snap,
-                        "config_hash": rc["config_hash"], "final_test_years": final,
-                        "final_ic": f["mean"], "final_t": f["t"],
-                        "net_excess": (net or {}).get("signals", {}).get("lgbm_ensemble", {})
-                        .get("net_excess_ann"), "deviations": rc["deviations"]})
+    # synthetic data has no test period worth protecting: installer smoke tests and
+    # trial runs must not make a user's first real run look like a repeat view
+    summary["ledger"] = None
+    if snap != "snap-synthetic":
+        led = cwd / "runs" / "ledger.jsonl"
+        summary["ledger"] = ledger.history(led, card["name"], snap, final, rc["config_hash"],
+                                           f["mean"])
+        ledger.append(led, {"run": rc["name"], "task": card["name"], "snapshot": snap,
+                            "config_hash": rc["config_hash"], "final_test_years": final,
+                            "final_ic": f["mean"], "final_t": f["t"],
+                            "net_excess": (net or {}).get("signals", {}).get("lgbm_ensemble", {})
+                            .get("net_excess_ann"), "deviations": rc["deviations"]})
     (out / "metrics.json").write_text(json.dumps(summary, indent=2, default=str), encoding="utf-8")
     (out / "report.md").write_text(_report(rc, summary, rows, null, seed_corr, seed_overlap,
                                            valid, final, T, meta, len(seeds)), encoding="utf-8")
@@ -200,6 +204,8 @@ def _guard_lines(s: dict) -> list[str]:
                    + ("通过" if lc["ok"] else
                       "**未通过** " + "; ".join(f"{v['date']} {v['item']} {v['cells']} 格"
                                               for v in lc["violations"][:5])))
+    if str(s.get("data_snapshot_id")) == "snap-synthetic":
+        out.append("- 评估台账：试运行数据不记入")
     if lg:
         msg = (f"- 最终测试期已被评估 {lg['views']} 次（{lg['configs']} 种配置，本地台账自报，不作认证）")
         if lg["views"] > 1:

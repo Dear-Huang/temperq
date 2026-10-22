@@ -571,6 +571,14 @@ def create_app(workdir: Path, task_dir: Path | None = None,
     return app
 
 
+def _local_time(iso_utc: str) -> str:
+    """Job timestamps are stored in UTC; users read the computer's local time."""
+    try:
+        return datetime.fromisoformat(iso_utc).astimezone().strftime("%Y-%m-%d %H:%M")
+    except ValueError:
+        return iso_utc[:16].replace("T", " ")
+
+
 def _job_rows(store: Store) -> str:
     rows = []
     label = {"queued": "排队中", "running": "运行中", "succeeded": "完成", "failed": "失败",
@@ -586,7 +594,7 @@ def _job_rows(store: Store) -> str:
         kind = "训练" if ui.get("what") == "train" else "下载数据"
         rows.append(f'<tr><td><a href="/job/{j["job_id"]}">{html.escape(ui["name"])}</a></td>'
                     f'<td>{kind}</td><td>{label.get(j["state"], j["state"])}</td>'
-                    f'<td>{j["updated"][:16].replace("T", " ")}</td></tr>')
+                    f'<td>{_local_time(j["updated"])}</td></tr>')
         if len(rows) >= 20:
             break
     return "".join(rows) or '<tr><td colspan="4" class="mut">还没有记录</td></tr>'
@@ -730,5 +738,5 @@ INDEX = """
 </section>
 
 <h3>运行记录</h3>
-<div class="tw"><table><tr><th>名称</th><th>类型</th><th>状态</th><th>更新时间（UTC）</th></tr>{jobs}</table></div>
+<div class="tw"><table><tr><th>名称</th><th>类型</th><th>状态</th><th>更新时间</th></tr>{jobs}</table></div>
 """
