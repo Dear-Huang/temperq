@@ -1,0 +1,20 @@
+# qwb run examples/run_csi300_1e.yaml
+# Scenario: A shares, CSI 300 constituents (as of each date), hold 5 days,
+# capital tier 1000 万–1 亿 -> 50 names, ADV floor = 1e8 / 50 / 5% = 4000 万/day.
+name: csi300_5d_1e_lgbm
+task: cn_rank_5d.yaml
+data:
+  source: snapshot
+model:
+  name: lightgbm
+train:
+  universe: csi300
+  min_adv_yuan: 40000000
+  portfolio: {n_hold: 50}
+  scenario:
+    market: A 股
+    horizon: 周频：持有 5 天
+    universe: 沪深 300 成分股
+    capital: 1000 万–1 亿
+    model: LightGBM（梯度提升树）
+output: runs/csi300_5d_1e_lgbm

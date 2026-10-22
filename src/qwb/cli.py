@@ -35,7 +35,7 @@ def _run(path: str, check_only: bool) -> int:
     from . import pipeline
 
     s = pipeline.run(rc, Path.cwd(), log=lambda m: print(m, flush=True))
-    f = s["ic"]["lgbm_ensemble"]["final_test"]
+    f = s["ic"][s.get("model_key", "lgbm_ensemble")]["final_test"]
     print(f"final test IC {f['mean']:+.4f} (t={f['t']:.2f})  "
           f"{'Go' if s['go'] else 'No-Go'}  report {s['output']}\\report.md")
     return 0

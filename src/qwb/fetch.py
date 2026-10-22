@@ -50,6 +50,17 @@ def make_job(token: str, url: str, cache_dir: Path, out_dir: Path, min_interval:
         if not rep.ok:
             raise RuntimeError(f"st_status failed validation:\n{rep}")
         st.to_parquet(out / "st_status.parquet", index=False)
+        # index constituents for the CSI 300 / 500 / 1000 universes; optional, a
+        # missing permission only disables those universes
+        try:
+            frames = [cn_a.index_members(cli, cache, code, days[0], days[-1])
+                      for code in cn_a.INDEXES.values()]
+            pd.concat(frames, ignore_index=True).to_parquet(out / "index_members.parquet",
+                                                            index=False)
+            ctx.log("index constituents: CSI 300 / 500 / 1000")
+        except Exception as e:
+            ctx.log(f"index constituents skipped ({type(e).__name__}); "
+                    "index universes will not be available for this dataset")
         snap = {"data_snapshot_id": cache.snapshot_id(), "source": f"tushare:{url}",
                 "start": str(days[0].date()), "end": str(days[-1].date()),
                 "trading_days": len(days), "st_intervals": len(st), "has_st": True}

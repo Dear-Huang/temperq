@@ -54,6 +54,7 @@ def _entry_exit(card: dict) -> tuple[int, int, str, str]:
 
 def evaluate(P: dict, card: dict, signals: dict, U: np.ndarray, y_raw: np.ndarray,
              years: list[int], top: float = 0.1, commission_bp: float = 3.0,
+             n_hold: int | None = None,
              half_spread: pd.DataFrame | None = None, pack: dict | None = None) -> dict:
     dates = P["close"].index
     s_off, e_off, s_px, e_px = _entry_exit(card)
@@ -80,7 +81,7 @@ def evaluate(P: dict, card: dict, signals: dict, U: np.ndarray, y_raw: np.ndarra
             te = t + s_off
             v = U[t] & ~np.isnan(sig[t])
             idx = np.flatnonzero(v)
-            n_top = max(1, int(len(idx) * top))
+            n_top = min(n_hold, len(idx)) if n_hold else max(1, int(len(idx) * top))
             target = set(idx[np.argsort(-sig[t, idx])[:n_top]])
             keep = {j for j in w0 if j in target or not sellable[te, j]}
             new = {j for j in target - set(w0) if buyable[te, j]}

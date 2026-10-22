@@ -22,18 +22,23 @@ def client(tmp_path):
 
 
 def form(app, **over):
-    f = {"token": app.state.token, "name": "ui_trial", "task": "cn_rank_5d",
+    f = {"token": app.state.token, "name": "ui_trial", "market": "cn_a", "horizon": "5",
+         "universe": "all", "capital": "100w_600w", "model": "lightgbm",
          "dataset": ui.SYNTHETIC, "num_boost_round": "40", "n_seeds": "1"}
     f.update(over)
     return f
 
 
-def test_index_shows_four_steps_and_hardware(tmp_path):
+def test_index_shows_four_steps_scenario_and_hardware(tmp_path):
     _, c = client(tmp_path)
     page = c.get("/").text
-    for s in ("要打造什么模型", "用什么数据", "参数（可以不改）", "开始训练"):
+    for s in ("要打造什么模型", "用什么数据", "由第 1 步推出", "开始训练"):
         assert s in page
-    assert "全 A 股选股" in page and "试运行数据" in page and "什么显卡" in page
+    for s in ("用在哪个市场", "持有期", "在哪些股票里选", "打算投入多少资金", "用什么模型",
+              "0–30 万", "5 亿及以上", "沪深 300", "LightGBM", "Ridge", "Kronos", "规划中"):
+        assert s in page, s
+    assert 'value="kronos" form="main" disabled' in page          # planned: cannot be picked
+    assert "试运行数据" in page and "什么显卡" in page
     assert c.get("/template.csv").status_code == 200
 
 
@@ -51,17 +56,37 @@ def test_bad_inputs_get_plain_messages(tmp_path):
     assert "名称只能用" in c.post("/run", data=form(app, name="../x")).text
     assert "种子数" in c.post("/run", data=form(app, n_seeds="50")).text
     assert "请选择数据" in c.post("/run", data=form(app, dataset="nope")).text
-    assert "没有 ST 标记" in c.post("/run", data=form(app, task="st_task")).text
+    assert "没有 ST 标记" in c.post("/run", data=form(app, universe="st")).text
+    assert "没有指数成分" in c.post("/run", data=form(app, universe="csi300")).text
+    assert "还没有接入" in c.post("/run", data=form(app, model="kronos")).text
+    assert "只支持 A 股" in c.post("/run", data=form(app, market="us")).text
+    assert "至少 30 只" in c.post("/run", data=form(app, universe="list",
+                                                   universe_list="000001 600000")).text
 
 
-def test_empty_advanced_fields_keep_defaults(tmp_path):
-    ds = ui.datasets(tmp_path)
-    cfg, err, _ = ui.build_config({"name": "a", "task": "cn_rank_5d", "dataset": ui.SYNTHETIC,
-                                   "num_leaves": "31"}, EX, ds)
-    assert err == "" and cfg["model"] == {"name": "lightgbm", "params": {"num_leaves": 31}}
-    # trial data has no ST flags: universe falls back to all (the default, so not written);
-    # test years follow the data range
-    assert "universe" not in cfg["train"] and cfg["train"]["final_test_years"] == [2021]
+def test_scenario_drives_config():
+    ds = ui.datasets(Path("."))
+    base = {"name": "a", "market": "cn_a", "dataset": ui.SYNTHETIC, "universe": "all"}
+    cfg, err, _ = ui.build_config(dict(base, horizon="20", capital="1e_5e"), ds)
+    assert err == ""
+    assert cfg["task"]["target"]["horizon_days"] == 20
+    assert cfg["train"]["portfolio"]["n_hold"] == 100
+    assert cfg["train"]["min_adv_yuan"] == round(5e8 / 100 / 0.05)
+    assert cfg["train"]["scenario"]["capital"] == "1 亿–5 亿"
+    small, _, _ = ui.build_config(dict(base, capital="lt30w"), ds)
+    assert small["train"]["portfolio"]["n_hold"] == 10
+    assert small["train"]["min_adv_yuan"] < cfg["train"]["min_adv_yuan"]
+    # step 3 override: fewer names -> bigger positions -> higher liquidity floor
+    few, _, _ = ui.build_config(dict(base, capital="lt30w", n_hold="5"), ds)
+    assert few["train"]["min_adv_yuan"] == 2 * small["train"]["min_adv_yuan"]
+    r, _, _ = ui.build_config(dict(base, model="ridge", num_leaves="31"), ds)
+    assert r["model"] == {"name": "ridge"} and r["train"]["seeds"] == [0]   # lgbm params ignored
+    lg, _, _ = ui.build_config(dict(base, num_leaves="31"), ds)
+    assert lg["model"] == {"name": "lightgbm", "params": {"num_leaves": 31}}
+    codes = " ".join(f"{600000 + i}" for i in range(30))
+    lst, err, _ = ui.build_config(dict(base, universe="list", universe_list=codes), ds)
+    assert err == "" and len(lst["train"]["universe_list"]) == 30
+    assert lst["train"]["universe_list"][0] == "600000.SH"
 
 
 def test_trial_run_end_to_end_with_verdict(tmp_path):

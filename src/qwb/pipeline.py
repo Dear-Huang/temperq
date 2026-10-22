@@ -48,26 +48,39 @@ def find_local_config(start: Path) -> dict:
     return {}
 
 
-def load_data(rc: dict, cwd: Path) -> tuple[dict, str, pd.DataFrame | None]:
-    """(panel, snapshot id, ST mask or None)."""
+def load_data(rc: dict, cwd: Path) -> tuple[dict, str, pd.DataFrame | None, pd.DataFrame | None]:
+    """(panel, snapshot id, ST mask or None, index-member mask or None)."""
     src = rc["data"]
     cfg = rc["cfg"]
+    u = cfg["universe"]
     if src["source"] == "synthetic":
         bars = synth_bars(src.get("n_days") or 700, src.get("n_codes") or 300)
-        if cfg["universe"] != "all":
-            raise ValueError("synthetic data has no ST status; use universe: all")
-        return daily.panel_from_bars(bars), "snap-synthetic", None
+        if u not in ("all", "list"):
+            raise ValueError("synthetic data has no ST or index data; use universe: all")
+        return daily.panel_from_bars(bars), "snap-synthetic", None, None
     data_dir = src.get("dir") or find_local_config(cwd).get("data_dir")
     if not data_dir:
         raise FileNotFoundError("data.dir not set and no data_dir in config.local.yaml")
     data_dir = Path(data_dir)
     snap = daily.load_snapshot(data_dir)["data_snapshot_id"]
     P = daily.load_panel(data_dir)
-    st = None
-    if cfg["universe"] != "all":
-        status = pd.read_parquet(data_dir / "st_status.parquet")
-        st = daily.st_wide(status, P["close"].index, P["close"].columns)
-    return P, snap, st
+    dates, codes = P["close"].index, P["close"].columns
+    st = members = None
+    if u in ("st", "all_ex_st"):
+        st = daily.st_wide(pd.read_parquet(data_dir / "st_status.parquet"), dates, codes)
+    elif u in daily.INDEX_CODES:
+        p = data_dir / "index_members.parquet"
+        if not p.exists():
+            raise FileNotFoundError(f"{p} not found: this dataset has no index constituents "
+                                    "(run scripts/fetch_index_members.py)")
+        members = daily.members_wide(pd.read_parquet(p), dates, codes, daily.INDEX_CODES[u])
+        if not members.to_numpy().any():
+            raise ValueError(f"no {u} constituents fall inside the data range")
+        # index universes exclude ST implicitly only if the index does; be explicit
+        sp = data_dir / "st_status.parquet"
+        if sp.exists():
+            members &= ~daily.st_wide(pd.read_parquet(sp), dates, codes)
+    return P, snap, st, members
 
 
 def _summ(ic, dates, years, lag):
@@ -101,13 +114,16 @@ def run(rc: dict, cwd: Path, log: Callable[[str], None] = print) -> dict:
         {k: rc[k] for k in ("name", "data", "model", "cfg", "config_hash", "deviations")},
         allow_unicode=True, sort_keys=False), encoding="utf-8")
 
-    P, snap, st = load_data(rc, cwd)
+    P, snap, st, members = load_data(rc, cwd)
     T["load"] = time.time() - t0
     dates = P["close"].index
     log(f"panel {len(dates)} days x {P['close'].shape[1]} codes, load {T['load']:.1f}s")
 
     t1 = time.time()
-    res = daily.run(P, card, cfg, snap, tz, st=st, model_dir=out / "models", log=log)
+    res = daily.run(P, card, cfg, snap, tz, st=st, model_dir=out / "models", log=log,
+                    members=members)
+    model = cfg.get("model", "lightgbm")
+    mk = "lgbm_ensemble" if model == "lightgbm" else model
     T["train_and_predict"] = time.time() - t1
 
     t2 = time.time()
@@ -126,9 +142,10 @@ def run(rc: dict, cwd: Path, log: Callable[[str], None] = print) -> dict:
     tested = np.isin(dates.year, test_years)[:, None] & res["U"]
     base = {"reversal_5d (-r5)": -raw["r5"].values, "momentum_20d (r20)": raw["r20"].values,
             "low_vol (-vol20)": -raw["vol20"].values}
-    ic = {"lgbm_ensemble": metrics.rank_ic(ens, y)}
-    for s in seeds:
-        ic[f"lgbm_seed{s}"] = metrics.rank_ic(res["pred"][s], y)
+    ic = {mk: metrics.rank_ic(ens, y)}
+    if model == "lightgbm":            # ridge is deterministic: seeds are identical
+        for s in seeds:
+            ic[f"lgbm_seed{s}"] = metrics.rank_ic(res["pred"][s], y)
     for k, v in base.items():
         ic[k] = metrics.rank_ic(np.where(tested, v, np.nan), y)
     rows = {k: {"validation": _summ(v, dates, valid, lag), "final_test": _summ(v, dates, final, lag)}
@@ -140,14 +157,15 @@ def run(rc: dict, cwd: Path, log: Callable[[str], None] = print) -> dict:
     pf = cfg["portfolio"]
     try:
         net = netcost.evaluate(
-            P, card, {"lgbm_ensemble": ens,
+            P, card, {mk: ens,
                       **{k: np.where(tested, v, np.nan) for k, v in base.items()}},
-            res["U"], y, final, top=pf["top"], commission_bp=pf["commission_bp"])
+            res["U"], y, final, top=pf["top"], commission_bp=pf["commission_bp"],
+            n_hold=pf.get("n_hold"))
     except ImportError:
         net = None
         log("net-of-cost check skipped: ashare-tcost not installed")
     seed_corr, seed_overlap = [], []
-    for i in range(len(seeds)):
+    for i in range(len(seeds) if model == "lightgbm" else 0):
         for j in range(i + 1, len(seeds)):
             a, b = res["pred"][seeds[i]], res["pred"][seeds[j]]
             seed_corr.append(float(np.nanmean(metrics.rank_ic(a, b))))
@@ -162,10 +180,12 @@ def run(rc: dict, cwd: Path, log: Callable[[str], None] = print) -> dict:
     T["total"] = time.time() - t0
 
     best_base = max(rows[k]["final_test"]["mean"] for k in base)
-    f = rows["lgbm_ensemble"]["final_test"]
+    f = rows[mk]["final_test"]
     go = bool(f["n"] and f["mean"] > 0 and f["t"] > 2 and f["mean"] > best_base)
     meta = env.metadata()
     summary = {"task": card["name"], "run": rc["name"], "config_hash": rc["config_hash"],
+               "model": model, "model_key": mk, "scenario": cfg.get("scenario"),
+               "universe_size": float(res["U"][np.isin(dates.year, final)].sum(axis=1).mean()),
                "data_snapshot_id": snap, "universe": cfg["universe"],
                "panel": [len(dates), int(P["close"].shape[1])], "test_years": test_years,
                "final_test_years": final, "nw_lag": lag, "ic": rows,
@@ -176,7 +196,8 @@ def run(rc: dict, cwd: Path, log: Callable[[str], None] = print) -> dict:
                "deviations": rc["deviations"], "timing_s": {k: round(v, 1) for k, v in T.items()},
                "env": meta, "rows_predicted": int(len(pred_tab))}
     # guardrails: look-ahead check, and how often this test period has been scored
-    summary["leak_check"] = leakcheck.prefix_invariance(P, cfg, st, F=res["F"], U=res["U"])
+    summary["leak_check"] = leakcheck.prefix_invariance(P, cfg, st, F=res["F"], U=res["U"],
+                                                       members=members)
     # synthetic data has no test period worth protecting: installer smoke tests and
     # trial runs must not make a user's first real run look like a repeat view
     summary["ledger"] = None
@@ -187,7 +208,7 @@ def run(rc: dict, cwd: Path, log: Callable[[str], None] = print) -> dict:
         ledger.append(led, {"run": rc["name"], "task": card["name"], "snapshot": snap,
                             "config_hash": rc["config_hash"], "final_test_years": final,
                             "final_ic": f["mean"], "final_t": f["t"],
-                            "net_excess": (net or {}).get("signals", {}).get("lgbm_ensemble", {})
+                            "net_excess": (net or {}).get("signals", {}).get(mk, {})
                             .get("net_excess_ann"), "deviations": rc["deviations"]})
     (out / "metrics.json").write_text(json.dumps(summary, indent=2, default=str), encoding="utf-8")
     (out / "report.md").write_text(_report(rc, summary, rows, null, seed_corr, seed_overlap,
@@ -231,7 +252,7 @@ def _ledger_table(s: dict) -> list[str]:
                      f"{e.get('final_ic', float('nan')):+.4f} | "
                      f"{'n/a' if ne is None else f'{ne:+.1%}'} | "
                      f"{'; '.join(e.get('deviations') or []) or '无'} |")
-    fic = s["ic"]["lgbm_ensemble"]["final_test"]["mean"]
+    fic = s["ic"][s.get("model_key", "lgbm_ensemble")]["final_test"]["mean"]
     lines.append(f"| 本次 | {s['run']} | `{s['config_hash'][-8:]}` | {fic:+.4f} | "
                  f"{_net_str(s)} | {'; '.join(s['deviations']) or '无'} |")
     if lg["earlier_total"] > len(lg["earlier"]):
@@ -240,8 +261,24 @@ def _ledger_table(s: dict) -> list[str]:
 
 
 def _net_str(s: dict) -> str:
-    v = (s.get("net_of_cost") or {}).get("signals", {}).get("lgbm_ensemble")
+    v = (s.get("net_of_cost") or {}).get("signals", {}).get(s.get("model_key", "lgbm_ensemble"))
     return "n/a" if not v else f"{v['net_excess_ann']:+.1%}"
+
+
+def _scenario_lines(cfg: dict) -> list[str]:
+    sc = cfg.get("scenario")
+    if not sc:
+        return []
+    out = ["## 应用场景", ""]
+    for k, lbl in (("market", "市场"), ("horizon", "持有期"), ("universe", "股票池"),
+                   ("capital", "资金量"), ("model", "模型")):
+        if sc.get(k):
+            out.append(f"- {lbl}：{sc[k]}")
+    if cfg.get("min_adv_yuan"):
+        out.append(f"- 由资金量推出：持有约 {cfg['portfolio'].get('n_hold', '—')} 只，"
+                   f"只选近 20 日日均成交额 ≥ {cfg['min_adv_yuan'] / 1e4:,.0f} 万元的股票"
+                   "（单票仓位不超过其日成交额的 5%）")
+    return out + [""]
 
 
 def _net_section(net: dict | None, cfg: dict, final: list[int]) -> list[str]:
@@ -249,7 +286,9 @@ def _net_section(net: dict | None, cfg: dict, final: list[int]) -> list[str]:
         return []
     pf = cfg["portfolio"]
     lines = [f"## 扣成本后（最终测试 {final[0]}–{final[-1]}，年化）", "",
-             f"做法：每 {net['hold_days']} 个交易日按信号买入股票池前 {pf['top']:.0%}，等权，"
+             f"做法：每 {net['hold_days']} 个交易日按信号买入"
+             + (f"排名前 {pf['n_hold']} 只" if pf.get("n_hold") else f"股票池前 {pf['top']:.0%}")
+             + "，等权，"
              f"按标签的开仓价成交、持有到标签平仓价；涨停或停牌买不进，跌停或停牌卖不出则继续持有。"
              f"成本＝STRUCT 半价差（上月日频数据估计，ashare-tcost）＋佣金 {pf['commission_bp']:g}bp/边"
              f"＋卖出印花税（规则包）。超额相对股票池等权（年化 {net['benchmark_ann']:+.1%}）。", "",
@@ -270,8 +309,11 @@ def _report(rc, s, rows, null, seed_corr, seed_overlap, valid, final, T, meta, n
     lines = [
         f"# 报告：{rc['name']}{'（合成数据，只验证流程）' if synthetic else ''}", "",
         f"任务 `{card['name']}`　数据快照 `{s['data_snapshot_id']}`　股票池 `{cfg['universe']}`　"
-        f"面板 {s['panel'][0]} 日 × {s['panel'][1]} 只　模型 LightGBM × {n_seeds} 种子，按年滚动重训　"
+        f"面板 {s['panel'][0]} 日 × {s['panel'][1]} 只（测试期股票池平均 {s.get('universe_size', 0):.0f} 只）　"
+        + (f"模型 LightGBM × {n_seeds} 种子" if s.get("model", "lightgbm") == "lightgbm"
+           else "模型 Ridge 线性回归") + "，按年滚动重训　"
         f"配置 `{rc['config_hash']}`", "",
+        *_scenario_lines(cfg),
         *_net_section(s.get("net_of_cost"), cfg, final),
         "## 首页标注",
         f"- 验收门槛哈希 `{s['acceptance_hash']}`"

@@ -154,6 +154,36 @@ def st_status(daily_st: pd.DataFrame, days: pd.DatetimeIndex) -> pd.DataFrame:
     return out
 
 
+# ---------------------------------------------------------------- index members
+
+INDEXES = {"csi300": "000300.SH", "csi500": "000905.SH", "csi1000": "000852.SH"}
+
+
+def index_members(cli: TushareClient, cache: Cache, index_code: str, start, end) -> pd.DataFrame:
+    """Constituent snapshots (code, index, date) from index_weight, one query per month.
+
+    Each snapshot lists the members from its date until the next snapshot. Query
+    from a month before the data starts so the first trading days are covered by
+    a snapshot dated before them, never by a later one.
+    """
+    months = pd.period_range(pd.Timestamp(start) - pd.Timedelta(days=40), pd.Timestamp(end), freq="M")
+    frames = []
+    for m in months:
+        p = {"index_code": index_code, "start_date": m.start_time.strftime("%Y%m%d"),
+             "end_date": m.end_time.strftime("%Y%m%d")}
+        df = cache.get("index_weight", p, lambda p=p: cli.paged(
+            "index_weight", 6000, ["con_code", "trade_date"], **p))
+        if not df.empty:
+            frames.append(df[["con_code", "trade_date"]])
+    if not frames:
+        raise ApiError(f"index_weight returned no rows for {index_code}")
+    out = pd.concat(frames, ignore_index=True).drop_duplicates()
+    out = out.rename(columns={"con_code": "code", "trade_date": "date"})
+    out["date"] = pd.to_datetime(out["date"]).dt.strftime("%Y-%m-%d")
+    out["index"] = index_code
+    return out[["code", "index", "date"]].sort_values(["date", "code"]).reset_index(drop=True)
+
+
 # ---------------------------------------------------------------- daily bars
 
 def daily_bars(cli: TushareClient, cache: Cache, days: pd.DatetimeIndex,

@@ -17,11 +17,13 @@ from . import folds as foldlib
 
 FIELDS = ["open", "high", "low", "close", "amount", "adj_factor", "up_limit"]
 OPTIONAL_FIELDS = ["down_limit"]   # used by the net-of-cost check when present
+INDEX_CODES = {"csi300": "000300.SH", "csi500": "000905.SH", "csi1000": "000852.SH"}
+MODELS = ("lightgbm", "ridge")
 FEATURES = ["r1", "r5", "r20", "r60", "vol20", "amt20", "amt_ratio", "gap", "range",
             "to_limit"]
 
 DEFAULTS = {
-    "universe": "all",            # all | st | all_ex_st
+    "universe": "all",            # all | st | all_ex_st | csi300 | csi500 | csi1000 | list
     "min_age_days": 60,
     "min_amount_quantile": 0.05,
     "label_transform": "rank",    # per-date rank of the label
@@ -33,14 +35,25 @@ DEFAULTS = {
              "bagging_freq": 1, "lambda_l2": 1.0, "num_threads": 8, "deterministic": True,
              "force_row_wise": True, "verbose": -1},
     "num_boost_round": 300,
+    "ridge_alpha": 1.0,
     "shuffle_null_draws": 20,
     # net-of-cost check (qwb.netcost): top share held, commission per side in bp
     "portfolio": {"top": 0.1, "commission_bp": 3.0},
 }
 
 
+def _short(v) -> str:
+    if isinstance(v, list) and len(v) > 5:
+        return f"[{len(v)} 项]"
+    return repr(v)
+
+
 def deviations(cfg: dict, defaults: dict = DEFAULTS, prefix: str = "") -> list[str]:
     out = []
+    # settings with no default (capital floor, holdings, model choice) are always listed
+    for k, v in cfg.items():
+        if k not in defaults and k != "scenario" and v not in (None, [], {}):
+            out.append(f"{prefix}{k} = {_short(v)} (no default)")
     for k, dv in defaults.items():
         if k not in cfg:
             continue
@@ -124,15 +137,58 @@ def labels(P: dict, card: dict) -> pd.DataFrame:
     return px(e).shift(-int(e["day"])) / px(s).shift(-int(s["day"])) - 1
 
 
-def universe(P: dict, cfg: dict, st: pd.DataFrame | None = None) -> pd.DataFrame:
+def members_wide(members: pd.DataFrame, dates: pd.DatetimeIndex, codes: pd.Index,
+                 index_code: str) -> pd.DataFrame:
+    """Boolean date x code from constituent snapshots.
+
+    A snapshot dated d lists the members from d until the next snapshot. A
+    trading day uses the latest snapshot dated on or before it, so a later
+    rebalance is never visible earlier. Days before the first snapshot are empty.
+    """
+    m = members[members["index"] == index_code]
+    snaps = pd.to_datetime(m["date"]).drop_duplicates().sort_values()
+    out = np.zeros((len(dates), len(codes)), dtype=bool)
+    if snaps.empty:
+        return pd.DataFrame(out, index=dates, columns=codes)
+    pos = {c: i for i, c in enumerate(codes)}
+    which = np.searchsorted(snaps.to_numpy(), dates.to_numpy(), side="right") - 1
+    by_snap = {d: [pos[c] for c in g["code"] if c in pos]
+               for d, g in m.assign(date=pd.to_datetime(m["date"])).groupby("date")}
+    for k, d in enumerate(snaps):
+        rows = np.flatnonzero(which == k)
+        if len(rows) and by_snap.get(d):
+            out[np.ix_(rows, by_snap[d])] = True
+    return pd.DataFrame(out, index=dates, columns=codes)
+
+
+def universe(P: dict, cfg: dict, st: pd.DataFrame | None = None,
+             members: pd.DataFrame | None = None) -> pd.DataFrame:
+    """Stocks eligible on each day. Every filter uses data known at that day only."""
     traded = P["close"].notna()
     ok = traded & (traded.cumsum() >= cfg["min_age_days"])
     amt = P["amount"].where(ok)
     ok &= amt.ge(amt.quantile(cfg["min_amount_quantile"], axis=1), axis=0)
-    if cfg["universe"] != "all":
+    if cfg.get("min_adv_yuan"):
+        # capital tier: a holding must stay a small share of the stock's recent trading
+        adv = P["amount"].rolling(20, min_periods=10).mean()
+        ok &= adv.ge(float(cfg["min_adv_yuan"])).fillna(False)
+    u = cfg["universe"]
+    if u in ("st", "all_ex_st"):
         if st is None:
-            raise ValueError(f"universe={cfg['universe']} needs ST status data")
-        ok &= st if cfg["universe"] == "st" else ~st
+            raise ValueError(f"universe={u} needs ST status data")
+        ok &= st if u == "st" else ~st
+    elif u in INDEX_CODES:
+        if members is None:
+            raise ValueError(f"universe={u} needs index constituent data (index_members.parquet)")
+        ok &= members
+    elif u == "list":
+        names = set(cfg.get("universe_list") or [])
+        if not names:
+            raise ValueError("universe=list needs universe_list")
+        ok &= pd.DataFrame(np.isin(P["close"].columns, list(names))[None, :].repeat(len(ok), 0),
+                           index=ok.index, columns=ok.columns)
+    elif u != "all":
+        raise ValueError(f"unknown universe {u!r}")
     return ok
 
 
@@ -146,15 +202,36 @@ def _label_target(y: pd.DataFrame, how: str) -> pd.DataFrame:
     return y.rank(axis=1, pct=True) - 0.5 if how == "rank" else y
 
 
+def ridge_fit(X: np.ndarray, t: np.ndarray, alpha: float) -> np.ndarray:
+    """Ridge on centred rank features; missing values sit at the cross-section median.
+
+    Returns [intercept, coef...]. Features are per-date ranks in [0, 1], so no
+    scaling is fitted and nothing is learned from the test fold.
+    """
+    Xc = np.nan_to_num(X.astype("float64") - 0.5, nan=0.0)
+    A = Xc.T @ Xc + alpha * len(Xc) * 1e-4 * np.eye(Xc.shape[1])
+    coef = np.linalg.solve(A, Xc.T @ (t - t.mean()))
+    return np.concatenate([[t.mean()], coef])
+
+
+def ridge_predict(coef: np.ndarray, X: np.ndarray) -> np.ndarray:
+    Xc = np.nan_to_num(X.astype("float64") - 0.5, nan=0.0)
+    return coef[0] + Xc @ coef[1:]
+
+
 def run(P: dict, card: dict, cfg: dict, snapshot_id: str, tz: str, st=None,
-        model_dir: Path | None = None, log=print) -> dict:
+        model_dir: Path | None = None, log=print, members=None) -> dict:
     """Walk-forward yearly refits. Returns predictions, metrics inputs, manifests."""
-    import lightgbm as lgb
+    model = cfg.get("model", "lightgbm")
+    if model not in MODELS:
+        raise ValueError(f"model must be one of {MODELS}")
+    if model == "lightgbm":
+        import lightgbm as lgb
 
     dates = P["close"].index
     F = features(P)
     y = labels(P, card)
-    U = universe(P, cfg, st)
+    U = universe(P, cfg, st, members)
     target = _label_target(y.where(U), cfg["label_transform"])
     lend = foldlib.label_end_times(pd.Series(dates), dates, card, tz)
     lend.index = dates
@@ -178,6 +255,21 @@ def run(P: dict, card: dict, cfg: dict, snapshot_id: str, tz: str, st=None,
         te = U.values & np.isin(dates, test_days)[:, None]
         Xte = _stack(F, te)
         log(f"fold {i} test {yr}: train rows {len(t)}, test rows {int(te.sum())}")
+        if len(t) == 0 or len(Xte) == 0:
+            raise ValueError(f"fold {i} ({yr}) has no training or test rows; the universe or "
+                             "the capital tier leaves too few stocks")
+        if model == "ridge":
+            # deterministic: one fit per fold, shared by every seed slot
+            coef = ridge_fit(X, t, cfg["ridge_alpha"])
+            p_te = ridge_predict(coef, Xte)
+            for s in cfg["seeds"]:
+                pred[s][te] = p_te
+            if model_dir is not None:
+                p = model_dir / f"ridge_fold{i}.json"
+                p.write_text(json.dumps({"features": FEATURES, "coef": coef.tolist(),
+                                         "alpha": cfg["ridge_alpha"]}), encoding="utf-8")
+                models.append(p.name)
+            continue
         for s in cfg["seeds"]:
             params = dict(cfg["lgbm"], seed=s, bagging_seed=s, feature_fraction_seed=s)
             booster = lgb.train(params, lgb.Dataset(X, t, feature_name=FEATURES,

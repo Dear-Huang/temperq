@@ -28,16 +28,18 @@ def check_days(dates: pd.DatetimeIndex, years: list[int], n: int = 3) -> list[in
 
 def prefix_invariance(P: dict, cfg: dict, st: pd.DataFrame | None = None,
                       days: list[int] | None = None, F: dict | None = None,
-                      U: np.ndarray | None = None, atol: float = 1e-6) -> dict:
+                      U: np.ndarray | None = None, atol: float = 1e-6,
+                      members: pd.DataFrame | None = None) -> dict:
     dates = P["close"].index
     days = days if days is not None else check_days(dates, cfg["final_test_years"])
     F = F if F is not None else daily.features(P)
-    U = np.asarray(U if U is not None else daily.universe(P, cfg, st))
+    U = np.asarray(U if U is not None else daily.universe(P, cfg, st, members))
     violations = []
     for t in days:
         Pt = {k: v.iloc[:t + 1] for k, v in P.items()}
         Ft = daily.features(Pt)
-        Ut = np.asarray(daily.universe(Pt, cfg, None if st is None else st.iloc[:t + 1]))
+        Ut = np.asarray(daily.universe(Pt, cfg, None if st is None else st.iloc[:t + 1],
+                                     None if members is None else members.iloc[:t + 1]))
         for k in daily.FEATURES:
             a, b = F[k].iloc[t].to_numpy(dtype=float), Ft[k].iloc[t].to_numpy(dtype=float)
             diff = ~np.isclose(a, b, atol=atol, equal_nan=True)

@@ -27,25 +27,12 @@ import yaml
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
 
-from . import daily, runconfig
+from . import daily, runconfig, scenario
 from .jobs import JobSpec, Store
 
 NAME_RE = re.compile(r"^[A-Za-z0-9_-]{1,40}$")
 JOB_RE = re.compile(r"^[0-9a-f]{12}$")
 SYNTHETIC = "_trial"
-
-# what the user can build; key = task card file stem under examples/
-TASKS = {
-    "cn_rank_5d": {
-        "title": "全 A 股选股",
-        "desc": "每天收盘后，预测未来 5 个交易日哪些股票会相对更强（开盘买、5 天后开盘卖），剔除 ST 股。",
-        "universe": "all_ex_st"},
-    "st_task": {
-        "title": "ST 股专题",
-        "desc": "只在当天处于 ST 状态的股票里做同样的排序。需要数据里有 ST 标记。",
-        "universe": "st"},
-}
-
 
 # ----------------------------------------------------------------- hardware
 
@@ -140,11 +127,13 @@ def datasets(workdir: Path) -> dict[str, dict]:
         if s is None:
             continue
         src = s.get("source", "tushare")
-        out[k] = {"path": p, "snap": s, "label":
+        out[k] = {"path": p, "snap": s, "has_index": (p / "index_members.parquet").exists(),
+                  "label":
                   f"{k}：{s.get('start', '?')} 至 {s.get('end', '?')}，"
                   f"{s.get('trading_days', '?')} 个交易日"
                   + (f"，{s['codes']} 只股票" if "codes" in s else "")
                   + ("，含 ST 标记" if s.get("has_st", True) else "，无 ST 标记")
+                  + ("，含指数成分" if (p / "index_members.parquet").exists() else "")
                   + f"（来源 {src.split(':')[0]}）"}
     return out
 
@@ -174,19 +163,60 @@ def auto_years(snap: dict) -> tuple[int, list[int]]:
 
 # ----------------------------------------------------------------- config
 
-def build_config(form: dict, task_dir: Path, ds: dict[str, dict]) -> tuple[dict | None, str, list]:
-    """Form -> run config. Only values that differ from the defaults are written."""
+def parse_codes(text: str) -> list[str]:
+    """Stock codes from free text: 000001, 600000.SH, separated by spaces, commas or lines."""
+    from .csvimport import _suffix
+    out = set()
+    for tok in re.split(r"[\s,，;；、]+", text.strip().upper()):
+        if re.fullmatch(r"\d{6}(\.(SH|SZ|BJ))?", tok):
+            out.add(_suffix(tok))
+    return sorted(out)
+
+
+def build_config(form: dict, ds: dict[str, dict]) -> tuple[dict | None, str, list]:
+    """Form -> run config. Step 1 (scenario) sets the task, universe and holdings;
+    step 3 only overrides. Only values that differ from the defaults are written."""
     notes = []
     name = form.get("name", "").strip()
     if not NAME_RE.match(name):
         return None, "名称只能用字母、数字、下划线、连字符，最多 40 个字符", notes
-    task = form.get("task", "")
-    if task not in TASKS or not (task_dir / f"{task}.yaml").is_file():
-        return None, "第 1 步：请选择要打造的模型", notes
+    if form.get("market", "cn_a") != "cn_a":
+        return None, "第 1 步：目前只支持 A 股", notes
+    try:
+        horizon = int(form.get("horizon") or scenario.DEFAULT_HORIZON)
+    except ValueError:
+        horizon = -1
+    if horizon not in scenario.HORIZONS:
+        return None, "第 1 步：请选择持有期", notes
+    universe = form.get("universe") or "all_ex_st"
+    if universe not in scenario.UNIVERSES:
+        return None, "第 1 步：请选择股票池", notes
+    tier = form.get("capital") or scenario.DEFAULT_TIER
+    if tier not in scenario.TIERS:
+        return None, "第 1 步：请选择资金量", notes
+    model = form.get("model") or scenario.DEFAULT_MODEL
+    if scenario.MODELS.get(model, {}).get("status") != "ready":
+        return None, "第 1 步：这个模型还没有接入，请选 LightGBM 或 Ridge", notes
     dsid = form.get("dataset", "")
     if dsid not in ds:
         return None, "第 2 步：请选择数据", notes
+    d = ds[dsid]
+    if universe in ("st", "all_ex_st") and not d["snap"].get("has_st", True):
+        if universe == "st":
+            return None, "这份数据没有 ST 标记，不能只做 ST 股。请换数据，或在 CSV 里加 is_st 列", notes
+        universe = "all"
+        notes.append("这份数据没有 ST 标记，股票池改为全 A 股（含 ST）")
+    if universe in scenario.INDEX_UNIVERSES and not d.get("has_index"):
+        return None, (f"这份数据没有指数成分股历史，不能选“{scenario.UNIVERSES[universe]}”。"
+                      "用 Tushare 下载的数据会自动带上；或改选全 A 股"), notes
+    codes = None
+    if universe == "list":
+        codes = parse_codes(str(form.get("universe_list", "")))
+        if len(codes) < 30:
+            return None, f"自选股票名单至少 30 只（现在识别出 {len(codes)} 只），太少无法做截面排序", notes
+
     D = daily.DEFAULTS
+    der = scenario.derive(tier)
     try:
         def num(k, default, cast):
             v = str(form.get(k, "")).strip()
@@ -195,54 +225,57 @@ def build_config(form: dict, task_dir: Path, ds: dict[str, dict]) -> tuple[dict 
         leaves = num("num_leaves", D["lgbm"]["num_leaves"], int)
         lr = num("learning_rate", D["lgbm"]["learning_rate"], float)
         n_seeds = num("n_seeds", len(D["seeds"]), int)
-        top = num("top", D["portfolio"]["top"], float)
+        alpha = num("ridge_alpha", D["ridge_alpha"], float)
+        n_hold = num("n_hold", der["n_hold"], int)
         comm = num("commission_bp", D["portfolio"]["commission_bp"], float)
     except ValueError:
         return None, "第 3 步：有数值格式不对", notes
     if not (1 <= n_seeds <= 10 and 10 <= rounds <= 5000 and 2 <= leaves <= 1024
-            and 0 < lr <= 1 and 0 < top <= 0.5 and 0 <= comm <= 100):
-        return None, "第 3 步：种子数 1–10，树数 10–5000，叶子数 2–1024，学习率 0–1，持有比例 0–0.5", notes
+            and 0 < lr <= 1 and 0 < alpha <= 1e6 and 1 <= n_hold <= 500 and 0 <= comm <= 100):
+        return None, ("第 3 步：种子数 1–10，树数 10–5000，叶子数 2–1024，学习率 0–1，"
+                      "持股只数 1–500，佣金 0–100"), notes
+    min_adv = der["capital"] / n_hold / scenario.PARTICIPATION
 
-    d = ds[dsid]
-    universe = form.get("universe") or TASKS[task]["universe"]
-    if universe != "all" and not d["snap"].get("has_st", True):
-        if TASKS[task]["universe"] == "st":
-            return None, "这份数据没有 ST 标记，不能做 ST 专题。请换数据，或在 CSV 里加 is_st 列", notes
-        universe = "all"
-        notes.append("这份数据没有 ST 标记，股票池改为全部股票（含 ST）")
     first, final = auto_years(d["snap"])
     train: dict = {}
     if universe != D["universe"]:
         train["universe"] = universe
+    if codes:
+        train["universe_list"] = codes
     if first != D["first_test_year"]:
         train["first_test_year"] = first
     if final != D["final_test_years"]:
         train["final_test_years"] = final
-    if n_seeds != len(D["seeds"]):
+    if model == "ridge":
+        train["seeds"] = [0]                     # deterministic: one fit is enough
+    elif n_seeds != len(D["seeds"]):
         train["seeds"] = list(range(n_seeds))
-    pf = {}
-    if top != D["portfolio"]["top"]:
-        pf["top"] = top
+    train["min_adv_yuan"] = round(min_adv)
+    pf: dict = {"n_hold": n_hold}
     if comm != D["portfolio"]["commission_bp"]:
         pf["commission_bp"] = comm
-    if pf:
-        train["portfolio"] = pf
-    model: dict = {"name": "lightgbm"}
-    if rounds != D["num_boost_round"]:
-        model["num_boost_round"] = rounds
-    params = {}
-    if leaves != D["lgbm"]["num_leaves"]:
-        params["num_leaves"] = leaves
-    if lr != D["lgbm"]["learning_rate"]:
-        params["learning_rate"] = lr
-    if params:
-        model["params"] = params
+    train["portfolio"] = pf
+    train["scenario"] = {
+        "market": "A 股", "horizon": scenario.HORIZONS[horizon],
+        "universe": scenario.UNIVERSES[universe] + (f"（{len(codes)} 只）" if codes else ""),
+        "capital": der["label"], "model": scenario.MODELS[model]["label"]}
+    m: dict = {"name": model}
+    if model == "lightgbm":
+        if rounds != D["num_boost_round"]:
+            m["num_boost_round"] = rounds
+        params = {}
+        if leaves != D["lgbm"]["num_leaves"]:
+            params["num_leaves"] = leaves
+        if lr != D["lgbm"]["learning_rate"]:
+            params["learning_rate"] = lr
+        if params:
+            m["params"] = params
+    elif alpha != D["ridge_alpha"]:
+        m["alpha"] = alpha
     data = {"source": "synthetic"} if d["path"] is None else \
         {"source": "snapshot", "dir": str(d["path"])}
-    cfg = {"name": name, "task": str(task_dir / f"{task}.yaml"), "data": data,
-           "model": model, "output": f"runs/{name}"}
-    if train:
-        cfg["train"] = train
+    cfg = {"name": name, "task": scenario.task_card(horizon), "data": data,
+           "model": m, "train": train, "output": f"runs/{name}"}
     return cfg, "", notes
 
 
@@ -301,12 +334,13 @@ def md_to_html(md: str) -> str:
 def verdict(m: dict) -> list[tuple[str, str]]:
     """Plain-language reading of a finished run: (level, sentence)."""
     out = []
-    f = m["ic"]["lgbm_ensemble"]["final_test"]
+    mk = m.get("model_key", "lgbm_ensemble")
+    f = m["ic"][mk]["final_test"]
     if f["n"] and f["t"] > 2 and f["mean"] > 0:
         out.append(("ok", f"有预测能力：测试期排序相关（IC）{f['mean']:+.3f}，t={f['t']:.1f}，统计上显著。"))
     else:
         out.append(("bad", f"预测能力不显著：测试期 IC {f['mean']:+.3f}，t={f['t']:.1f}。"))
-    net = (m.get("net_of_cost") or {}).get("signals", {}).get("lgbm_ensemble")
+    net = (m.get("net_of_cost") or {}).get("signals", {}).get(mk)
     if net:
         nt = net["net_excess_t"]
         if net["net_excess_ann"] > 0 and nt > 2:
@@ -319,7 +353,7 @@ def verdict(m: dict) -> list[tuple[str, str]]:
                                f"成本 {net['cost_ann']:.1%}/年 超过了模型带来的收益。"))
     else:
         out.append(("warn", "没有做扣成本检验（缺 ashare-tcost），上面的 IC 不代表能赚钱。"))
-    base = [k for k in m["ic"] if not k.startswith("lgbm")]
+    base = [k for k in m["ic"] if not k.startswith("lgbm") and k != mk]
     best = max(base, key=lambda k: m["ic"][k]["final_test"]["mean"]) if base else None
     if best:
         b = m["ic"][best]["final_test"]["mean"]
@@ -335,6 +369,51 @@ def verdict(m: dict) -> list[tuple[str, str]]:
     if str(m.get("data_snapshot_id")) == "snap-synthetic":
         out.insert(0, ("warn", "这是试运行数据（电脑生成的），结果只说明流程走通了，没有任何投资含义。"))
     return out
+
+
+def _radio(name, key, label, checked=False, disabled=False, note=""):
+    tag = '<span class="tag">规划中</span>' if disabled else ""
+    small = f"<small>{html.escape(note)}</small>" if note else ""
+    return (f'<label class="opt{" off" if disabled else ""}"><input type="radio" name="{name}" '
+            f'value="{key}" form="main"{" checked" if checked else ""}{" disabled" if disabled else ""}>'
+            f'{html.escape(label)}{tag}{small}</label>')
+
+
+def step1_html() -> str:
+    mk = [_radio("market", "cn_a", "A 股", True)] + \
+         [_radio("market", k, v, disabled=True) for k, v in scenario.PLANNED["market"]]
+    hz = [_radio("horizon", str(h), v, h == scenario.DEFAULT_HORIZON,
+                 note="样本少，过拟合风险高" if h == 20 else "")
+          for h, v in scenario.HORIZONS.items()] + \
+         [_radio("horizon", k, v, disabled=True) for k, v in scenario.PLANNED["horizon"]]
+    uv = "".join(f'<option value="{k}"{" selected" if k == "all_ex_st" else ""}>{html.escape(v)}</option>'
+                 for k, v in scenario.UNIVERSES.items())
+    cap = "".join(
+        f'<option value="{k}"{" selected" if k == scenario.DEFAULT_TIER else ""}>'
+        f'{html.escape(v["label"])}</option>' for k, v in scenario.TIERS.items())
+    dr = [_radio("direction", "long", "只做多", True)] + \
+         [_radio("direction", k, v, disabled=True) for k, v in scenario.PLANNED["direction"]]
+    cards = []
+    for k, v in scenario.MODELS.items():
+        off = v["status"] != "ready"
+        cards.append(
+            f'<label class="card{" off" if off else ""}"><input type="radio" name="model" '
+            f'value="{k}" form="main"{" checked" if k == scenario.DEFAULT_MODEL else ""}'
+            f'{" disabled" if off else ""}><b>{html.escape(v["label"])}</b>'
+            f'{"<span class=tag>规划中</span>" if off else ""}'
+            f'<span>{html.escape(v["note"])}</span></label>')
+    return (
+        f'<div class="q"><b>用在哪个市场</b><div>{"".join(mk)}</div></div>'
+        f'<div class="q"><b>多久调一次仓（持有期）</b><div>{"".join(hz)}</div>'
+        '<small class="mut">每天收盘后选股，第二天开盘买入，持有到期后开盘卖出。</small></div>'
+        f'<div class="q"><b>在哪些股票里选</b><div><select name="universe" form="main" id="universe">{uv}</select></div>'
+        '<div id="listbox" hidden><textarea name="universe_list" form="main" rows="3" '
+        'placeholder="填股票代码，空格、逗号或换行分隔，例如 000001 600000.SH ……至少 30 只"></textarea></div>'
+        '<small class="mut">指数成分股按每个历史时点当时的成分取，不用今天的名单回看过去。</small></div>'
+        f'<div class="q"><b>打算投入多少资金</b><div><select name="capital" form="main" id="capital">{cap}</select></div>'
+        '<small class="mut" id="capnote"></small></div>'
+        f'<div class="q"><b>交易方式</b><div>{"".join(dr)}</div></div>'
+        f'<div class="q"><b>用什么模型</b>{"".join(cards)}</div>')
 
 
 # ----------------------------------------------------------------- app
@@ -384,15 +463,9 @@ def create_app(workdir: Path, task_dir: Path | None = None,
 
     # ---------------------------------------------------------------- pages
     @app.get("/", response_class=HTMLResponse)
-    def index(ds: str = "", task: str = ""):
+    def index(ds: str = ""):
         avail = datasets(workdir)
         sel_ds = ds if ds in avail else (next((k for k in avail if k != SYNTHETIC), SYNTHETIC))
-        sel_task = task if task in TASKS else "cn_rank_5d"
-        tasks_html = "".join(
-            f'<label class="card"><input type="radio" name="task" value="{k}"'
-            f'{" checked" if k == sel_task else ""}><b>{html.escape(v["title"])}</b>'
-            f'<span>{html.escape(v["desc"])}</span></label>'
-            for k, v in TASKS.items() if (task_dir / f"{k}.yaml").is_file())
         ds_html = "".join(
             f'<label class="row"><input type="radio" name="dataset" value="{html.escape(k)}"'
             f'{" checked" if k == sel_ds else ""}> {html.escape(v["label"])}</label>'
@@ -401,16 +474,19 @@ def create_app(workdir: Path, task_dir: Path | None = None,
         gpu = "、".join(hw["gpus"]) or "未检测到"
         mem = f"{hw['mem_gb']:.0f}GB" if hw["mem_gb"] else "未知"
         low_mem = hw["mem_gb"] is not None and hw["mem_gb"] < 8
+        tiers = {k: scenario.derive(k) for k in scenario.TIERS}
+        script = SCRIPT.replace("__TIERS__", json.dumps(tiers, ensure_ascii=False)) \
+                       .replace("__PART__", str(scenario.PARTICIPATION))
         body = INDEX.format(
-            token=token, tasks=tasks_html, datasets=ds_html,
+            token=token, step1=step1_html(), datasets=ds_html,
             name=f"model_{datetime.now():%m%d_%H%M}",
             rounds=D["num_boost_round"], leaves=D["lgbm"]["num_leaves"],
-            lr=D["lgbm"]["learning_rate"], seeds=len(D["seeds"]),
-            top=D["portfolio"]["top"], comm=D["portfolio"]["commission_bp"],
+            lr=D["lgbm"]["learning_rate"], seeds=len(D["seeds"]), alpha=D["ridge_alpha"],
+            comm=D["portfolio"]["commission_bp"],
             cpu=html.escape(f"{hw['cpu']}，{hw['cores']} 线程"), mem=mem, gpu=html.escape(gpu),
             memwarn='<p class="warn">内存不足 8GB，全市场数据可能跑不动，可以先用试运行或少量股票的 CSV。</p>'
             if low_mem else "",
-            jobs=_job_rows(store))
+            jobs=_job_rows(store)) + script
         return page("qwb 本地工作台", body)
 
     @app.get("/template.csv")
@@ -422,7 +498,7 @@ def create_app(workdir: Path, task_dir: Path | None = None,
     async def run(req: Request):
         form = dict((await req.form()).items())
         guard(req, form.get("token"))
-        cfg, err, notes = build_config(form, task_dir, datasets(workdir))
+        cfg, err, notes = build_config(form, datasets(workdir))
         if cfg is None:
             return oops(err)
         rc, rep = runconfig.resolve(cfg, workdir)
@@ -583,7 +659,7 @@ def _job_rows(store: Store) -> str:
     rows = []
     label = {"queued": "排队中", "running": "运行中", "succeeded": "完成", "failed": "失败",
              "cancelled": "已取消"}
-    for j in reversed(store.list()):
+    for j in sorted(store.list(), key=lambda j: j.get("updated", ""), reverse=True):
         try:
             spec = store.spec(j["job_id"])
         except (OSError, ValueError):
@@ -639,8 +715,9 @@ h1{font-size:22px;margin:0 0 4px}h2{font-size:19px}h3{font-size:16px}
 .step>h2{margin:0 0 10px;font-size:17px}.num{display:inline-block;width:26px;height:26px;border-radius:50%;
 background:var(--acc);color:var(--card);text-align:center;line-height:26px;font-size:14px;margin-right:8px}
 .card{display:block;border:1px solid var(--line);border-radius:8px;padding:10px 12px;margin:8px 0;cursor:pointer}
-.card:has(input:checked){border-color:var(--acc);background:var(--accbg)}.card span{display:block;color:var(--mut);margin-left:22px}
+.card:has(input:checked){border-color:var(--acc);background:var(--accbg)}.card>span:last-child{display:block;color:var(--mut);margin-left:22px}.card .tag{display:inline-block}
 .row{display:block;padding:6px 4px;cursor:pointer}
+.q{margin:12px 0}.q>b{display:block;margin-bottom:4px}.opt{display:inline-block;margin:3px 16px 3px 0;cursor:pointer}.opt small,.card small{color:var(--mut);margin-left:6px}.off{opacity:.55;cursor:not-allowed}.tag{font-size:12px;border:1px solid var(--line);border-radius:4px;padding:0 5px;margin-left:6px;color:var(--mut)}textarea{font:inherit;width:100%;max-width:640px;margin-top:6px;border:1px solid var(--line);border-radius:6px;padding:6px;background:var(--card);color:var(--fg)}
 details{margin:10px 0}summary{cursor:pointer;color:var(--acc)}
 .sub{border:1px dashed var(--line);border-radius:8px;padding:10px 14px;margin:8px 0}
 label.f{display:inline-block;margin:6px 18px 6px 0}input,select,button{font:inherit;padding:6px 9px;max-width:100%;
@@ -666,13 +743,14 @@ code{background:var(--code);padding:1px 5px;border-radius:4px;font-size:13px}
 </main></body></html>"""
 
 INDEX = """
-<p class="hw">本机：{cpu}；内存 {mem}；显卡 {gpu}。<b>训练只用 CPU，什么显卡（含 AMD、核显、没有显卡）都不影响。</b></p>
+<p class="hw">本机：{cpu}；内存 {mem}；显卡 {gpu}。<b>LightGBM 和 Ridge 只用 CPU，什么显卡（含 AMD、核显、没有显卡）都不影响。</b>树模型做的是排序和比大小，CPU 本来就擅长；只有神经网络底座（如 Kronos）才需要 NVIDIA 显卡。</p>
 {memwarn}
 <form method="post" action="/run" id="main">
 <input type="hidden" name="token" value="{token}">
 
-<section class="step" id="step1"><h2><span class="num">1</span>要打造什么模型</h2>
-{tasks}
+<section class="step" id="step1"><h2><span class="num">1</span>要打造什么模型：用在哪</h2>
+<p class="mut">先说清楚模型要用在什么地方。后面的数据要求和参数都由这里决定。灰色的是规划中、暂时不能选。</p>
+{step1}
 </section>
 
 <section class="step" id="step2"><h2><span class="num">2</span>用什么数据</h2>
@@ -712,23 +790,24 @@ INDEX = """
 <button>添加</button></form></div></details>
 </section>
 
-<section class="step" id="step3"><h2><span class="num">3</span>参数（可以不改）</h2>
+<section class="step" id="step3"><h2><span class="num">3</span>参数（由第 1 步推出，可以不改）</h2>
 <label class="f">给这次训练起个名字 <input form="main" name="name" value="{name}" required
  pattern="[A-Za-z0-9_\\-]{{1,40}}"></label>
-<details><summary>高级参数（不填就用默认值；改过的会写在报告首页）</summary><div class="sub">
-<p><b>模型（LightGBM）</b></p>
+<div class="box" id="derived"></div>
+<details><summary>修改参数（不填就用上面的值；改过的会写在报告首页）</summary><div class="sub">
+<p><b>持仓与成本</b></p>
+<label class="f">持股只数 <input form="main" type="number" name="n_hold" id="n_hold" min="1" max="500"></label>
+<label class="f">佣金（万分之几，单边） <input form="main" type="number" name="commission_bp" placeholder="{comm}" step="0.5" min="0"></label>
+<div class="pm pm-lightgbm"><p><b>LightGBM 参数</b></p>
 <label class="f">树的数量 <input form="main" type="number" name="num_boost_round" placeholder="{rounds}" min="10" max="5000"></label>
 <label class="f">叶子数 <input form="main" type="number" name="num_leaves" placeholder="{leaves}" min="2" max="1024"></label>
 <label class="f">学习率 <input form="main" type="number" name="learning_rate" placeholder="{lr}" step="0.005" min="0.001" max="1"></label>
 <label class="f">重复训练次数（种子） <input form="main" type="number" name="n_seeds" placeholder="{seeds}" min="1" max="10"></label>
-<p><b>股票池</b></p>
-<label class="f"><select form="main" name="universe"><option value="">按第 1 步的模型自动选</option>
-<option value="all">全部股票（含 ST）</option><option value="all_ex_st">剔除 ST</option>
-<option value="st">只要 ST</option></select></label>
-<p><b>扣成本检验</b></p>
-<label class="f">每次买入排名前 <input form="main" type="number" name="top" placeholder="{top}" step="0.01" min="0.01" max="0.5"> 的股票</label>
-<label class="f">佣金（万分之几，单边） <input form="main" type="number" name="commission_bp" placeholder="{comm}" step="0.5" min="0"></label>
-<p class="mut">测试年份按数据自动设定：最后两年作为最终测试期（数据少于 5 年时用最后一年）。</p>
+<p class="mut">叶子越多、树越多，模型越复杂，越容易记住历史噪声。</p></div>
+<div class="pm pm-ridge" hidden><p><b>Ridge 参数</b></p>
+<label class="f">正则强度 <input form="main" type="number" name="ridge_alpha" placeholder="{alpha}" step="0.1" min="0.01"></label>
+<p class="mut">越大越保守。Ridge 每次结果相同，不需要重复训练。</p></div>
+<p class="mut">训练和测试年份按数据自动设定：最后两年作为最终测试期（数据少于 5 年时用最后一年）。</p>
 </div></details>
 </section>
 
@@ -740,3 +819,36 @@ INDEX = """
 <h3>运行记录</h3>
 <div class="tw"><table><tr><th>名称</th><th>类型</th><th>状态</th><th>更新时间</th></tr>{jobs}</table></div>
 """
+
+
+SCRIPT = """<script>
+(function () {
+  var T = __TIERS__, PART = __PART__;
+  var HZ = {"1": "持有 1 天，每天换仓，换手和成本最高", "5": "持有 5 天，每周换仓",
+            "20": "持有 20 天，每月换仓；历史样本少，结果更不稳定"};
+  function val(n) { var e = document.querySelector('[name="' + n + '"]:checked'); return e ? e.value : ""; }
+  function wan(x) { return x >= 1e8 ? (x / 1e8).toFixed(x >= 1e9 ? 0 : 1) + " 亿" : Math.round(x / 1e4).toLocaleString() + " 万"; }
+  function upd() {
+    var t = T[document.getElementById("capital").value];
+    var nh = document.getElementById("n_hold"), n = parseInt(nh.value) || t.n_hold;
+    nh.placeholder = t.n_hold;
+    var floor = t.capital / n / PART, model = val("model") || "lightgbm";
+    document.getElementById("capnote").textContent =
+      "按 " + t.label + " 计：默认持有 " + t.n_hold + " 只，每只约 " + wan(t.capital / t.n_hold) + "。";
+    var u = document.getElementById("universe");
+    document.getElementById("listbox").hidden = u.value !== "list";
+    document.getElementById("derived").innerHTML =
+      "<b>因为你在第 1 步的选择，默认这样训练：</b><ul>" +
+      "<li>标签：第二天开盘买入，" + HZ[val("horizon") || "5"] + "。</li>" +
+      "<li>持仓：" + n + " 只等权（资金 " + t.label + "）。</li>" +
+      "<li>只选近 20 日日均成交额 ≥ " + wan(floor) + "元的股票，保证每只仓位不超过它当天成交额的 " +
+      (PART * 100) + "%，买得进卖得出。</li>" +
+      "<li>股票池：" + u.options[u.selectedIndex].text + "。</li>" +
+      "<li>模型：" + (model === "ridge" ? "Ridge 线性回归，训练 1 次" : "LightGBM，按年滚动重训") + "。</li></ul>";
+    document.querySelectorAll(".pm").forEach(function (b) { b.hidden = !b.classList.contains("pm-" + model); });
+  }
+  document.querySelectorAll("[form=main], #main input").forEach(function (e) { e.addEventListener("change", upd); });
+  document.getElementById("n_hold").addEventListener("input", upd);
+  upd();
+})();
+</script>"""

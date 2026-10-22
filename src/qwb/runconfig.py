@@ -27,12 +27,13 @@ from .issues import ERROR, WARN, Report
 TOP = {"name", "task", "data", "model", "train", "output"}
 DATA = {"source", "dir"}
 SOURCES = {"snapshot", "synthetic"}
-MODELS = {"lightgbm"}
-MODEL = {"name", "params", "num_boost_round"}
-TRAIN = {"universe", "min_age_days", "min_amount_quantile", "label_transform",
-         "first_test_year", "final_test_years", "seeds", "shuffle_null_draws", "portfolio"}
-PORTFOLIO = {"top", "commission_bp"}
-UNIVERSES = {"all", "st", "all_ex_st"}
+MODELS = set(daily.MODELS)
+MODEL = {"name", "params", "num_boost_round", "alpha"}
+TRAIN = {"universe", "universe_list", "min_age_days", "min_amount_quantile", "min_adv_yuan",
+         "label_transform", "first_test_year", "final_test_years", "seeds",
+         "shuffle_null_draws", "portfolio", "scenario"}
+PORTFOLIO = {"top", "n_hold", "commission_bp"}
+UNIVERSES = {"all", "st", "all_ex_st", "list", *daily.INDEX_CODES}
 
 
 def load(path: str | Path) -> dict:
@@ -83,6 +84,19 @@ def resolve(raw: dict, base_dir: str | Path = ".") -> tuple[dict | None, Report]
         top = pf.get("top", daily.DEFAULTS["portfolio"]["top"])
         if not (isinstance(top, (int, float)) and 0 < top <= 0.5):
             rep.add(ERROR, "BAD_PORTFOLIO", "train.portfolio.top must be in (0, 0.5]")
+        n_hold = pf.get("n_hold")
+        if n_hold is not None and not (isinstance(n_hold, int) and 1 <= n_hold <= 1000):
+            rep.add(ERROR, "BAD_PORTFOLIO", "train.portfolio.n_hold must be an integer in 1..1000")
+    adv = train.get("min_adv_yuan")
+    if adv is not None and not (isinstance(adv, (int, float)) and adv >= 0):
+        rep.add(ERROR, "BAD_ADV", "train.min_adv_yuan must be a non-negative number (yuan)")
+    if train.get("universe") == "list":
+        lst = train.get("universe_list")
+        if not isinstance(lst, list) or not lst or not all(isinstance(c, str) for c in lst):
+            rep.add(ERROR, "BAD_UNIVERSE", "universe: list needs train.universe_list (codes)")
+    alpha = model.get("alpha")
+    if alpha is not None and not (isinstance(alpha, (int, float)) and alpha > 0):
+        rep.add(ERROR, "BAD_MODEL", "model.alpha must be a positive number")
     seeds = train.get("seeds", daily.DEFAULTS["seeds"])
     if not isinstance(seeds, list) or not seeds or not all(isinstance(s, int) for s in seeds):
         rep.add(ERROR, "BAD_SEEDS", "train.seeds must be a non-empty list of integers")
@@ -116,6 +130,13 @@ def resolve(raw: dict, base_dir: str | Path = ".") -> tuple[dict | None, Report]
     if "num_boost_round" in model:
         cfg["num_boost_round"] = model["num_boost_round"]
     cfg["lgbm"] = dict(cfg["lgbm"], **params)
+    # only non-default models are recorded, so existing LightGBM configs keep their hash
+    if model.get("name", "lightgbm") != "lightgbm":
+        cfg["model"] = model["name"]
+        if params:
+            rep.add(WARN, "IGNORED_PARAM", "model.params only applies to LightGBM; ignored")
+    if "alpha" in model:
+        cfg["ridge_alpha"] = float(model["alpha"])
     if not set(cfg["final_test_years"]) or min(cfg["final_test_years"]) < cfg["first_test_year"]:
         rep.add(ERROR, "BAD_YEARS", "final_test_years must be at or after first_test_year")
         return None, rep
