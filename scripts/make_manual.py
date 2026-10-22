@@ -70,6 +70,18 @@ def add_code(doc, text):
     return p
 
 
+def add_picture(doc, name, caption):
+    """Screenshot from docs/img (taken from a clean install by the release check)."""
+    path = ROOT / "docs" / "img" / name
+    if not path.exists():
+        return
+    doc.add_picture(str(path), width=Cm(16))
+    doc.paragraphs[-1].alignment = WD_ALIGN_PARAGRAPH.CENTER
+    p = doc.add_paragraph()
+    p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    set_font(p.add_run(caption), size=9, color="555555")
+
+
 def build():
     doc = Document()
     sec = doc.sections[0]
@@ -120,14 +132,16 @@ def build():
             add_text(doc, "然后在本地浏览器打开 http://127.0.0.1:8765。默认 LightGBM 不依赖 GPU；Debian/Ubuntu 若提示缺少运行库，执行 sudo apt install libgomp1。")
 
     doc.add_paragraph("三、网页四步流程", style="Heading 1")
+    add_picture(doc, "home.png", "图 1  首页：从上到下依次是四个步骤")
     for h, text in [
         ("第 1 步 选择要打造的模型", "首版提供全 A 股选股和 ST 股专题。任务卡已经固定预测对象、开仓时点、持有期和验收指标。"),
-        ("第 2 步 准备数据", "可以选择试运行数据、本机已有 qwb 数据、上传 CSV，或使用 Tushare 兼容接口下载。试运行数据只用于熟悉流程，几秒完成，结果没有投资含义。"),
+        ("第 2 步 准备数据", "可以选择试运行数据、本机已有 qwb 数据、上传 CSV，或使用 Tushare 兼容接口下载。试运行数据只用于熟悉流程，几秒完成，结果没有投资含义，也不计入评估台账。"),
         ("第 3 步 参数", "不改参数即可使用默认值。高级参数包括树数量、叶子数、学习率、种子数、买入比例和佣金。改过的值会列在报告首页。"),
         ("第 4 步 开始训练", "点击开始训练。网页只生成 YAML 并提交本地任务，训练逻辑与命令行相同。任务页面显示状态、进度、日志和结果文件夹。"),
     ]:
         doc.add_paragraph(h, style="Heading 2")
         add_text(doc, text)
+    add_picture(doc, "result.png", "图 2  结果页：先看“一句话结论”，再看扣成本后的表格")
 
     doc.add_paragraph("CSV 文件要求", style="Heading 2")
     add_text(doc, "每行是一只股票的一天。必填列如下；网页中的下载模板可以直接保存后填写。建议至少三年数据。")

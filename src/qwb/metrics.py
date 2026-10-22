@@ -61,9 +61,10 @@ def newey_west(x: np.ndarray, lag: int) -> dict:
     s = u @ u / n
     for k in range(1, lag + 1):
         s += 2 * (1 - k / (lag + 1)) * (u[k:] @ u[:-k]) / n
-    se = float(np.sqrt(s / n))
-    return {"n": n, "mean": float(x.mean()), "se": se, "t": float(x.mean() / se),
-            "mde": Z_MDE * se, "lag": lag}
+    se = float(np.sqrt(max(s, 0.0) / n))
+    # a constant series (e.g. no trades at all) has no sampling error to test against
+    t = float(x.mean() / se) if se > 0 else np.nan
+    return {"n": n, "mean": float(x.mean()), "se": se, "t": t, "mde": Z_MDE * se, "lag": lag}
 
 
 def top_overlap(a: np.ndarray, b: np.ndarray, q: float = 0.1) -> float:
