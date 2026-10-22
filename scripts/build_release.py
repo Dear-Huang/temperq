@@ -116,7 +116,8 @@ def main() -> int:
     zpath = out / "qwb_windows_linux.zip"
     with zipfile.ZipFile(zpath, "w", zipfile.ZIP_DEFLATED, compresslevel=6) as z:
         for p in sorted(stage.rglob("*")):
-            if p.is_file():
+            # sync clients (e.g. Baidu Netdisk) drop marker files next to new files
+            if p.is_file() and not p.name.endswith((".baiduyun.uploading.cfg", ".tmp")):
                 info = zipfile.ZipInfo.from_file(p, Path("qwb") / p.relative_to(stage))
                 if p.name in ("uv", "install.sh", "start.sh"):
                     info.external_attr = 0o755 << 16
