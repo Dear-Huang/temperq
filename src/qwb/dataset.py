@@ -26,6 +26,7 @@ import hashlib
 import io
 import json
 import re
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -163,9 +164,22 @@ def create(base: Path, dest: Path) -> dict:
     return new
 
 
+def _put(path: Path, text: str, tries: int = 10) -> None:
+    """Write via a temp file and rename; retry while a sync client or reader holds it."""
+    tmp = path.with_name(f".{path.name}.tmp")
+    tmp.write_text(text, encoding="utf-8")
+    for i in range(tries):
+        try:
+            tmp.replace(path)
+            return
+        except PermissionError:
+            if i == tries - 1:
+                raise
+            time.sleep(0.3)
+
+
 def _write(dest: Path, s: dict) -> None:
-    (dest / "dataset.json").write_text(json.dumps(s, ensure_ascii=False, indent=2),
-                                       encoding="utf-8")
+    _put(dest / "dataset.json", json.dumps(s, ensure_ascii=False, indent=2))
     bsnap = json.loads((Path(s["base"]) / "snapshot.json").read_text(encoding="utf-8"))
     h = hashlib.sha256(bsnap["data_snapshot_id"].encode())
     for src in s["sources"]:
@@ -175,8 +189,7 @@ def _write(dest: Path, s: dict) -> None:
                  "source": "combined", "base_snapshot_id": bsnap["data_snapshot_id"],
                  "has_st": bsnap.get("has_st", True) or any(x["kind"] == "st" for x in s["sources"]),
                  "sources": len(s["sources"])})
-    (dest / "snapshot.json").write_text(json.dumps(snap, ensure_ascii=False, indent=2),
-                                        encoding="utf-8")
+    _put(dest / "snapshot.json", json.dumps(snap, ensure_ascii=False, indent=2))
 
 
 def effective_days(dates: pd.Series, cal: pd.DatetimeIndex, rule: str) -> pd.Series:
