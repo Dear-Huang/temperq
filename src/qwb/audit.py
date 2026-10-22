@@ -29,8 +29,16 @@ import pandas as pd
 from . import advice, daily, env, ledger, metrics, netcost, scenario
 
 ALIASES = {"datetime": "date", "trade_date": "date", "instrument": "code", "ts_code": "code",
+           "vt_symbol": "code", "symbol": "code", "order_book_id": "code", "sec_code": "code",
+           "stock_code": "code", "thscode": "code", "windcode": "code",
            "代码": "code", "股票代码": "code", "日期": "date", "交易日期": "date",
-           "pred": "score", "prediction": "score", "预测": "score", "打分": "score", "得分": "score"}
+           "pred": "score", "prediction": "score", "signal": "score", "alpha": "score",
+           "factor": "score", "预测": "score", "打分": "score", "得分": "score", "信号": "score"}
+
+# exchange suffixes used by other tools -> qwb's .SH / .SZ / .BJ
+_EXCH = {"SH": "SH", "SSE": "SH", "XSHG": "SH", "SHSE": "SH",
+         "SZ": "SZ", "SZSE": "SZ", "XSHE": "SZ",
+         "BJ": "BJ", "BSE": "BJ", "BJSE": "BJ"}
 MIN_DAYS = 60
 MIN_NAMES = 30
 
@@ -40,16 +48,37 @@ class AuditError(ValueError):
 
 
 def _code(s: str) -> str:
+    """Stock code in any common convention -> 600000.SH.
+
+    Qlib SH600000, BaoStock sh.600000, Tushare/Wind 600000.SH, vn.py 600000.SSE,
+    JoinQuant/RiceQuant 600000.XSHG, or a bare 600000.
+    """
     s = str(s).strip().upper()
-    m = re.fullmatch(r"(SH|SZ|BJ)(\d{6})", s)               # Qlib style
+    m = re.fullmatch(r"(SH|SZ|BJ)\.?(\d{6})", s)            # Qlib, BaoStock
     if m:
         return f"{m.group(2)}.{m.group(1)}"
+    m = re.fullmatch(r"(\d{6})\.([A-Z]+)", s)               # suffix forms
+    if m and m.group(2) in _EXCH:
+        return f"{m.group(1)}.{_EXCH[m.group(2)]}"
     from .csvimport import _suffix
     return _suffix(s)
 
 
+def _table(raw: bytes) -> pd.DataFrame:
+    """CSV, or Parquet (magic bytes). Pickle is refused: loading it can run code."""
+    if raw[:4] == b"PAR1":
+        df = pd.read_parquet(io.BytesIO(raw))
+        if not {"code", "instrument", "vt_symbol", "ts_code"} & {str(c).lower() for c in df.columns}:
+            df = df.reset_index()                            # Qlib keeps (datetime, instrument) as index
+        return df.astype(str)
+    if raw[:1] == b"\x80":
+        raise AuditError("这是 pickle 文件（比如 Qlib 的 pred.pkl）。pickle 打开时可能执行代码，不能直接上传；"
+                         "请在 Python 里导出：pred.reset_index().to_csv('pred.csv', index=False)")
+    return pd.read_csv(io.BytesIO(raw), dtype=str, encoding_errors="replace")
+
+
 def read_predictions(raw: bytes) -> pd.DataFrame:
-    df = pd.read_csv(io.BytesIO(raw), dtype=str, encoding_errors="replace")
+    df = _table(raw)
     df.columns = [ALIASES.get(str(c).strip().lower(), ALIASES.get(str(c).strip(),
                                                               str(c).strip().lower())) for c in df.columns]
     if "score" not in df.columns:

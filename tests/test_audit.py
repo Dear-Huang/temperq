@@ -60,3 +60,30 @@ def test_too_little_overlap_is_explained(tmp_path):
     raw = _qlib_pred(b, last_days=20).to_csv(index=False).encode()
     with pytest.raises(audit.AuditError, match="至少需要 60 天"):
         audit.run(raw, "x.csv", d, 5, "100w_600w", tmp_path / "x", tmp_path, "x")
+
+
+@pytest.mark.parametrize("raw_code, want", [
+    ("SH600000", "600000.SH"), ("sz000001", "000001.SZ"),        # Qlib
+    ("sh.600000", "600000.SH"),                                  # BaoStock
+    ("600000.SH", "600000.SH"),                                  # Tushare / Wind
+    ("600000.SSE", "600000.SH"), ("000001.SZSE", "000001.SZ"),   # vn.py
+    ("600000.XSHG", "600000.SH"), ("000001.XSHE", "000001.SZ"),  # JoinQuant / RiceQuant
+    ("600000", "600000.SH"), ("1", "000001.SZ"),                 # bare
+])
+def test_code_conventions_of_other_tools(raw_code, want):
+    assert audit._code(raw_code) == want
+
+
+def test_vnpy_and_parquet_and_pickle(tmp_path):
+    vn = b"datetime,vt_symbol,signal\n2024-01-02 15:00:00,600000.SSE,0.3\n2024-01-02 15:00:00,000001.SZSE,-0.1\n"
+    df = audit.read_predictions(vn)
+    assert df["code"].tolist() == ["600000.SH", "000001.SZ"] and str(df["date"].iloc[0])[:10] == "2024-01-02"
+    q = pd.DataFrame({"score": [0.1, 0.2]}, index=pd.MultiIndex.from_tuples(
+        [(pd.Timestamp("2024-01-02"), "SH600000"), (pd.Timestamp("2024-01-02"), "SZ000001")],
+        names=["datetime", "instrument"]))
+    buf = io.BytesIO()
+    q.to_parquet(buf)
+    assert audit.read_predictions(buf.getvalue())["code"].tolist() == ["600000.SH", "000001.SZ"]
+    import pickle
+    with pytest.raises(audit.AuditError, match="pickle"):
+        audit.read_predictions(pickle.dumps(q))
