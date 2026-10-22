@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import math
+import threading
 from pathlib import Path
 
 import numpy as np
@@ -34,13 +35,69 @@ def _lot(code: str) -> int:
     return 200 if code.startswith(("688", "689")) else 100
 
 
-def picks(run_dir: Path, cwd: Path, date: str | None = None,
-          capital: float | None = None) -> dict:
+# Loading 8 years of full-market data and its features takes about a minute; the
+# model page, the CSV downloads and a date change all need the same arrays. Keep the
+# last few datasets in memory, keyed by what is on disk now, so new data is picked up.
+_CACHE: dict = {}
+_CACHE_MAX = 2
+_LOCK = threading.Lock()
+
+
+def _data_key(data: dict, cfg: dict) -> tuple:
+    if data.get("source") == "synthetic":
+        return ("synthetic",)
+    d = Path(data["dir"])
+    snap = d / "snapshot.json"
+    stamp = snap.read_text(encoding="utf-8") if snap.is_file() else ""
+    # the ST / index masks loaded with the panel depend on the universe kind
+    return (str(d.resolve()), stamp, cfg.get("universe", "all"))
+
+
+def _loaded(meta: dict, cwd: Path):
     from .pipeline import load_data
 
+    key = _data_key(meta["data"], meta["cfg"])
+    with _LOCK:
+        if key in _CACHE:
+            return _CACHE[key]
+        P, snap, st, members = load_data({"data": meta["data"], "cfg": meta["cfg"]}, cwd)
+        val = (P, st, members, daily.features(P))
+        while len(_CACHE) >= _CACHE_MAX:
+            _CACHE.pop(next(iter(_CACHE)))
+        _CACHE[key] = val
+        return val
+
+
+_WARMING: set = set()
+
+
+def is_ready(run_dir: Path) -> bool:
+    """True if this model's data is already in memory (the page will answer at once)."""
     meta = load(run_dir)
-    rc = {"data": meta["data"], "cfg": meta["cfg"]}
-    P, snap, st, members = load_data(rc, cwd)
+    return _data_key(meta["data"], meta["cfg"]) in _CACHE
+
+
+def warm(run_dir: Path, cwd: Path) -> None:
+    """Load the model's data in the background so the page does not hang."""
+    meta = load(run_dir)
+    key = _data_key(meta["data"], meta["cfg"])
+    with _LOCK:
+        if key in _CACHE or key in _WARMING:
+            return
+        _WARMING.add(key)
+
+    def go():
+        try:
+            _loaded(meta, cwd)
+        finally:
+            _WARMING.discard(key)
+    threading.Thread(target=go, daemon=True).start()
+
+
+def picks(run_dir: Path, cwd: Path, date: str | None = None,
+          capital: float | None = None) -> dict:
+    meta = load(run_dir)
+    P, st, members, F = _loaded(meta, cwd)
     cfg, card = meta["cfg"], meta["card"]
     dates, codes = P["close"].index, P["close"].columns
     if date:
@@ -50,7 +107,6 @@ def picks(run_dir: Path, cwd: Path, date: str | None = None,
         t = dates.get_loc(d)
     else:
         t = len(dates) - 1
-    F = daily.features(P)
     names = daily.feature_names(F)
     if names != meta["features"]:
         raise ValueError("数据的特征和模型训练时不一致（可能之后增删了数据来源），请重新训练")

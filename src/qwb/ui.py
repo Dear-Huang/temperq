@@ -935,6 +935,15 @@ def create_app(workdir: Path, task_dir: Path | None = None,
         d = _run_dir(run)
         meta = json.loads((d / "final_model" / "meta.json").read_text(encoding="utf-8"))
         m = json.loads((d / "metrics.json").read_text(encoding="utf-8"))
+        from . import picks as picks_mod
+        if meta.get("data", {}).get("source") != "synthetic" and not picks_mod.is_ready(d):
+            # full-market data takes about a minute to load; do it in the background
+            picks_mod.warm(d, workdir)
+            return page(f"使用模型：{run}",
+                        f'<p><a href="/models">← 全部模型</a></p><h2>{html.escape(run)}</h2>'
+                        '<div class="box"><b>正在载入数据……</b><p>第一次打开要把全部行情和特征读进内存，'
+                        '全市场数据大约 1–2 分钟。页面会自动刷新；载入后再换日期、改资金、下载 CSV 都是即时的。</p></div>',
+                        refresh=True)
         try:
             r = _picks_or_error(run, date, capital)
         except (ValueError, FileNotFoundError) as e:

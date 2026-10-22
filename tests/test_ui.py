@@ -235,3 +235,24 @@ def test_audit_external_predictions_page(tmp_path):
     page = c.get(r.headers["location"]).text
     assert "体检：ext_q" in page and "完成" in page and "一句话结论" in page
     assert "Qlib 基准口径" in page and "前视嫌疑检查" in page
+
+
+def test_model_page_loads_real_data_in_background(tmp_path):
+    pytest.importorskip("lightgbm")
+    import time
+    from qwb import picks as picks_mod
+    app, c = client(tmp_path)
+    t = app.state.token
+    b = pipeline.synth_bars(n_days=800, n_codes=40).drop(columns="up_limit")
+    c.post("/data/csv", data={"token": t, "name": "mine"},
+           files={"file": ("mine.csv", io.BytesIO(b.to_csv(index=False).encode()), "text/csv")})
+    c.post("/run", data=form(app, name="real1", dataset="mine"), follow_redirects=False)
+    picks_mod._CACHE.clear()
+    first = c.get("/models/real1").text
+    assert "正在载入数据" in first and 'http-equiv="refresh"' in first
+    for _ in range(100):
+        if picks_mod.is_ready(tmp_path / "runs" / "real1"):
+            break
+        time.sleep(0.1)
+    page = c.get("/models/real1").text
+    assert "收盘后的决策" in page and "正在载入数据" not in page
