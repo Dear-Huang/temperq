@@ -164,6 +164,12 @@ def run(rc: dict, cwd: Path, log: Callable[[str], None] = print) -> dict:
     except ImportError:
         net = None
         log("net-of-cost check skipped: ashare-tcost not installed")
+    # same model under other tools' default backtest rules, one change at a time
+    conventions = None
+    if net is not None:
+        conventions = netcost.compare_conventions(
+            P, card, ens, res["U"], y, final, top=pf["top"],
+            commission_bp=pf["commission_bp"], n_hold=pf.get("n_hold"))
     seed_corr, seed_overlap = [], []
     for i in range(len(seeds) if model == "lightgbm" else 0):
         for j in range(i + 1, len(seeds)):
@@ -200,7 +206,7 @@ def run(rc: dict, cwd: Path, log: Callable[[str], None] = print) -> dict:
                "final_test_years": final, "nw_lag": lag, "ic": rows,
                "shuffle_null_mean": float(np.mean(null)), "shuffle_null_sd": float(np.std(null)),
                "seed_pred_rank_corr": seed_corr, "seed_top10_overlap": seed_overlap,
-               "net_of_cost": net,
+               "net_of_cost": net, "conventions": conventions,
                "go": go, "acceptance_hash": acc_hash, "acceptance_changed_after_lock": acc_changed,
                "deviations": rc["deviations"], "timing_s": {k: round(v, 1) for k, v in T.items()},
                "env": meta, "rows_predicted": int(len(pred_tab)),
@@ -292,6 +298,22 @@ def _scenario_lines(cfg: dict) -> list[str]:
     return out + [""]
 
 
+def _convention_lines(conv: dict | None) -> list[str]:
+    if not conv:
+        return []
+    lines = ["## 换成常见回测口径会怎样（同一个模型，每次只改一处）", "",
+             "Qlib 官方 LightGBM 基准的默认设置：收盘价成交、所有板块统一按 9.5% 涨跌停、"
+             "固定费率（买 5bp、卖 15bp）。下表从 qwb 的可成交口径出发，逐项换成这些设置。", "",
+             "| 口径 | 毛超额 | 成本 | 净超额 | 净超额 t |", "|---|---|---|---|---|"]
+    for k, v in conv.items():
+        lines.append(f"| {k} | {v['gross_excess_ann']:+.1%} | {v['cost_ann']:.1%} | "
+                     f"{v['net_excess_ann']:+.1%} | {v['net_excess_t']:.2f} |")
+    first, last = list(conv.values())[0], list(conv.values())[-1]
+    gap = last["net_excess_ann"] - first["net_excess_ann"]
+    lines += ["", f"两种口径的净超额相差 {gap:+.1%}/年。差得越多，说明换个工具回测，结论越可能被高估。", ""]
+    return lines
+
+
 def _net_section(net: dict | None, cfg: dict, final: list[int]) -> list[str]:
     if not net:
         return []
@@ -326,6 +348,7 @@ def _report(rc, s, rows, null, seed_corr, seed_overlap, valid, final, T, meta, n
         f"配置 `{rc['config_hash']}`", "",
         *_scenario_lines(cfg),
         *_net_section(s.get("net_of_cost"), cfg, final),
+        *_convention_lines(s.get("conventions")),
         "## 首页标注",
         f"- 验收门槛哈希 `{s['acceptance_hash']}`"
         + ("；**门槛在锁定后被修改**" if s["acceptance_changed_after_lock"] else "，锁定后未改"),

@@ -47,6 +47,40 @@ def struct_half_spread_bp(P: dict) -> pd.DataFrame:
     return out
 
 
+# Qlib's published LightGBM benchmark (examples/benchmarks/LightGBM/
+# workflow_config_lightgbm_Alpha158.yaml): fill at close, one 9.5% limit for every
+# board, open_cost 0.0005 / close_cost 0.0015. Its strategy trades on the previous
+# step's prediction, so the fill is the next day's close, not the signal day's.
+QLIB_STYLE = {"fixed_cost_bp": (5.0, 15.0), "uniform_limit": 0.095}
+
+
+def labels_close(P: dict, card: dict) -> pd.DataFrame:
+    """Same holding window as the card, filled at closes (day+1 close to day+1+h close)."""
+    s, e = int(card["label"]["start"]["day"]), int(card["label"]["end"]["day"])
+    ac = P["close"] * P["adj_factor"]
+    return ac.shift(-e) / ac.shift(-s) - 1
+
+
+def compare_conventions(P: dict, card: dict, signal: np.ndarray, U: np.ndarray,
+                        y_open: np.ndarray, years: list[int], **kw) -> dict:
+    """The same signal under qwb's tradable rules and under Qlib's benchmark defaults,
+    then one difference at a time, so the gap can be attributed."""
+    yc = labels_close(P, card).to_numpy()
+    yc = np.where(U, yc, np.nan)
+    runs = {
+        "qwb 可成交口径": dict(),
+        "改为收盘价成交": dict(fill="close", _y=yc),
+        "再改为统一 9.5% 涨跌停": dict(fill="close", uniform_limit=0.095, _y=yc),
+        "再改为固定费率（Qlib 基准口径）": dict(fill="close", _y=yc, **QLIB_STYLE),
+    }
+    out = {}
+    for name, opt in runs.items():
+        y = opt.pop("_y", y_open)
+        r = evaluate(P, card, {"s": signal}, U, y, years, **kw, **opt)
+        out[name] = r["signals"]["s"]
+    return out
+
+
 def _entry_exit(card: dict) -> tuple[int, int, str, str]:
     s, e = card["label"]["start"], card["label"]["end"]
     return int(s["day"]), int(e["day"]), s.get("price", "open"), e.get("price", "open")
@@ -55,18 +89,31 @@ def _entry_exit(card: dict) -> tuple[int, int, str, str]:
 def evaluate(P: dict, card: dict, signals: dict, U: np.ndarray, y_raw: np.ndarray,
              years: list[int], top: float = 0.1, commission_bp: float = 3.0,
              n_hold: int | None = None,
-             half_spread: pd.DataFrame | None = None, pack: dict | None = None) -> dict:
+             half_spread: pd.DataFrame | None = None, pack: dict | None = None,
+             fixed_cost_bp: tuple[float, float] | None = None,
+             fill: str | None = None, uniform_limit: float | None = None) -> dict:
+    """fixed_cost_bp=(buy, sell) replaces spread + commission + stamp duty;
+    fill="close" fills at the entry day's close instead of the label's entry price;
+    uniform_limit=0.095 blocks trades by one rule for every board instead of the
+    rule-pack limit prices. All three exist to reproduce other tools' defaults."""
     dates = P["close"].index
     s_off, e_off, s_px, e_px = _entry_exit(card)
+    if fill:
+        s_px = fill
     h = e_off - s_off
     cand = np.flatnonzero(np.isin(dates.year, years))
     rebal = [t for t in cand[::h] if t + e_off < len(dates)]
-    if half_spread is None:
+    if fixed_cost_bp is None and half_spread is None:
         half_spread = struct_half_spread_bp(P)
-    hs = half_spread.to_numpy()
+    hs = half_spread.to_numpy() if half_spread is not None else None
     px_in = P[s_px].to_numpy()
-    up = P["up_limit"].to_numpy()
-    dn = P["down_limit"].to_numpy() if "down_limit" in P else np.full_like(up, np.nan)
+    if uniform_limit is not None:
+        prev = (P["close"] * P["adj_factor"]).shift(1) / P["adj_factor"]
+        up = (prev * (1 + uniform_limit)).to_numpy()
+        dn = (prev * (1 - uniform_limit)).to_numpy()
+    else:
+        up = P["up_limit"].to_numpy()
+        dn = P["down_limit"].to_numpy() if "down_limit" in P else np.full_like(up, np.nan)
     with np.errstate(invalid="ignore"):
         buyable = ~np.isnan(px_in) & ~(px_in >= up - 1e-6)
         sellable = ~np.isnan(px_in) & ~(px_in <= dn + 1e-6)
@@ -95,15 +142,19 @@ def evaluate(P: dict, card: dict, signals: dict, U: np.ndarray, y_raw: np.ndarra
                 continue
             w1 = {j: 1.0 / len(hold) for j in hold}
             names = set(w0) | set(w1)
-            med = np.nanmedian(hs[te]) if np.isfinite(hs[te]).any() else 0.0
-            stamp = rules.stamp_tax_sell_bp(dates[te], pack)
+            if hs is not None:
+                med = np.nanmedian(hs[te]) if np.isfinite(hs[te]).any() else 0.0
+                stamp = rules.stamp_tax_sell_bp(dates[te], pack)
             c_bp, tv = 0.0, 0.0
             for j in names:
                 dw = w1.get(j, 0.0) - w0.get(j, 0.0)
                 if dw == 0:
                     continue
-                hsj = hs[te, j] if np.isfinite(hs[te, j]) else med
-                c_bp += abs(dw) * (hsj + commission_bp) + (stamp * -dw if dw < 0 else 0.0)
+                if fixed_cost_bp is not None:
+                    c_bp += dw * fixed_cost_bp[0] if dw > 0 else -dw * fixed_cost_bp[1]
+                else:
+                    hsj = hs[te, j] if np.isfinite(hs[te, j]) else med
+                    c_bp += abs(dw) * (hsj + commission_bp) + (stamp * -dw if dw < 0 else 0.0)
                 tv += abs(dw)
             r = np.array([y_raw[t, j] for j in hold])
             g = float(np.nansum(np.nan_to_num(r)) / len(hold))

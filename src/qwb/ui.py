@@ -746,7 +746,7 @@ def create_app(workdir: Path, task_dir: Path | None = None,
         head = {"queued": "排队中", "running": "正在运行…", "succeeded": "完成",
                 "failed": "失败", "cancelled": "已取消"}[st["state"]]
         parts = [f'<p><a href="/">← 返回首页</a></p>',
-                 f'<h2>{"训练" if what == "train" else "下载数据"}：{html.escape(name)}</h2>',
+                 f'<h2>{ {"train": "训练", "audit": "体检"}.get(what, "下载数据")}：{html.escape(name)}</h2>',
                  f'<p class="state {st["state"]}">{head}</p>']
         if prog:
             p = prog[-1]
@@ -765,7 +765,7 @@ def create_app(workdir: Path, task_dir: Path | None = None,
             parts.append(f'<form method="post" action="/job/{jid}/cancel"><input type="hidden" '
                          f'name="token" value="{token}"><button class="secondary">取消</button></form>')
         out_file = store.root / jid / "artifacts" / "output.txt"
-        if st["state"] == "succeeded" and what == "train" and out_file.exists():
+        if st["state"] == "succeeded" and what in ("train", "audit") and out_file.exists():
             out_dir = Path(out_file.read_text(encoding="utf-8"))
             m = json.loads((out_dir / "metrics.json").read_text(encoding="utf-8"))
             items = "".join(f'<li class="{lv}">{html.escape(s)}</li>' for lv, s in verdict(m))
@@ -783,6 +783,80 @@ def create_app(workdir: Path, task_dir: Path | None = None,
         parts.append(f'<details{" open" if st["state"] == "failed" else ""}><summary>运行日志</summary>'
                      f'<pre class="plain">{html.escape(log_txt) or "（暂无）"}</pre></details>')
         return page(name, "\n".join(parts), refresh=running)
+
+    # ---------------------------------------------------------------- audit external models
+    @app.get("/audit", response_class=HTMLResponse)
+    def audit_page():
+        avail = {k: v for k, v in datasets(workdir).items()}
+        sel = next((k for k in avail if k != SYNTHETIC), SYNTHETIC)
+        ds_opts = "".join(f'<option value="{html.escape(k)}"{" selected" if k == sel else ""}>'
+                          f'{html.escape(v["label"])}</option>' for k, v in avail.items())
+        hz = "".join(f'<option value="{h}"{" selected" if h == scenario.DEFAULT_HORIZON else ""}>'
+                     f'{html.escape(v)}</option>' for h, v in scenario.HORIZONS.items())
+        cap = "".join(f'<option value="{k}"{" selected" if k == scenario.DEFAULT_TIER else ""}>'
+                      f'{html.escape(v["label"])}</option>' for k, v in scenario.TIERS.items())
+        uv = "".join(f'<option value="{k}">{html.escape(v)}</option>'
+                     for k, v in scenario.UNIVERSES.items() if k != "list")
+        body = ('<h2>体检外部模型</h2>'
+                '<p>模型在 Qlib、vn.py、自己的 Python 脚本里训练都可以。只要上传它每天给每只股票的打分，'
+                'qwb 会用你的数据、按可成交的规则重新检验：扣成本后还剩多少、能不能赢简单方法、'
+                '换成 Qlib 默认回测口径会被高估多少、打分有没有前视嫌疑。不需要模型文件。</p>'
+                '<div class="box"><b>打分文件格式（CSV）</b><p>每行一只股票一天：'
+                '<code>code</code> 股票代码、<code>date</code> 打分日期（当天收盘后算出的）、<code>score</code> 打分。'
+                'Qlib 的预测结果（<code>pred.pkl</code> 用 <code>pred.reset_index().to_csv("pred.csv", index=False)</code> 导出，'
+                '列名 datetime、instrument、score）可以直接上传，SH600000 这种代码会自动转换。至少覆盖 60 个交易日。</p></div>'
+                f'<form method="post" action="/audit" enctype="multipart/form-data" class="box">'
+                f'<input type="hidden" name="token" value="{token}">'
+                '<label class="f">名称 <input name="name" required pattern="[A-Za-z0-9_\\-]{1,40}" '
+                f'value="ext_{datetime.now():%m%d_%H%M}"></label>'
+                '<label class="f">打分文件 <input type="file" name="file" accept=".csv" required></label><br>'
+                f'<label class="f">用哪份行情数据检验 <select name="dataset">{ds_opts}</select></label><br>'
+                f'<label class="f">持有期 <select name="horizon">{hz}</select></label>'
+                f'<label class="f">股票池 <select name="universe">{uv}</select></label>'
+                f'<label class="f">资金量 <select name="capital">{cap}</select></label>'
+                '<p class="mut">持有期要和模型训练时的预测目标一致，比如 Qlib 默认标签是 2 天收益，选“持有 1 天”最接近。</p>'
+                '<button class="big">开始体检</button></form>')
+        return page("体检外部模型", body)
+
+    @app.post("/audit")
+    async def audit_run(req: Request):
+        form = await req.form()
+        guard(req, form.get("token"))
+        name = str(form.get("name", "")).strip()
+        if not NAME_RE.match(name):
+            return oops("名称只能用字母、数字、下划线、连字符", "/audit")
+        up = form.get("file")
+        if up is None or not getattr(up, "filename", ""):
+            return oops("请选择打分文件", "/audit")
+        raw = up.file.read()
+        if len(raw) > 300 * 2 ** 20:
+            return oops("文件超过 300MB，请只保留需要检验的日期", "/audit")
+        avail = datasets(workdir)
+        dsid = str(form.get("dataset", ""))
+        if dsid not in avail:
+            return oops("请选择行情数据", "/audit")
+        try:
+            horizon = int(form.get("horizon", scenario.DEFAULT_HORIZON))
+        except ValueError:
+            horizon = -1
+        tier, universe = str(form.get("capital", "")), str(form.get("universe", "all"))
+        if horizon not in scenario.HORIZONS or tier not in scenario.TIERS \
+                or universe not in scenario.UNIVERSES or universe == "list":
+            return oops("持有期、股票池或资金量不对", "/audit")
+        from . import audit
+        try:
+            audit.read_predictions(raw)               # fail fast on format, before queueing
+        except audit.AuditError as e:
+            return oops(str(e), "/audit")
+        d = avail[dsid]
+        out = runs_root / name
+
+        def fn(ctx, _cfg):
+            s = audit.run(raw, up.filename, d["path"], horizon, tier, out, workdir, name,
+                          universe=universe, log=ctx.log)
+            (ctx.artifacts / "output.txt").write_text(str(out), encoding="utf-8")
+        jid = submit("evaluate", {"ui": {"name": name, "what": "audit", "file": up.filename}}, fn)
+        return RedirectResponse(f"/job/{jid}", 303)
 
     # ---------------------------------------------------------------- use a model
     runs_root = workdir / "runs"
@@ -971,7 +1045,7 @@ def _job_rows(store: Store) -> str:
         ui = spec.get("config", {}).get("ui")
         if not ui:
             continue
-        kind = "训练" if ui.get("what") == "train" else "下载数据"
+        kind = {"train": "训练", "audit": "体检外部模型"}.get(ui.get("what"), "下载数据")
         rows.append(f'<tr><td><a href="/job/{j["job_id"]}">{html.escape(ui["name"])}</a></td>'
                     f'<td>{kind}</td><td>{label.get(j["state"], j["state"])}</td>'
                     f'<td>{_local_time(j["updated"])}</td></tr>')
@@ -1047,7 +1121,7 @@ pre.plain{white-space:pre-wrap;word-break:break-word;background:var(--code);padd
 code{background:var(--code);padding:1px 5px;border-radius:4px;font-size:13px}
 </style></head><body><main>
 <h1>qwb 本地量化工作台</h1>
-<p class="nav"><a href="/">训练模型</a>　·　<a href="/models">使用模型</a></p>
+<p class="nav"><a href="/">训练模型</a>　·　<a href="/models">使用模型</a>　·　<a href="/audit">体检外部模型</a></p>
 <p class="mut">在自己电脑上训练选股模型。数据只在这台电脑上，不会上传。不构成投资建议。</p>
 {{body}}
 </main></body></html>"""

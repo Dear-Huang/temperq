@@ -206,3 +206,32 @@ def test_report_has_parameter_rulebook(tmp_path):
     page = c.get(r.headers["location"]).text
     assert "参数体检" in page and "已锁定" in page and "López de Prado" in page
     assert "持有 20 天" in page and "只训练 1 次" in page
+
+
+def test_audit_external_predictions_page(tmp_path):
+    import pandas as pd
+    app, c = client(tmp_path)
+    t = app.state.token
+    b = pipeline.synth_bars(n_days=800, n_codes=40).drop(columns="up_limit")
+    c.post("/data/csv", data={"token": t, "name": "mine"},
+           files={"file": ("mine.csv", io.BytesIO(b.to_csv(index=False).encode()), "text/csv")})
+    assert "体检外部模型" in c.get("/").text and "Qlib" in c.get("/audit").text
+    b = b.sort_values(["code", "date"])
+    b["score"] = -b.groupby("code")["close"].pct_change(5)
+    last = sorted(b["date"].unique())[-300:]                 # last 300 days, every stock
+    p = b[b["date"].isin(last)].dropna(subset=["score"])
+    pred = pd.DataFrame({"datetime": pd.to_datetime(p["date"]).dt.strftime("%Y-%m-%d"),
+                         "instrument": "SZ" + p["code"].str[:6], "score": p["score"]})
+    raw = pred.to_csv(index=False).encode()
+    form_ = {"token": t, "name": "ext_q", "dataset": "mine", "horizon": "5",
+             "universe": "all", "capital": "100w_600w"}
+    assert c.post("/audit", data=dict(form_, token="x"),
+                  files={"file": ("pred.csv", io.BytesIO(raw), "text/csv")}).status_code == 403
+    bad = c.post("/audit", data=form_, files={"file": ("p.csv", io.BytesIO(b"a,b\n1,2\n"), "text/csv")})
+    assert "缺少列" in bad.text
+    r = c.post("/audit", data=form_, files={"file": ("pred.csv", io.BytesIO(raw), "text/csv")},
+               follow_redirects=False)
+    assert r.status_code == 303
+    page = c.get(r.headers["location"]).text
+    assert "体检：ext_q" in page and "完成" in page and "一句话结论" in page
+    assert "Qlib 基准口径" in page and "前视嫌疑检查" in page
