@@ -12,6 +12,7 @@ Timing assumptions (defaults, documented in the pilot report):
 
 from __future__ import annotations
 
+import numpy as np
 import pandas as pd
 
 from .cache import Cache
@@ -151,6 +152,48 @@ def st_status(daily_st: pd.DataFrame, days: pd.DatetimeIndex) -> pd.DataFrame:
         "end": end.dt.strftime("%Y-%m-%d").astype(object).where(end.notna(), None),
         "value": runs["value"],
     })
+    return out
+
+
+# ---------------------------------------------------------------- factor sources
+
+# Built-in Tushare factor sources. Values are known after the close of day d,
+# before the next open, so they are usable for the decision made on day d.
+FACTOR_APIS = {
+    "daily_basic": "每日指标：换手率、量比、盈利收益率 E/P、账面市值比 B/P、股息率、流通市值",
+    "moneyflow": "个股资金流：主力净流入、全部净流入（均除以当日成交额）",
+}
+
+
+def _num(s: pd.Series) -> pd.Series:
+    return pd.to_numeric(s, errors="coerce")
+
+
+def factor_frame(cli: TushareClient, cache: Cache, api: str, d) -> pd.DataFrame:
+    """One trading day of a built-in factor source: code, date, value columns."""
+    p = {"trade_date": _ymd(d)}
+    df = cache.get(api, p, lambda p=p: cli.paged(api, PAGE, ["ts_code"], **p))
+    if df.empty:
+        return pd.DataFrame(columns=["code", "date"])
+    out = pd.DataFrame({"code": df["ts_code"].to_numpy(), "date": pd.Timestamp(d)})
+    if api == "daily_basic":
+        pe, pb = _num(df["pe_ttm"]), _num(df["pb"])
+        out["turnover_f"] = _num(df["turnover_rate_f"]).to_numpy()
+        out["volume_ratio"] = _num(df["volume_ratio"]).to_numpy()
+        out["ep"] = (1 / pe.where(pe > 0)).to_numpy()          # loss makers: no E/P
+        out["bp"] = (1 / pb.where(pb > 0)).to_numpy()
+        out["dv_ttm"] = _num(df["dv_ttm"]).to_numpy()
+        out["log_circ_mv"] = np.log(_num(df["circ_mv"]).where(lambda x: x > 0)).to_numpy()
+    elif api == "moneyflow":
+        bars = cache.get("daily", p, lambda p=p: cli.paged("daily", PAGE, ["ts_code"], **p))
+        amt = df[["ts_code"]].merge(bars[["ts_code", "amount"]], on="ts_code", how="left")["amount"]
+        amt_wan = _num(amt) / 10                                # daily.amount is 千元, flows are 万元
+        main = (_num(df["buy_lg_amount"]) - _num(df["sell_lg_amount"])
+                + _num(df["buy_elg_amount"]) - _num(df["sell_elg_amount"]))
+        out["mf_main_ratio"] = (main / amt_wan.where(amt_wan > 0)).to_numpy()
+        out["mf_net_ratio"] = (_num(df["net_mf_amount"]) / amt_wan.where(amt_wan > 0)).to_numpy()
+    else:
+        raise ValueError(f"unknown factor api {api!r}")
     return out
 
 

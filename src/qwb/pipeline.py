@@ -61,25 +61,25 @@ def load_data(rc: dict, cwd: Path) -> tuple[dict, str, pd.DataFrame | None, pd.D
     data_dir = src.get("dir") or find_local_config(cwd).get("data_dir")
     if not data_dir:
         raise FileNotFoundError("data.dir not set and no data_dir in config.local.yaml")
-    data_dir = Path(data_dir)
-    snap = daily.load_snapshot(data_dir)["data_snapshot_id"]
-    P = daily.load_panel(data_dir)
+    from . import dataset
+    ds = dataset.load(Path(data_dir))           # base bars + any added sources
+    P, snap = ds["P"], ds["snapshot_id"]
     dates, codes = P["close"].index, P["close"].columns
+    st_all = None if ds["st"] is None else daily.st_wide(ds["st"], dates, codes)
     st = members = None
     if u in ("st", "all_ex_st"):
-        st = daily.st_wide(pd.read_parquet(data_dir / "st_status.parquet"), dates, codes)
+        if st_all is None:
+            raise FileNotFoundError("this dataset has no ST status")
+        st = st_all
     elif u in daily.INDEX_CODES:
-        p = data_dir / "index_members.parquet"
-        if not p.exists():
-            raise FileNotFoundError(f"{p} not found: this dataset has no index constituents "
+        if ds["members"] is None:
+            raise FileNotFoundError("this dataset has no index constituents "
                                     "(run scripts/fetch_index_members.py)")
-        members = daily.members_wide(pd.read_parquet(p), dates, codes, daily.INDEX_CODES[u])
+        members = daily.members_wide(ds["members"], dates, codes, daily.INDEX_CODES[u])
         if not members.to_numpy().any():
             raise ValueError(f"no {u} constituents fall inside the data range")
-        # index universes exclude ST implicitly only if the index does; be explicit
-        sp = data_dir / "st_status.parquet"
-        if sp.exists():
-            members &= ~daily.st_wide(pd.read_parquet(sp), dates, codes)
+        if st_all is not None:                  # be explicit: no ST names in index pools
+            members &= ~st_all
     return P, snap, st, members
 
 

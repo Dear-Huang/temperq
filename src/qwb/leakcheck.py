@@ -40,7 +40,7 @@ def prefix_invariance(P: dict, cfg: dict, st: pd.DataFrame | None = None,
         Ft = daily.features(Pt)
         Ut = np.asarray(daily.universe(Pt, cfg, None if st is None else st.iloc[:t + 1],
                                      None if members is None else members.iloc[:t + 1]))
-        for k in daily.FEATURES:
+        for k in daily.feature_names(F):
             a, b = F[k].iloc[t].to_numpy(dtype=float), Ft[k].iloc[t].to_numpy(dtype=float)
             diff = ~np.isclose(a, b, atol=atol, equal_nan=True)
             if diff.any():
@@ -51,5 +51,5 @@ def prefix_invariance(P: dict, cfg: dict, st: pd.DataFrame | None = None,
             violations.append({"date": str(dates[t].date()), "item": "universe",
                                "cells": int(diff.sum())})
     return {"days": [str(dates[t].date()) for t in days],
-            "items": len(daily.FEATURES) + 1, "violations": violations,
+            "items": len(daily.feature_names(F)) + 1, "violations": violations,
             "ok": not violations}

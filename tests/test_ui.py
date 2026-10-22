@@ -133,3 +133,43 @@ def test_markdown_render_escapes_html():
     h = ui.md_to_html("# T\n| a | b |\n|---|---|\n| <script> | **x** |\n- item `c`")
     assert "<script>" not in h and "&lt;script&gt;" in h and "<b>x</b>" in h
     assert "<table>" in h and "<li>item <code>c</code></li>" in h
+
+
+def test_combined_dataset_flow(tmp_path):
+    pytest.importorskip("lightgbm")
+    import pandas as pd
+    app, c = client(tmp_path)
+    t = app.state.token
+    b = pipeline.synth_bars(n_days=800, n_codes=40).drop(columns="up_limit")
+    c.post("/data/csv", data={"token": t, "name": "mine"},
+           files={"file": ("mine.csv", io.BytesIO(b.to_csv(index=False).encode()), "text/csv")})
+    assert "加更多数据来源" in c.get("/").text
+    page = c.get("/data/mine").text
+    assert "新建组合数据" in page
+    assert c.post("/data/mine/combine", data={"token": "x", "name": "mine_plus"}).status_code == 403
+    r = c.post("/data/mine/combine", data={"token": t, "name": "mine_plus"}, follow_redirects=False)
+    assert r.headers["location"] == "/data/mine_plus"
+    page = c.get("/data/mine_plus").text
+    assert "这份数据是什么" in page and "数据什么时候能拿到" in page and "moneyflow" in page
+    f = b[["code", "date"]].assign(flow=range(len(b)))
+    f["date"] = pd.to_datetime(f["date"]).dt.strftime("%Y-%m-%d")
+    r = c.post("/data/mine_plus/source",
+               data={"token": t, "kind": "factor", "rule": "next_day", "label": "flow"},
+               files={"file": ("f.csv", io.BytesIO(f.to_csv(index=False).encode()), "text/csv")},
+               follow_redirects=False)
+    assert r.status_code == 303
+    page = c.get("/data/mine_plus").text
+    assert "flow" in page and "次日开盘后" in page
+    assert "另加 1 个数据来源" in c.get("/").text
+    bad = c.post("/data/mine_plus/source", data={"token": t, "kind": "factor", "rule": "announce"},
+                 files={"file": ("g.csv", io.BytesIO(f.to_csv(index=False).encode()), "text/csv")})
+    assert "ann_date" in bad.text
+    r = c.post("/run", data=form(app, name="on_combined", dataset="mine_plus"),
+               follow_redirects=False)
+    page = c.get(r.headers["location"]).text
+    assert "完成" in page and "一句话结论" in page
+    assert "12 天 × 12 项" not in page and "前视检查" in page
+    assert c.post("/data/mine_plus/remove", data={"token": t, "sid": "s1"},
+                  follow_redirects=False).status_code == 303
+    assert "还没有添加来源" in c.get("/data/mine_plus").text
+    assert c.post("/data/mine_plus/tushare", data={"token": t, "api_token": "a" * 32}).text.count("至少勾选") == 1

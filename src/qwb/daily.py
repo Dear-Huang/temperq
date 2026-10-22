@@ -121,6 +121,8 @@ def raw_features(P: dict) -> dict:
         "gap": ao / ac.shift(1) - 1,
         "range": (P["high"] - P["low"]) / P["close"],
         "to_limit": P["close"] / P["up_limit"],
+        # user-added sources (qwb.dataset): already aligned to the day they are usable
+        **{k: v for k, v in P.items() if k.startswith("x_")},
     }
 
 
@@ -194,8 +196,13 @@ def universe(P: dict, cfg: dict, st: pd.DataFrame | None = None,
 
 # ------------------------------------------------------------------ training
 
+def feature_names(F: dict) -> list[str]:
+    """Built-in features first, then user-added ones, in a fixed order."""
+    return FEATURES + sorted(k for k in F if k.startswith("x_"))
+
+
 def _stack(F: dict, mask: np.ndarray) -> np.ndarray:
-    return np.column_stack([F[k].values[mask] for k in FEATURES]).astype("float32")
+    return np.column_stack([F[k].values[mask] for k in feature_names(F)]).astype("float32")
 
 
 def _label_target(y: pd.DataFrame, how: str) -> pd.DataFrame:
@@ -266,13 +273,13 @@ def run(P: dict, card: dict, cfg: dict, snapshot_id: str, tz: str, st=None,
                 pred[s][te] = p_te
             if model_dir is not None:
                 p = model_dir / f"ridge_fold{i}.json"
-                p.write_text(json.dumps({"features": FEATURES, "coef": coef.tolist(),
+                p.write_text(json.dumps({"features": feature_names(F), "coef": coef.tolist(),
                                          "alpha": cfg["ridge_alpha"]}), encoding="utf-8")
                 models.append(p.name)
             continue
         for s in cfg["seeds"]:
             params = dict(cfg["lgbm"], seed=s, bagging_seed=s, feature_fraction_seed=s)
-            booster = lgb.train(params, lgb.Dataset(X, t, feature_name=FEATURES,
+            booster = lgb.train(params, lgb.Dataset(X, t, feature_name=feature_names(F),
                                                     free_raw_data=True),
                                 num_boost_round=cfg["num_boost_round"])
             pred[s][te] = booster.predict(Xte, num_threads=cfg["lgbm"]["num_threads"])
@@ -281,7 +288,8 @@ def run(P: dict, card: dict, cfg: dict, snapshot_id: str, tz: str, st=None,
                 booster.save_model(str(p))
                 models.append(p.name)
     test_mask = np.isin(dates, dates[dates.year >= cfg["first_test_year"]])
-    return {"dates": dates, "codes": P["close"].columns, "F": F, "y": y.where(U).values,
+    return {"dates": dates, "codes": P["close"].columns, "F": F,
+            "feature_names": feature_names(F), "y": y.where(U).values,
             "U": U.values, "pred": pred, "manifests": manifests, "models": models,
             "test_rows": test_mask}
 

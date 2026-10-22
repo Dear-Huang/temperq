@@ -27,7 +27,7 @@ import yaml
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
 
-from . import daily, runconfig, scenario
+from . import daily, dataset, runconfig, scenario
 from .jobs import JobSpec, Store
 
 NAME_RE = re.compile(r"^[A-Za-z0-9_-]{1,40}$")
@@ -93,7 +93,7 @@ def hardware() -> dict:
 
 def _read_snapshot(path: Path) -> dict | None:
     p = path / "snapshot.json"
-    if not (p.is_file() and (path / "bars").is_dir()):
+    if not dataset.is_dataset(path):
         return None
     try:
         return json.loads(p.read_text(encoding="utf-8"))
@@ -127,13 +127,16 @@ def datasets(workdir: Path) -> dict[str, dict]:
         if s is None:
             continue
         src = s.get("source", "tushare")
-        out[k] = {"path": p, "snap": s, "has_index": (p / "index_members.parquet").exists(),
+        n_src = len(dataset.spec(p)["sources"])
+        out[k] = {"path": p, "snap": s, "has_index": dataset.has_index(p), "sources": n_src,
+                  "combined": s.get("source") == "combined",
                   "label":
                   f"{k}：{s.get('start', '?')} 至 {s.get('end', '?')}，"
                   f"{s.get('trading_days', '?')} 个交易日"
                   + (f"，{s['codes']} 只股票" if "codes" in s else "")
                   + ("，含 ST 标记" if s.get("has_st", True) else "，无 ST 标记")
-                  + ("，含指数成分" if (p / "index_members.parquet").exists() else "")
+                  + ("，含指数成分" if dataset.has_index(p) else "")
+                  + (f"，另加 {n_src} 个数据来源" if n_src else "")
                   + f"（来源 {src.split(':')[0]}）"}
     return out
 
@@ -468,8 +471,10 @@ def create_app(workdir: Path, task_dir: Path | None = None,
         sel_ds = ds if ds in avail else (next((k for k in avail if k != SYNTHETIC), SYNTHETIC))
         ds_html = "".join(
             f'<label class="row"><input type="radio" name="dataset" value="{html.escape(k)}"'
-            f'{" checked" if k == sel_ds else ""}> {html.escape(v["label"])}</label>'
-            for k, v in avail.items())
+            f'{" checked" if k == sel_ds else ""}> {html.escape(v["label"])}'
+            + ("" if k == SYNTHETIC else
+               f' <a href="/data/{html.escape(k)}">{"管理数据来源" if v.get("combined") else "加更多数据来源"}</a>')
+            + '</label>' for k, v in avail.items())
         D = daily.DEFAULTS
         gpu = "、".join(hw["gpus"]) or "未检测到"
         mem = f"{hw['mem_gb']:.0f}GB" if hw["mem_gb"] else "未知"
@@ -545,6 +550,149 @@ def create_app(workdir: Path, task_dir: Path | None = None,
                                 + (f"<p>提示：</p><ul>{notes}</ul>" if notes else "") +
                                 f'</div><p><a class="btn" href="/?ds={html.escape(name)}#step3">'
                                 f'用这份数据继续 →</a></p>')
+
+    @app.get("/data/{dsid}", response_class=HTMLResponse)
+    def data_page(dsid: str):
+        avail = datasets(workdir)
+        if dsid not in avail or dsid == SYNTHETIC:
+            raise HTTPException(404)
+        d = avail[dsid]
+        if not d.get("combined"):
+            body = (f'<p><a href="/">← 返回首页</a></p><h2>给 {html.escape(dsid)} 加更多数据来源</h2>'
+                    '<p>原数据保持不变。系统会新建一份“组合数据”：以它为基础，再叠加你后面添加的来源'
+                    '（另一段行情、资金流、财务、自建因子、ST 标记……）。训练时选组合数据即可。</p>'
+                    f'<form method="post" action="/data/{html.escape(dsid)}/combine">'
+                    f'<input type="hidden" name="token" value="{token}">'
+                    f'<label class="f">组合数据的名称 <input name="name" required value="{html.escape(dsid)}_plus"'
+                    ' pattern="[A-Za-z0-9_\\-]{1,40}"></label><button>新建组合数据</button></form>')
+            return page("加数据来源", body)
+        sp = dataset.spec(d["path"])
+        rows = []
+        for s in sp["sources"]:
+            what = dataset.KINDS[s["kind"]].split("（")[0]
+            when = dataset.RULES.get(s.get("rule", ""), "") if s["kind"] == "factor" else \
+                ("覆盖重叠部分" if s.get("priority") == "override" else "只补缺失部分") if s["kind"] == "bars" else ""
+            cols = "、".join(s.get("columns", [])) or "—"
+            notes = "；".join(s.get("notes", []))
+            rows.append(
+                f'<tr><td>{html.escape(s["label"])}<br><small class="mut">{html.escape(s["origin"])}</small></td>'
+                f'<td>{html.escape(what)}</td><td>{html.escape(cols)}</td>'
+                f'<td><small>{html.escape(when)}</small></td><td>{s["rows"]:,}'
+                + (f'<br><small class="warn">{html.escape(notes)}</small>' if notes else "") +
+                f'</td><td><form method="post" action="/data/{html.escape(dsid)}/remove">'
+                f'<input type="hidden" name="token" value="{token}"><input type="hidden" name="sid" value="{s["id"]}">'
+                '<button class="secondary">删除</button></form></td></tr>')
+        base = sp["base"]
+        kinds = "".join(f'<option value="{k}">{html.escape(v)}</option>' for k, v in dataset.KINDS.items())
+        rules = "".join(f'<label class="opt" style="display:block"><input type="radio" name="rule" value="{k}"'
+                        f'{" checked" if k == "evening" else ""}>{html.escape(v)}</label>'
+                        for k, v in dataset.RULES.items())
+        apis = "".join(f'<label class="opt" style="display:block"><input type="checkbox" name="api" value="{k}">'
+                       f'<b>{k}</b>　{html.escape(v)}</label>' for k, v in cn_a_factor_apis().items())
+        table = ('<div class="tw"><table><tr><th>来源</th><th>是什么</th><th>指标列（会作为模型特征）</th>'
+                 '<th>什么时候能用</th><th>行数</th><th></th></tr>' + "".join(rows) + '</table></div>') \
+            if rows else '<p class="mut">还没有添加来源。</p>'
+        body = (f'<p><a href="/?ds={html.escape(dsid)}#step2">← 返回首页（已选中这份数据）</a></p>'
+                f'<h2>组合数据：{html.escape(dsid)}</h2>'
+                f'<p class="mut">基础行情：{html.escape(str(base))}</p>{table}'
+                '<div class="box"><h3>方式 1：上传 CSV</h3>'
+                f'<form method="post" action="/data/{html.escape(dsid)}/source" enctype="multipart/form-data">'
+                f'<input type="hidden" name="token" value="{token}">'
+                f'<label class="f">这份数据是什么 <select name="kind" id="kind">{kinds}</select></label>'
+                '<label class="f">给它起个名字 <input name="label" placeholder="例如：资金流、财务指标"></label><br>'
+                '<label class="f">文件 <input type="file" name="file" accept=".csv" required></label>'
+                '<div id="k-factor"><p><b>数据什么时候能拿到？</b>系统按这个时间把每一行放到它真正能用的那一天，'
+                f'防止用到未来数据。</p>{rules}'
+                '<p class="mut">格式：<code>code</code>、<code>date</code>（或 <code>ann_date</code> 公告日），'
+                '其余每一列是一个数值指标，例如 <code>code,date,主力净流入,换手率</code>。</p></div>'
+                '<div id="k-bars" hidden><p><b>和已有行情重叠时：</b></p>'
+                '<label class="opt"><input type="radio" name="priority" value="fill" checked>只补已有数据缺的股票-日</label>'
+                '<label class="opt"><input type="radio" name="priority" value="override">以新数据为准</label>'
+                '<p class="mut">格式同 CSV 模板（code、date、open、high、low、close、amount）。重叠部分会先核对收盘价，'
+                '口径不一致会拒绝导入。</p></div>'
+                '<div id="k-st" hidden><p class="mut">格式：<code>code,date,is_st</code>（is_st 为 0/1）。会替换原有的 ST 标记。</p></div>'
+                '<button>上传并检查</button></form></div>'
+                '<div class="box"><h3>方式 2：用 Tushare 接口直接拉取</h3>'
+                '<p class="mut">按基础数据的日期范围逐日拉取。token 只在本次使用，不保存。</p>'
+                f'<form method="post" action="/data/{html.escape(dsid)}/tushare">'
+                f'<input type="hidden" name="token" value="{token}">{apis}'
+                '<label class="f">Tushare token <input name="api_token" type="password" required size="30" autocomplete="off"></label>'
+                '<label class="f">接口地址 <input name="url" value="http://api.tushare.pro" size="30"></label>'
+                '<button>开始拉取</button></form></div>'
+                '<script>var k=document.getElementById("kind");function s(){["factor","bars","st"].forEach('
+                'function(x){document.getElementById("k-"+x).hidden=k.value!==x;});}k.onchange=s;s();</script>')
+        return page(f"数据来源：{dsid}", body)
+
+    @app.post("/data/{dsid}/combine")
+    async def data_combine(req: Request, dsid: str):
+        form = dict((await req.form()).items())
+        guard(req, form.get("token"))
+        avail = datasets(workdir)
+        if dsid not in avail or dsid == SYNTHETIC:
+            raise HTTPException(404)
+        name = str(form.get("name", "")).strip()
+        if not NAME_RE.match(name):
+            return oops("名称只能用字母、数字、下划线、连字符")
+        try:
+            dataset.create(avail[dsid]["path"], data_root / name)
+        except dataset.SourceError as e:
+            return oops(str(e))
+        return RedirectResponse(f"/data/{name}", 303)
+
+    def _combined(dsid: str) -> Path:
+        avail = datasets(workdir)
+        if dsid not in avail or not avail[dsid].get("combined"):
+            raise HTTPException(404)
+        return avail[dsid]["path"]
+
+    @app.post("/data/{dsid}/source")
+    async def data_source(req: Request, dsid: str):
+        form = await req.form()
+        guard(req, form.get("token"))
+        path = _combined(dsid)
+        up = form.get("file")
+        if up is None or not getattr(up, "filename", ""):
+            return oops("请选择一个 CSV 文件", f"/data/{dsid}")
+        try:
+            src = dataset.add_csv(path, up.file.read(), str(form.get("kind", "")),
+                                  str(form.get("rule", "")), str(form.get("label", "")).strip(),
+                                  up.filename, str(form.get("priority", "fill")))
+        except dataset.SourceError as e:
+            return oops(str(e), f"/data/{dsid}")
+        except Exception as e:
+            return oops(f"导入失败：{type(e).__name__}: {e}", f"/data/{dsid}")
+        return RedirectResponse(f"/data/{dsid}", 303)
+
+    @app.post("/data/{dsid}/remove")
+    async def data_remove(req: Request, dsid: str):
+        form = dict((await req.form()).items())
+        guard(req, form.get("token"))
+        path = _combined(dsid)
+        sid = str(form.get("sid", ""))
+        if not re.fullmatch(r"s\d{1,4}", sid):
+            raise HTTPException(400)
+        dataset.remove(path, sid)
+        return RedirectResponse(f"/data/{dsid}", 303)
+
+    @app.post("/data/{dsid}/tushare")
+    async def data_source_tushare(req: Request, dsid: str):
+        form = await req.form()
+        guard(req, form.get("token"))
+        path = _combined(dsid)
+        apis = [a for a in form.getlist("api") if a in cn_a_factor_apis()]
+        api_token = str(form.get("api_token", "")).strip()
+        url = str(form.get("url", "")).strip() or "http://api.tushare.pro"
+        if not apis:
+            return oops("请至少勾选一个接口", f"/data/{dsid}")
+        if len(api_token) < 16:
+            return oops("请填写 Tushare token", f"/data/{dsid}")
+        if not re.match(r"^https?://[A-Za-z0-9.\-:/_]+$", url):
+            return oops("接口地址格式不对", f"/data/{dsid}")
+        from . import fetch
+        job = fetch.make_factor_job(api_token, url, data_root / "_cache", path, apis)
+        jid = submit("fetch", {"ui": {"name": f"{dsid}: {'、'.join(apis)}", "what": "fetch",
+                                      "dataset": dsid}, "apis": apis, "url": url}, job)
+        return RedirectResponse(f"/job/{jid}", 303)
 
     @app.post("/data/folder")
     async def data_folder(req: Request):
@@ -676,6 +824,11 @@ def _job_rows(store: Store) -> str:
     return "".join(rows) or '<tr><td colspan="4" class="mut">还没有记录</td></tr>'
 
 
+def cn_a_factor_apis() -> dict:
+    from .connectors import cn_a
+    return cn_a.FACTOR_APIS
+
+
 def free_port(start: int, tries: int = 20) -> int:
     """First port from `start` that 127.0.0.1 can bind (another program may hold 8765)."""
     import socket
@@ -755,7 +908,8 @@ INDEX = """
 
 <section class="step" id="step2"><h2><span class="num">2</span>用什么数据</h2>
 {datasets}
-<p class="mut">还没有数据？用下面任意一种方式添加，添加后会出现在上面的列表里。</p>
+<p class="mut">还没有数据？用下面任意一种方式添加，添加后会出现在上面的列表里。
+一份数据还可以叠加多个来源（本地 CSV 和 API 混用）：点数据后面的“加更多数据来源”。</p>
 </section>
 </form>
 

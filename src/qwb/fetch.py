@@ -68,3 +68,32 @@ def make_job(token: str, url: str, cache_dir: Path, out_dir: Path, min_interval:
         (ctx.artifacts / "snapshot.json").write_text(json.dumps(snap, indent=2), encoding="utf-8")
         ctx.log("done")
     return job
+
+
+def make_factor_job(token: str, url: str, cache_dir: Path, combined_dir: Path, apis: list[str],
+                    min_interval: float = 0.25):
+    """Pull built-in factor sources over the dataset's trading days and add each as a source.
+
+    Values from these endpoints are published after the close of their date, so
+    the source rule is "evening" (usable for that day's after-close decision).
+    """
+    from . import dataset
+
+    def job(ctx, cfg):
+        cli = TushareClient(token, url=url, min_interval=min_interval)
+        cache = Cache(cache_dir)
+        cal = dataset.calendar(combined_dir)
+        for api in apis:
+            frames = []
+            for i, d in enumerate(cal):
+                ctx.check_cancel()
+                frames.append(cn_a.factor_frame(cli, cache, api, d))
+                if i % 20 == 0 or i == len(cal) - 1:
+                    ctx.progress(i + 1, len(cal), f"{api} {d:%Y-%m-%d}")
+            df = pd.concat([f for f in frames if not f.empty], ignore_index=True)
+            if df.empty:
+                raise RuntimeError(f"{api} returned no rows")
+            df["date"] = df["date"].dt.strftime("%Y-%m-%d")
+            src = dataset.add_factor(combined_dir, df, "evening", api, f"tushare:{api}")
+            ctx.log(f"{api}: {src['rows']} rows, columns {', '.join(src['columns'])}")
+    return job
