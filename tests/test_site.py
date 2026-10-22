@@ -177,3 +177,41 @@ def test_env_startup_requires_oauth_or_explicit_dev(tmp_path, monkeypatch):
     c = TestClient(app, base_url="https://testserver")
     c.get("/api/site")
     assert any(ck.secure for ck in c.cookies.jar)                      # HTTPS-only session cookie
+
+
+def test_rate_limit_window_and_keys():
+    now = [0.0]
+    rl = site.RateLimit({"short": (3, 60)}, clock=lambda: now[0])
+    assert [rl.hit(["ip:a"]) for _ in range(3)] == [0, 0, 0]
+    assert rl.hit(["ip:a"]) > 0                      # 4th within a minute: wait
+    assert rl.hit(["ip:b"]) == 0                     # another client is not affected
+    now[0] = 61
+    assert rl.hit(["ip:a"]) == 0                     # window passed
+
+
+def test_posts_are_rate_limited(tmp_path):
+    _, c = client(tmp_path)
+    c.get("/login/dev")
+    codes = [c.post("/share", data={"repo": "u/m", "token": "bad"}).status_code for _ in range(12)]
+    assert codes[:10] == [403] * 10 and codes[10] == 429
+    assert c.get("/").status_code == 200             # reads are never limited
+
+
+def test_db_backup_keeps_newest_and_is_consistent(tmp_path):
+    import importlib.util
+    import sqlite3
+    spec = importlib.util.spec_from_file_location("bk", ROOT / "scripts" / "backup_site_db.py")
+    bk = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(bk)
+    app, c = client(tmp_path)
+    c.get("/login/dev")
+    tok = re.search(r'name="token" value="([^"]+)"', c.get("/").text).group(1)
+    c.post("/share", data={"repo": "u/m", "token": tok})
+    out = tmp_path / "bk"
+    for i in range(3):
+        (out / f"s-2000010{i}T000000Z.db").parent.mkdir(exist_ok=True)
+        (out / f"s-2000010{i}T000000Z.db").write_bytes(b"old")
+    dest = bk.backup(tmp_path / "s.db", out, keep=2)
+    assert sorted(p.name for p in out.glob("s-*.db"))[-1] == dest.name
+    assert len(list(out.glob("s-*.db"))) == 2
+    assert sqlite3.connect(dest).execute("select count(*) from shares").fetchone()[0] == 1

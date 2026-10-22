@@ -102,6 +102,45 @@ def db(path: Path) -> sqlite3.Connection:
     return con
 
 
+class RateLimit:
+    """Sliding-window counters: {name: (max_events, window_seconds)}."""
+
+    def __init__(self, rules: dict, clock: Callable[[], float] = None):
+        import collections
+        import threading
+        import time as _time
+        self.rules, self.clock = rules, clock or _time.monotonic
+        self.events = collections.defaultdict(collections.deque)
+        self.lock = threading.Lock()
+
+    def hit(self, keys: list[str]) -> int:
+        """Record one event for every key; return seconds to wait if any key is over a limit."""
+        now = self.clock()
+        with self.lock:
+            wait = 0
+            for k in keys:
+                q = self.events[k]
+                horizon = max(w for _, w in self.rules.values())
+                while q and now - q[0] > horizon:
+                    q.popleft()
+                for n, w in self.rules.values():
+                    recent = [t for t in q if now - t <= w]
+                    if len(recent) >= n:
+                        wait = max(wait, int(w - (now - recent[0])) + 1)
+            if not wait:
+                for k in keys:
+                    self.events[k].append(now)
+            return wait
+
+
+def _client_ip(request: Request) -> str:
+    """Client address; behind a proxy, the last hop the proxy appended (not client-controlled)."""
+    fwd = request.headers.get("x-forwarded-for")
+    if fwd and os.environ.get("QWB_SITE_TRUST_PROXY") == "1":
+        return fwd.split(",")[-1].strip()
+    return request.client.host if request.client else "unknown"
+
+
 def create_app(db_path: Path | None = None, hf: HFClient | None = None,
                oauth: dict | None = None, secret: str | None = None) -> FastAPI:
     app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
@@ -129,6 +168,26 @@ def create_app(db_path: Path | None = None, hf: HFClient | None = None,
             raise RuntimeError("set QWB_SITE_SECRET so sessions survive restarts and are not guessable")
         secret = secrets.token_urlsafe(32)
     # oauth is resolved by now, so production cookies are HTTPS-only
+    # writes (share, deprecate, forum posts and replies) are rate-limited per signed-in
+    # user and per client address; reads are not. In-memory: resets on restart, which
+    # is fine for one process behind a proxy.
+    limits = RateLimit({"short": (10, 60), "day": (200, 86400)})
+
+    @app.middleware("http")
+    async def write_limit(request: Request, call_next):
+        if request.method == "POST":
+            who = [f"ip:{_client_ip(request)}"]
+            sess = request.scope.get("session") or {}
+            if sess.get("user"):
+                who.append(f"u:{sess['user']}")
+            wait = limits.hit(who)
+            if wait:
+                from fastapi.responses import JSONResponse
+                return JSONResponse({"detail": f"操作太频繁，请 {wait} 秒后再试"}, status_code=429,
+                                    headers={"Retry-After": str(wait)})
+        return await call_next(request)
+
+    # added after the limiter so it wraps it: the limiter can read the session
     app.add_middleware(SessionMiddleware, secret_key=secret, same_site="lax",
                        https_only=bool(oauth))
     con = db(db_path or ROOT / "runs" / "site.db")
