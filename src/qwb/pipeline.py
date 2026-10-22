@@ -8,6 +8,8 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
+import shutil
 import time
 from pathlib import Path
 from typing import Callable
@@ -94,9 +96,61 @@ def _fmt(s: dict) -> str:
 
 
 def run(rc: dict, cwd: Path, log: Callable[[str], None] = print) -> dict:
+    """Compute into a staging folder; move into the output folder only on success.
+
+    A failed rerun (out of memory, cancelled, bad data) must not leave new settings
+    next to old results: another process (a bench run, the model page) may be
+    reading the previous run's files while this one computes.
+    """
+    target = (cwd / rc["output"]).resolve()
+    stage = target.parent / f".{target.name}.staging-{os.getpid()}"
+    if stage.exists():
+        shutil.rmtree(stage)
+    (stage / "models").mkdir(parents=True)
+    try:
+        summary = _compute(rc, cwd, log, stage, target)
+    except BaseException:
+        shutil.rmtree(stage, ignore_errors=True)
+        raise
+    _publish(stage, target)
+    summary["output"] = str(target)
+    return summary
+
+
+def _retry(op, tries: int = 10):
+    """Windows: a reader or a sync client can hold a file for a moment."""
+    for i in range(tries):
+        try:
+            return op()
+        except PermissionError:
+            if i == tries - 1:
+                raise
+            time.sleep(0.3)
+
+
+def _publish(stage: Path, target: Path) -> None:
+    """Move a finished run into place. Files the run does not produce are left alone;
+    model folders are swapped whole, so no file from an earlier run lingers."""
+    target.mkdir(parents=True, exist_ok=True)
+    try:
+        for p in sorted(stage.iterdir()):
+            dest = target / p.name
+            if p.is_dir():
+                old = target / f".{p.name}.old-{os.getpid()}"
+                if dest.exists():
+                    _retry(lambda: dest.rename(old))
+                _retry(lambda: p.rename(dest))
+                shutil.rmtree(old, ignore_errors=True)
+            else:
+                _retry(lambda: os.replace(p, dest))
+    except OSError as e:
+        raise RuntimeError(f"训练已完成，但结果无法放进 {target}（文件被其他程序占用：{e}）。"
+                           f"完整结果保存在 {stage}") from e
+    shutil.rmtree(stage, ignore_errors=True)
+
+
+def _compute(rc: dict, cwd: Path, log: Callable[[str], None], out: Path, target: Path) -> dict:
     card, cfg = rc["card"], rc["cfg"]
-    out = (cwd / rc["output"]).resolve()
-    (out / "models").mkdir(parents=True, exist_ok=True)
     tz = TZ.get(card["market"], "UTC")
     T = {}
     t0 = time.time()
@@ -104,10 +158,10 @@ def run(rc: dict, cwd: Path, log: Callable[[str], None] = print) -> dict:
     # acceptance is locked before the final test years are first scored (SPEC §6)
     acc = json.dumps(card.get("acceptance", {}), sort_keys=True, ensure_ascii=False)
     acc_hash = hashlib.sha256(acc.encode("utf-8")).hexdigest()[:16]
-    lock = out / "acceptance.lock"
+    lock = target / "acceptance.lock"            # kept from the first run of this output
     acc_changed = lock.exists() and lock.read_text(encoding="utf-8").strip() != acc_hash
     if not lock.exists():
-        lock.write_text(acc_hash, encoding="utf-8")
+        (out / "acceptance.lock").write_text(acc_hash, encoding="utf-8")
     (out / "task.yaml").write_text(yaml.safe_dump(card, allow_unicode=True, sort_keys=False),
                                    encoding="utf-8")
     (out / "config.resolved.yaml").write_text(yaml.safe_dump(
@@ -230,7 +284,6 @@ def run(rc: dict, cwd: Path, log: Callable[[str], None] = print) -> dict:
     (out / "metrics.json").write_text(json.dumps(summary, indent=2, default=str), encoding="utf-8")
     (out / "report.md").write_text(_report(rc, summary, rows, null, seed_corr, seed_overlap,
                                            valid, final, T, meta, len(seeds)), encoding="utf-8")
-    summary["output"] = str(out)
     return summary
 
 

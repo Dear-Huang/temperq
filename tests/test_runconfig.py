@@ -76,3 +76,38 @@ def test_cli_run_smoke_end_to_end(tmp_path, monkeypatch):
     assert "试运行数据不记入" in report and "已被评估" not in report
     assert not (tmp_path / "runs" / "ledger.jsonl").exists()
     assert "前视检查" in report and "通过" in report
+
+
+def test_failed_rerun_leaves_previous_results_untouched(tmp_path, monkeypatch):
+    """A rerun that dies mid-way (e.g. out of memory) must not rewrite the old run's files."""
+    pytest.importorskip("lightgbm")
+    import hashlib
+
+    from qwb import daily, pipeline
+    cfg = runconfig.load(EX / "run_smoke.yaml")
+    cfg.update(task=str(EX / "cn_rank_5d.yaml"), output="out",
+               train=dict(cfg["train"], seeds=[0], shuffle_null_draws=2))
+    rc, _ = runconfig.resolve(cfg, EX)
+    pipeline.run(rc, tmp_path, log=lambda *_: None)
+    out = tmp_path / "out"
+
+    def snap():
+        return {p.relative_to(out).as_posix(): hashlib.sha256(p.read_bytes()).hexdigest()
+                for p in out.rglob("*") if p.is_file()}
+    before = snap()
+    cfg2 = dict(cfg, model={"name": "lightgbm", "num_boost_round": 20})
+    rc2, _ = runconfig.resolve(cfg2, EX)
+
+    def boom(*a, **k):
+        raise MemoryError("simulated")
+    monkeypatch.setattr(daily, "run", boom)
+    with pytest.raises(MemoryError):
+        pipeline.run(rc2, tmp_path, log=lambda *_: None)
+    assert snap() == before
+    assert not [p for p in tmp_path.iterdir() if ".staging-" in p.name]
+
+    monkeypatch.undo()
+    pipeline.run(rc2, tmp_path, log=lambda *_: None)             # a successful rerun replaces
+    after = snap()
+    assert after["config.resolved.yaml"] != before["config.resolved.yaml"]
+    assert after["acceptance.lock"] == before["acceptance.lock"]
