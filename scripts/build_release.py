@@ -54,8 +54,12 @@ EXCLUDE = {"SPEC.md", "SETUP-依赖拉取清单.md", "docs/QW_BENCH_RESEARCH.md"
            "scripts/build_release.py", "scripts/m1_pilot.py", "scripts/m2_kronos.py"}
 
 
+# server side (share site, public website) and their tests: not part of the local app
+EXCLUDE_PREFIX = ("website/", "share_site/", "tests/test_site.py", "tests/test_forum.py")
+
+
 def copy_tracked(repo: Path, dest: Path) -> int:
-    files = [f for f in tracked(repo) if f not in EXCLUDE]
+    files = [f for f in tracked(repo) if f not in EXCLUDE and not f.startswith(EXCLUDE_PREFIX)]
     for f in files:
         (dest / f).parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(repo / f, dest / f)
