@@ -4,10 +4,10 @@
 
 ## 安装
 
-- Windows：双击 `install.bat`（需要先装 [uv](https://docs.astral.sh/uv/)）。脚本会按显卡驱动选 PyTorch 版本，没有显卡就用 CPU。
-- Linux：`sh install.sh`
+- Windows 发布包：解压后双击根目录的 `1_安装.bat`，不需要预先安装 Python 或 uv；安装器使用包内的 uv。源码目录直接运行 `install.bat` 时，才需要 PATH 中有 [uv](https://docs.astral.sh/uv/)。
+- Linux：在 `quant-workbench/` 中运行 `sh install.sh`；完整发布包已附带 Linux uv，源码目录没有时脚本会自动下载。
 
-把 [ashare-tcost](../ashare-tcost) 放在同级目录，报告才会有扣成本检验。
+完整发布包已经把 `ashare-tcost` 放在 qwb 同级目录。源码运行时，把 [ashare-tcost](../ashare-tcost) 放在同级目录，报告才会有扣成本检验。
 
 ## 使用
 
@@ -17,6 +17,16 @@
 两种方式等价：网页只是帮你写一份 YAML 配置（保存在 `runs/ui_configs/`）。没写的项用默认值，改过的项列在报告首页。先用"试运行（合成数据）"几秒钟走通一遍流程。
 
 数据：`config.local.yaml` 里填 Tushare 兼容接口的 token 文件路径，然后 `python scripts/fetch_cn_daily.py` 拉取日线快照（约 1 小时）。
+
+## 官网与模型社区
+
+`website/` 提供产品官网、动态玻璃 Hero、模型广场、训练配方与参考实验展示，连接 `share_site/` 的登录和模型分享服务。
+
+研究社区位于 `/community`：按模型分享、训练方法、业绩复盘和问题讨论分板块。登录后可在 `/community/new` 发帖，帖子支持关联模型、附训练配方和持续回复讨论。
+
+- Windows：运行 `powershell -ExecutionPolicy Bypass -File website/start.ps1`，按终端地址访问。
+- 手动：在 `website/` 执行 `npm ci` 和 `npm run build`，在项目根目录执行 `python -m uvicorn share_site.app:app --host 127.0.0.1 --port 8800`。
+- 设计参考、接口与部署说明：[website/DESIGN.md](website/DESIGN.md)。
 
 ## 报告首页会告诉你什么
 

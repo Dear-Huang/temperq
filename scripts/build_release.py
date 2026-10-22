@@ -49,8 +49,13 @@ def tracked(repo: Path) -> list[str]:
     return [p for p in out.split("\0") if p]
 
 
+# internal design / research notes: kept in git, not shipped to users
+EXCLUDE = {"SPEC.md", "SETUP-依赖拉取清单.md", "docs/QW_BENCH_RESEARCH.md",
+           "scripts/build_release.py", "scripts/m1_pilot.py", "scripts/m2_kronos.py"}
+
+
 def copy_tracked(repo: Path, dest: Path) -> int:
-    files = tracked(repo)
+    files = [f for f in tracked(repo) if f not in EXCLUDE]
     for f in files:
         (dest / f).parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(repo / f, dest / f)

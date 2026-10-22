@@ -16,6 +16,8 @@ Run:  QWB_SITE_SECRET=... python -X utf8 -m uvicorn share_site.app:app --port 88
 from __future__ import annotations
 
 import json
+import html
+import math
 import os
 import re
 import secrets
@@ -27,11 +29,14 @@ from pathlib import Path
 from typing import Callable
 
 ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "src"))
 
 import httpx  # noqa: E402
 from fastapi import FastAPI, Form, HTTPException, Request  # noqa: E402
-from fastapi.responses import HTMLResponse, RedirectResponse  # noqa: E402
+from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse  # noqa: E402
+from fastapi.staticfiles import StaticFiles  # noqa: E402
 from jinja2 import Environment  # noqa: E402
 from starlette.middleware.sessions import SessionMiddleware  # noqa: E402
 
@@ -88,12 +93,19 @@ def db(path: Path) -> sqlite3.Connection:
       shared_at text not null, status text not null default 'ok', checked_at text,
       deprecated integer not null default 0, unique(repo, sha));
     """)
+    if "research" not in {r[1] for r in con.execute("pragma table_info(shares)")}:
+        con.execute("alter table shares add column research text not null default '{}'")
+        con.commit()
     return con
 
 
 def create_app(db_path: Path | None = None, hf: HFClient | None = None,
                oauth: dict | None = None, secret: str | None = None) -> FastAPI:
     app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
+    web_dist = ROOT / "website" / "dist"
+    app.mount("/assets", StaticFiles(directory=web_dist / "assets", check_dir=False), name="assets")
+    app.mount("/brands", StaticFiles(directory=ROOT / "website" / "public" / "brands", check_dir=False), name="brands")
+    app.mount("/fonts", StaticFiles(directory=ROOT / "website" / "public" / "fonts", check_dir=False), name="fonts")
     secret = secret or os.environ.get("QWB_SITE_SECRET") or secrets.token_urlsafe(32)
     app.add_middleware(SessionMiddleware, secret_key=secret, same_site="lax",
                        https_only=bool(oauth))
@@ -109,7 +121,7 @@ def create_app(db_path: Path | None = None, hf: HFClient | None = None,
         return req.session.get("user")
 
     def page(title: str, body: str, req: Request, **kw) -> HTMLResponse:
-        t = env.from_string(LAYOUT)
+        t = env.from_string((ROOT / "share_site" / "templates" / "layout.html").read_text(encoding="utf-8"))
         return HTMLResponse(t.render(title=title, body=env.from_string(body).render(**kw),
                                      user=user(req), dev=not oauth))
 
@@ -123,8 +135,12 @@ def create_app(db_path: Path | None = None, hf: HFClient | None = None,
             raise HTTPException(403, "bad csrf token")
 
     # ---------------------------------------------------------------- auth
+    def return_path(value: str) -> str:
+        return value if re.fullmatch(r"/community(?:/new|/t/\d+)?", value) else "/"
+
     @app.get("/login")
-    def login(req: Request):
+    def login(req: Request, next: str = "/"):
+        req.session["return_to"] = return_path(next)
         if not oauth:
             return RedirectResponse("/login/dev", 302)
         state = secrets.token_urlsafe(16)
@@ -150,16 +166,17 @@ def create_app(db_path: Path | None = None, hf: HFClient | None = None,
         name = info.json().get("preferred_username") if info.status_code == 200 else None
         if not name:
             raise HTTPException(400, "no username from HF")
+        destination = return_path(req.session.get("return_to", "/"))
         req.session.clear()
         req.session["user"] = str(name)[:96]          # the only personal datum stored
-        return RedirectResponse("/", 302)
+        return RedirectResponse(destination, 302)
 
     @app.get("/login/dev")
     def login_dev(req: Request):
         if oauth or (req.client and req.client.host not in ("127.0.0.1", "::1", "testclient")):
             raise HTTPException(404)
         req.session["user"] = "local-dev"
-        return RedirectResponse("/", 302)
+        return RedirectResponse(return_path(req.session.pop("return_to", "/")), 302)
 
     @app.get("/logout")
     def logout(req: Request):
@@ -167,8 +184,59 @@ def create_app(db_path: Path | None = None, hf: HFClient | None = None,
         return RedirectResponse("/", 302)
 
     # ---------------------------------------------------------------- pages
+    def shared_models():
+        rows = con.execute(
+            "select id, owner, repo, sha, fields, author_text, research, shared_at, status, deprecated, flags "
+            "from shares order by id desc limit 200").fetchall()
+        return [dict(r) | {"fields": json.loads(r["fields"]), "flags": json.loads(r["flags"]),
+                           "research": json.loads(r["research"])}
+                for r in rows]
+
+    @app.get("/api/site")
+    def site_data(req: Request):
+        return {"user": user(req), "csrf": csrf(req), "dev": not bool(oauth),
+                "models": shared_models()}
+
+    def reference_report() -> Path:
+        return ROOT / "share_site" / "reference" / "report.md"
+
+    @app.get("/api/reference")
+    def reference_data():
+        return {"report": reference_report().read_text(encoding="utf-8")}
+
+    @app.get("/downloads/report")
+    def download_report():
+        return FileResponse(reference_report(), filename="qwb-reference-report.md",
+                            media_type="text/markdown; charset=utf-8")
+
+    @app.get("/downloads/recipe")
+    def download_recipe():
+        return FileResponse(ROOT / "examples" / "run_cn_rank_5d.yaml",
+                            filename="run_cn_rank_5d.yaml", media_type="application/yaml")
+
+    @app.get("/favicon.svg")
+    def favicon():
+        return FileResponse(ROOT / "website" / "public" / "favicon.svg", media_type="image/svg+xml")
+
+    @app.get("/hero-poster.png")
+    def hero_poster():
+        path = ROOT / "website" / "public" / "hero-poster.png"
+        if not path.exists():
+            raise HTTPException(404)
+        return FileResponse(path, media_type="image/png")
+
     @app.get("/", response_class=HTMLResponse)
     def index(req: Request):
+        if (web_dist / "index.html").exists():
+            source = (web_dist / "index.html").read_text(encoding="utf-8")
+            fallback = '<input type="hidden" name="token" value="' + html.escape(csrf(req)) + '">'
+            fallback += "<noscript><h1>Quant Workbench</h1><p>请启用 JavaScript 以浏览模型广场。</p>"
+            for m in shared_models():
+                status = "源文件已不可用" if m["status"] == "gone" else "已弃用" if m["deprecated"] else ""
+                fallback += f'<p><a href="/m/{m["id"]}">{html.escape(m["repo"])}</a> {status}</p>'
+            fallback += "</noscript>"
+            return HTMLResponse(source.replace("</body>", fallback + "</body>"),
+                                headers={"Cache-Control": "no-store"})
         rows = con.execute("select id, owner, repo, sha, fields, status, deprecated, flags "
                            "from shares order by id desc limit 200").fetchall()
         items = [dict(r) | {"f": json.loads(r["fields"]), "fl": json.loads(r["flags"])}
@@ -177,11 +245,26 @@ def create_app(db_path: Path | None = None, hf: HFClient | None = None,
 
     @app.post("/share")
     def share(req: Request, repo: str = Form(...), author_text: str = Form(""),
-              token: str = Form("")):
+              token: str = Form(""), recipe_text: str = Form("", max_length=8000),
+              test_period: str = Form("", max_length=80), rank_ic: str = Form(""),
+              net_excess_ann: str = Form("")):
         u = user(req)
         if not u:
             raise HTTPException(401, "login first")
         check_csrf(req, token)
+        research = {"recipe": recipe_text, "test_period": test_period}
+        for name, value, lower, upper in (("rank_ic", rank_ic, -1, 1),
+                                          ("net_excess_ann", net_excess_ann, -100, 10000)):
+            if value.strip():
+                try:
+                    number = float(value)
+                except ValueError:
+                    raise HTTPException(422, f"{name} 必须是有效数值")
+                if not math.isfinite(number) or not lower <= number <= upper:
+                    raise HTTPException(422, f"{name} 超出有效范围")
+                research[name] = number
+        if ("rank_ic" in research or "net_excess_ann" in research) and not test_period.strip():
+            raise HTTPException(422, "填写业绩指标时，请同时注明样本外测试区间")
         rid = repo_id(repo)
         if not rid:
             raise HTTPException(400, "not a Hugging Face model repo id")
@@ -196,10 +279,10 @@ def create_app(db_path: Path | None = None, hf: HFClient | None = None,
             raise HTTPException(400, f"model card: {p['error']}")
         con.execute(
             "insert or ignore into shares(owner, repo, sha, fields, missing, flags, author_text,"
-            " shared_at, checked_at) values (?,?,?,?,?,?,?,?,?)",
+            " shared_at, checked_at, research) values (?,?,?,?,?,?,?,?,?,?)",
             (u, rid, sha, json.dumps(p["fields"], ensure_ascii=False),
              json.dumps(p["missing"]), json.dumps(p["flags"], ensure_ascii=False),
-             author_text[:5000], _now(), _now()))
+             author_text[:5000], _now(), _now(), json.dumps(research, ensure_ascii=False)))
         con.commit()
         sid = con.execute("select id from shares where repo=? and sha=?", (rid, sha)).fetchone()[0]
         return RedirectResponse(f"/m/{sid}", 303)
@@ -213,6 +296,7 @@ def create_app(db_path: Path | None = None, hf: HFClient | None = None,
                                "where repo=? order by id", (r["repo"],)).fetchall()
         return page(r["repo"], MODEL, req, r=dict(r), f=json.loads(r["fields"]),
                     missing=json.loads(r["missing"]), flags=json.loads(r["flags"]),
+                    research=json.loads(r["research"]),
                     versions=versions, csrf=csrf(req), owner=user(req) == r["owner"])
 
     @app.post("/m/{sid}/deprecate")
@@ -235,6 +319,8 @@ def create_app(db_path: Path | None = None, hf: HFClient | None = None,
 
     app.state.recheck = recheck
     app.state.db = con
+    from share_site.forum import register_forum
+    register_forum(app, con, user, csrf, check_csrf, _now, index)
     return app
 
 
@@ -282,6 +368,12 @@ MODEL = """
 {% if r.status == 'gone' %} · <span class="warn">源文件已不可用</span>{% endif %}
 {% if r.deprecated %} · 已弃用{% endif %}</p>
 {% if flags %}<p class="warn">内容检查提示：卡片中出现 {{ flags|join('、') }} 类表述。平台不核实。</p>{% endif %}
+{% if research.get('rank_ic') is not none or research.get('net_excess_ann') is not none %}
+<section class="research-summary">
+<div><span>样本外测试区间</span><strong>{{ research.test_period }}</strong><small>作者自报 · 未经平台验证</small></div>
+{% if research.get('rank_ic') is not none %}<div><span>Rank IC</span><strong>{{ '%+.4f'|format(research.rank_ic) }}</strong><small>预测排序能力，不等同于收益</small></div>{% endif %}
+{% if research.get('net_excess_ann') is not none %}<div><span>扣成本年化净超额</span><strong>{{ '%+.2f'|format(research.net_excess_ann) }}%</strong><small>基准与成本口径见作者说明</small></div>{% endif %}
+</section>{% endif %}
 <div class="cols">
 <section class="box"><h3>工具生成的标准信息</h3>
 {% if not f.qwb_version %}<p class="warn">不是 qwb 生成的卡片，以下字段未经工具产生。</p>{% endif %}
@@ -290,6 +382,7 @@ MODEL = """
 </section>
 <section class="box"><h3>作者自述 <span class="mut">（未经平台验证）</span></h3>
 <pre>{{ r.author_text or '（无）' }}</pre></section></div>
+{% if research.recipe %}<h3>训练配方 <span class="mut">· 作者提供，未经执行验证</span></h3><pre class="recipe-block">{{ research.recipe }}</pre>{% endif %}
 <h3>版本</h3><table>{% for v in versions %}<tr><td><a href="/m/{{ v.id }}">@{{ v.sha[:7] }}</a></td>
 <td>{{ v.shared_at }}</td><td>{% if v.deprecated %}已弃用{% endif %}{% if v.status=='gone' %} 源文件已不可用{% endif %}</td></tr>{% endfor %}</table>
 {% if owner and not r.deprecated %}<form method="post" action="/m/{{ r.id }}/deprecate">

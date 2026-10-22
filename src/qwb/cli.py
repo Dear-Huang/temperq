@@ -41,6 +41,64 @@ def _run(path: str, check_only: bool) -> int:
     return 0
 
 
+def _bench(args) -> int:
+    from pathlib import Path
+
+    from .bench.contracts import create_protocol, object_digest
+    from .bench.runner import compare_models, evaluate_model, verify_result
+
+    try:
+        if args.bench_cmd == "init":
+            p = create_protocol(args.anchor_run, args.output, cwd=Path.cwd(),
+                                data_dir=args.data_dir, block_days=args.block_days,
+                                resamples=args.resamples, min_days=args.min_days,
+                                min_signal_score=args.min_signal_score,
+                                min_anchor_gain_score=args.min_anchor_gain_score)
+            print(f"development protocol {object_digest(p)}  {args.output}")
+            return 0
+        if args.bench_cmd == "verify":
+            s = verify_result(args.result, inputs=args.inputs)
+            print(f"local integrity {s['status']}  checked {s['checked_files']} files  "
+                  f"inputs checked {s['inputs_checked']}  daily mean recomputed {s['daily_mean_recomputed']}  "
+                  f"account ledger recomputed {s['account_ledger_recomputed']}")
+            return 0
+        if args.bench_cmd == "compare":
+            s = compare_models(args.old, args.new, args.output)
+            print(f"signal score gain {s['signal_score_gain']:+.4f}  "
+                  f"{s['conclusion']['status']}  report {Path(args.output) / 'report.md'}")
+            economic = s["economic_comparison"]
+            if economic["status"] == "COMPLETED":
+                v = economic["results"]["extra_0bp_per_side"]
+                print(f"research net annual gain {v['annual_net_gain_bp']:+.2f} bp  "
+                      f"{v['qualification']}  improvement {v['conclusion']['status']}")
+            return 0
+        s = evaluate_model(args.source, args.protocol, args.output, data_dir=args.data_dir,
+                           log=lambda m: print(m, flush=True))
+        if s["status"] == "INVALID":
+            print("INVALID: " + "; ".join(s["errors"]))
+            return 1
+        ev = s["evaluation"]
+        rank = ev["reference_rank"]
+        score = ev["models"]["candidate"]["signal_score"]
+        score_text = "N/A" if score is None else f"{score:+.4f}"
+        print(f"development signal score {score_text}  "
+              f"rank {str(rank['position']) + '/5' if rank else 'N/A'}  "
+              f"signal {ev['signal']['status']}  report {Path(args.output) / 'report.md'}")
+        print(f"readiness {s['readiness']['level']}  live capital eligible False")
+        economic = s["economic"]
+        if economic["status"] == "COMPLETED":
+            v = economic["results"]["extra_0bp_per_side"]["candidate"]
+            print(f"research net annual excess {v['net_excess_ann_bp']:+.2f} bp  "
+                  f"CI95 {v['net_excess_ann_ci95_bp']}  {v['qualification']}  "
+                  "conditional research only; no impact/capacity certification")
+        else:
+            print(f"economic NOT_EVALUATED: {economic.get('reason')}")
+        return 0
+    except (ValueError, OSError, KeyError, TypeError) as exc:
+        print(f"bench: {exc}", file=sys.stderr)
+        return 1
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(prog="qwb")
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -68,7 +126,35 @@ def main(argv: list[str] | None = None) -> int:
     r.add_argument("config")
     r.add_argument("--check", action="store_true", help="validate and show the resolved config only")
 
+    bench = sub.add_parser("bench", help="development signal benchmark (no retraining)")
+    commands = bench.add_subparsers(dest="bench_cmd", required=True)
+    init = commands.add_parser("init", help="pin snapshot and LightGBM reference artifacts")
+    init.add_argument("anchor_run")
+    init.add_argument("--output", required=True, help="new development protocol YAML")
+    init.add_argument("--data-dir")
+    init.add_argument("--block-days", type=int, default=20)
+    init.add_argument("--resamples", type=int, default=10000)
+    init.add_argument("--min-days", type=int, default=60)
+    init.add_argument("--min-signal-score", type=float, default=0.0,
+                      help="predeclare minimum IC score; not a live-capital threshold")
+    init.add_argument("--min-anchor-gain-score", type=float, default=0.0,
+                      help="predeclare minimum IC score improvement over the anchor")
+    model = commands.add_parser("model", help="score a run directory or a prediction parquet/CSV")
+    model.add_argument("source")
+    model.add_argument("--protocol", required=True)
+    model.add_argument("--output", required=True, help="new result directory (never overwritten)")
+    model.add_argument("--data-dir", help="relocate the identical hash-verified snapshot")
+    compare = commands.add_parser("compare", help="paired comparison of two signal Bench results")
+    compare.add_argument("old")
+    compare.add_argument("new")
+    compare.add_argument("--output", required=True)
+    verify = commands.add_parser("verify", help="check local artifacts and recompute mean scores")
+    verify.add_argument("result")
+    verify.add_argument("--inputs", action="store_true", help="also rehash original data and submissions")
+
     args = ap.parse_args(argv)
+    if args.cmd == "bench":
+        return _bench(args)
     if args.cmd == "run":
         return _run(args.config, args.check)
     if args.cmd == "ui":

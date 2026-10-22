@@ -99,3 +99,52 @@ def test_dev_login_disabled_when_oauth_configured(tmp_path):
     assert c.get("/login/dev").status_code == 404
     assert c.get("/login", follow_redirects=False).headers["location"].startswith(
         "https://huggingface.co/oauth/authorize")
+
+
+def test_site_api_shares_session_and_preserves_untrusted_text(tmp_path):
+    _, c = client(tmp_path)
+    anonymous = c.get("/api/site").json()
+    assert anonymous["user"] is None and anonymous["models"] == []
+    assert anonymous["csrf"] and anonymous["dev"]
+    c.get("/login/dev")
+    payload = c.get("/api/site").json()
+    r = c.post("/share", data={"repo": "u/m", "author_text": "<img onerror=alert(1)>",
+                               "token": payload["csrf"]}, follow_redirects=False)
+    assert r.status_code == 303
+    listing = c.get("/api/site").json()
+    assert listing["user"] == "local-dev"
+    assert listing["models"][0]["fields"]["base_model"] == "lightgbm"
+    assert listing["models"][0]["author_text"] == "<img onerror=alert(1)>"
+    assert listing["models"][0]["sha"] == SHA
+    c.get("/logout")
+    assert c.get("/api/site").json()["user"] is None
+
+
+def test_reference_and_downloads_are_fixed_public_artifacts(tmp_path):
+    _, c = client(tmp_path)
+    report = c.get("/api/reference").json()["report"]
+    assert "0.1104" in report and "不显著" in report
+    download = c.get("/downloads/report")
+    assert download.status_code == 200 and download.text == report
+    assert "attachment" in download.headers["content-disposition"]
+    recipe = c.get("/downloads/recipe")
+    assert recipe.status_code == 200 and "name: lightgbm" in recipe.text
+    assert c.get("/downloads/config.local.yaml").status_code == 404
+
+
+def test_author_research_is_validated_and_escaped(tmp_path):
+    _, c = client(tmp_path)
+    c.get("/login/dev")
+    data = {"repo": "u/research", "token": token(c), "rank_ic": "0.12",
+            "net_excess_ann": "-2.5", "test_period": "2024–2025",
+            "recipe_text": "<script>alert(1)</script>"}
+    r = c.post("/share", data=data, follow_redirects=False)
+    assert r.status_code == 303
+    page = c.get(r.headers["location"]).text
+    assert "+0.1200" in page and "-2.50%" in page and "作者自报" in page
+    assert "<script>alert(1)</script>" not in page and "&lt;script&gt;" in page
+    model = c.get("/api/site").json()["models"][0]
+    assert model["research"]["net_excess_ann"] == -2.5
+    for value in ("NaN", "Infinity", "1.1", "not-a-number"):
+        assert c.post("/share", data=data | {"rank_ic": value}).status_code == 422
+    assert c.post("/share", data=data | {"test_period": ""}).status_code == 422
