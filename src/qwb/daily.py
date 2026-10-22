@@ -294,6 +294,56 @@ def run(P: dict, card: dict, cfg: dict, snapshot_id: str, tz: str, st=None,
             "test_rows": test_mask}
 
 
+def fit_final(P: dict, card: dict, cfg: dict, snapshot_id: str, tz: str, out_dir: Path,
+              F: dict, U: np.ndarray, log=print) -> dict:
+    """The model to use going forward: one fit on every sample whose label has matured
+    by the last day in the data (same rules as each walk-forward fold)."""
+    model = cfg.get("model", "lightgbm")
+    dates = P["close"].index
+    y = labels(P, card)
+    Ud = pd.DataFrame(U, index=dates, columns=P["close"].columns)
+    target = _label_target(y.where(Ud), cfg["label_transform"])
+    lend = foldlib.label_end_times(pd.Series(dates), dates, card, tz)
+    lend.index = dates
+    hh, mm = map(int, card["timing"]["decision"]["time"].split(":"))
+    cutoff = (dates[-1] + pd.Timedelta(hours=hh, minutes=mm)).tz_localize(tz)
+    dmask, man = foldlib.build_fold(-1, pd.Series(dates, index=dates), lend,
+                                    (dates[0], dates[-1]), cutoff, snapshot_id, f"{model}-final")
+    tm = U & dmask.values[:, None] & target.notna().values
+    X, t = _stack(F, tm), target.values[tm]
+    names = feature_names(F)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    files = []
+    if model == "ridge":
+        coef = ridge_fit(X, t, cfg["ridge_alpha"])
+        (out_dir / "ridge.json").write_text(json.dumps({"features": names, "coef": coef.tolist()}),
+                                            encoding="utf-8")
+        files.append("ridge.json")
+    else:
+        import lightgbm as lgb
+        for s in cfg["seeds"]:
+            params = dict(cfg["lgbm"], seed=s, bagging_seed=s, feature_fraction_seed=s)
+            b = lgb.train(params, lgb.Dataset(X, t, feature_name=names, free_raw_data=True),
+                          num_boost_round=cfg["num_boost_round"])
+            b.save_model(str(out_dir / f"lgbm_seed{s}.txt"))
+            files.append(f"lgbm_seed{s}.txt")
+    m = man.to_dict()
+    log(f"final model: {len(t)} training rows up to {m['train_end']}")
+    return {"model": model, "files": files, "features": names, "train_end": m["train_end"],
+            "n_train": int(len(t)), "max_label_end": m["max_label_end"]}
+
+
+def predict_rows(model_dir: Path, meta: dict, X: np.ndarray) -> np.ndarray:
+    """Scores from a saved final model; mean over seeds for LightGBM."""
+    if meta["model"] == "ridge":
+        coef = np.asarray(json.loads((model_dir / "ridge.json").read_text("utf-8"))["coef"])
+        return ridge_predict(coef, X)
+    import lightgbm as lgb
+    preds = [lgb.Booster(model_file=str(model_dir / f)).predict(X, num_threads=4)
+             for f in meta["files"]]
+    return np.mean(preds, axis=0)
+
+
 def ensemble(pred: dict) -> np.ndarray:
     """Mean over seeds; cells no seed predicted (outside test years / universe) stay NaN."""
     stack = np.stack(list(pred.values()))

@@ -38,8 +38,10 @@ import {
 import "./style.css";
 import Forum from "./Forum";
 import Hero from "./Hero";
+import ResearchVisual from "./ResearchVisual";
 import "./design.css";
 import "./polish.css";
+import "./research-visual.css";
 
 const templates = [
   {
@@ -400,7 +402,7 @@ function App() {
                 className="button button-white"
                 onClick={() => window.location.assign('/community')}
               >
-                <Users size={15} /> 进入研究社区 <ArrowUpRight size={14} />
+                进入研究社区 <ArrowUpRight size={14} />
               </button>
             </div>
             <div className="community-toolbar">
@@ -478,14 +480,7 @@ function App() {
                       }
                     >
                       <div className="model-visual">
-                        <div
-                          className={`mini-sculpture sculpture-${item.color}`}
-                        >
-                          <span />
-                          <span />
-                          <span />
-                          <span />
-                        </div>
+                        <ResearchVisual kind={item.id} label={item.label}/>
                         <span className="model-type">
                           <Icon size={12} />
                           {item.label}
@@ -619,7 +614,6 @@ function App() {
                   onClick={() => setStep(i)}
                 >
                   <span className="workflow-number">{num}</span>
-                  <Icon size={18} />
                   <span>{title}</span>
                   <ChevronRight size={15} />
                 </button>
@@ -783,7 +777,7 @@ function App() {
         <section className="principles">
           <div className="container principles-inner">
             <div>
-              <LockKeyhole size={23} />
+              <span className="principle-index" aria-hidden="true">01</span>
               <h3>本地优先</h3>
               <p>
                 数据与算力留在本机。
@@ -792,7 +786,7 @@ function App() {
               </p>
             </div>
             <div>
-              <FlaskConical size={23} />
+              <span className="principle-index" aria-hidden="true">02</span>
               <h3>证据驱动</h3>
               <p>
                 结果与检验一同呈现。
@@ -801,7 +795,7 @@ function App() {
               </p>
             </div>
             <div>
-              <GitBranch size={23} />
+              <span className="principle-index" aria-hidden="true">03</span>
               <h3>方法开放</h3>
               <p>
                 配置、环境与版本可追溯。

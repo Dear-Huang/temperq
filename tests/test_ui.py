@@ -173,3 +173,36 @@ def test_combined_dataset_flow(tmp_path):
                   follow_redirects=False).status_code == 303
     assert "还没有添加来源" in c.get("/data/mine_plus").text
     assert c.post("/data/mine_plus/tushare", data={"token": t, "api_token": "a" * 32}).text.count("至少勾选") == 1
+
+
+def test_use_model_page_and_downloads(tmp_path):
+    pytest.importorskip("lightgbm")
+    app, c = client(tmp_path)
+    r = c.post("/run", data=form(app, name="m1", capital="30w_100w"), follow_redirects=False)
+    job = c.get(r.headers["location"]).text
+    assert "用这个模型出今天的持仓清单" in job
+    lst = c.get("/models").text
+    assert "m1" in lst and "试运行" in lst
+    page = c.get("/models/m1").text
+    assert "收盘后的决策" in page and "买入" in page and "没有任何投资含义" in page
+    assert "取前 20 只" in page                              # 30–100 万 tier -> 20 names
+    page = c.get("/models/m1?capital=50").text
+    assert "每只约 2.5 万" in page                           # 50 万 / 20 names
+    csv = c.get("/models/m1/picks.csv?capital=50")
+    assert csv.status_code == 200 and csv.content.startswith(b"\xef\xbb\xbf")
+    assert "操作" in csv.content.decode("utf-8-sig")
+    scores = c.get("/models/m1/scores.csv").content.decode("utf-8-sig")
+    assert scores.count("\n") > 100
+    assert "日期格式" in c.get("/models/m1?date=yesterday").text
+    assert "资金格式" in c.get("/models/m1?capital=abc").text
+    assert c.get("/models/..%2Fx").status_code == 404
+    assert c.get("/models/nope").status_code == 404
+
+
+def test_report_has_parameter_rulebook(tmp_path):
+    pytest.importorskip("lightgbm")
+    app, c = client(tmp_path)
+    r = c.post("/run", data=form(app, name="m2", horizon="20", n_seeds="1"), follow_redirects=False)
+    page = c.get(r.headers["location"]).text
+    assert "参数体检" in page and "已锁定" in page and "López de Prado" in page
+    assert "持有 20 天" in page and "只训练 1 次" in page

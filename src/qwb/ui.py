@@ -772,6 +772,9 @@ def create_app(workdir: Path, task_dir: Path | None = None,
             parts.append(f'<div class="box"><h3>一句话结论</h3><ul class="verdict">{items}</ul></div>')
             parts.append(f'<details open><summary>完整报告</summary>'
                          f'{md_to_html((out_dir / "report.md").read_text(encoding="utf-8"))}</details>')
+            if (out_dir / "final_model" / "meta.json").is_file():
+                parts.append(f'<p><a class="btn" href="/models/{html.escape(out_dir.name)}">'
+                             '用这个模型出今天的持仓清单 →</a></p>')
             parts.append(f'<p class="mut">结果文件夹：<code>{html.escape(str(out_dir))}</code>（模型文件、'
                          '每日预测表 predictions.parquet、报告 report.md）</p>')
         if st["state"] == "succeeded" and what == "fetch":
@@ -780,6 +783,159 @@ def create_app(workdir: Path, task_dir: Path | None = None,
         parts.append(f'<details{" open" if st["state"] == "failed" else ""}><summary>运行日志</summary>'
                      f'<pre class="plain">{html.escape(log_txt) or "（暂无）"}</pre></details>')
         return page(name, "\n".join(parts), refresh=running)
+
+    # ---------------------------------------------------------------- use a model
+    runs_root = workdir / "runs"
+
+    def trained_models() -> list[dict]:
+        out = []
+        if not runs_root.is_dir():
+            return out
+        for d in runs_root.iterdir():
+            mp = d / "final_model" / "meta.json"
+            if not mp.is_file():
+                continue
+            try:
+                meta = json.loads(mp.read_text(encoding="utf-8"))
+                m = json.loads((d / "metrics.json").read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                continue
+            net = (m.get("net_of_cost") or {}).get("signals", {}).get(m.get("model_key", "lgbm_ensemble"))
+            f = m["ic"][m.get("model_key", "lgbm_ensemble")]["final_test"]
+            out.append({"run": d.name, "meta": meta, "m": m, "net": net, "ic": f,
+                        "mtime": mp.stat().st_mtime})
+        return sorted(out, key=lambda x: -x["mtime"])
+
+    def _run_dir(run: str) -> Path:
+        if not NAME_RE.match(run):
+            raise HTTPException(404)
+        d = runs_root / run
+        if not (d / "final_model" / "meta.json").is_file():
+            raise HTTPException(404)
+        return d
+
+    @app.get("/models", response_class=HTMLResponse)
+    def models_page():
+        rows = []
+        for x in trained_models():
+            sc = x["m"].get("scenario") or {}
+            net = x["net"]
+            synth = x["meta"].get("snapshot_id") == "snap-synthetic"
+            ok = (not synth) and x["m"].get("go") and net and net["net_excess_t"] > 2
+            badge = ('<span class="tag">试运行</span>' if synth else
+                     '<span class="tag">通过检验</span>' if ok else '<span class="tag warnt">未通过检验</span>')
+            net_txt = "n/a" if not net else f"{net['net_excess_ann']:+.1%}（t={net['net_excess_t']:.1f}）"
+            rows.append(
+                f'<tr><td><a href="/models/{html.escape(x["run"])}"><b>{html.escape(x["run"])}</b></a> {badge}</td>'
+                f'<td>{html.escape(sc.get("universe") or x["m"].get("universe", ""))}<br>'
+                f'<small class="mut">{html.escape(sc.get("horizon", ""))} · {html.escape(sc.get("capital", ""))}</small></td>'
+                f'<td>{html.escape(sc.get("model") or x["meta"]["model"])}</td>'
+                f'<td>{x["ic"]["mean"]:+.3f}（t={x["ic"]["t"]:.1f}）</td>'
+                f'<td>{net_txt}</td>'
+                f'<td>{html.escape(x["meta"].get("data_end", ""))}</td></tr>')
+        table = ('<div class="tw"><table><tr><th>模型</th><th>用在哪</th><th>底座</th><th>测试期 IC</th>'
+                 '<th>扣成本后年化净超额</th><th>数据截止</th></tr>' + "".join(rows) + '</table></div>') \
+            if rows else '<p class="mut">还没有训练好的模型。先在“训练模型”页面训练一个。</p>'
+        body = ('<h2>使用模型</h2>'
+                '<p>选一个训练好的模型，它会用最新一天的数据给股票池里每只股票打分，给出明天开盘要持有的股票清单，'
+                '以及相对上一期的买入、卖出、继续持有。只有“通过检验”的模型才值得考虑真金白银使用；'
+                '其余的清单只用来看模型在做什么。</p>' + table)
+        return page("使用模型", body)
+
+    def _picks_or_error(run: str, date: str, capital: str):
+        from . import picks
+        cap = None
+        if capital.strip():
+            try:
+                cap = float(capital) * 1e4
+            except ValueError:
+                raise ValueError("资金格式不对，填数字，单位万元") from None
+            if not (0 < cap <= 1e11):
+                raise ValueError("资金应在 0 到 1000 亿元之间")
+        if date.strip() and not re.fullmatch(r"\d{4}-\d{2}-\d{2}", date.strip()):
+            raise ValueError("日期格式应为 2025-12-31")
+        return picks.picks(_run_dir(run), workdir, date.strip() or None, cap)
+
+    @app.get("/models/{run}", response_class=HTMLResponse)
+    def model_page(run: str, date: str = "", capital: str = ""):
+        d = _run_dir(run)
+        meta = json.loads((d / "final_model" / "meta.json").read_text(encoding="utf-8"))
+        m = json.loads((d / "metrics.json").read_text(encoding="utf-8"))
+        try:
+            r = _picks_or_error(run, date, capital)
+        except (ValueError, FileNotFoundError) as e:
+            return oops(str(e), f"/models/{run}")
+        sc = m.get("scenario") or {}
+        warn = []
+        if meta.get("snapshot_id") == "snap-synthetic":
+            warn.append("这是试运行数据训练的模型，清单没有任何投资含义。")
+        net = (m.get("net_of_cost") or {}).get("signals", {}).get(m.get("model_key", "lgbm_ensemble"))
+        if not m.get("go") or not net or net["net_excess_t"] <= 2:
+            warn.append("这个模型在测试期没有通过检验（扣成本后不显著，或没赢过简单方法）。清单只用来观察，不建议照着交易。")
+        if r["stale_days"] > 5 and meta.get("snapshot_id") != "snap-synthetic":
+            warn.append(f"数据最后一天是 {r['data_end']}，已经过去 {r['stale_days']} 天。要用最新清单，先更新数据（重新下载）再训练。")
+        if r["date"] != r["data_end"]:
+            warn.append(f"现在看的是历史日期 {r['date']} 的清单，不是最新的。")
+        acts = {"买入": "ok", "卖出": "bad", "继续持有": ""}
+        rows = "".join(
+            f'<tr><td>{x.rank if x.rank == x.rank else "—"}</td><td>{html.escape(x.code)}</td>'
+            f'<td class="{acts.get(x.action, "")}"><b>{html.escape(x.action)}</b></td>'
+            f'<td>{x.weight:.1%}</td><td>{"" if x.ref_close is None or x.ref_close != x.ref_close else f"{x.ref_close:.2f}"}</td>'
+            f'<td>{"" if x.est_shares is None or x.est_shares != x.est_shares else f"{int(x.est_shares):,}"}</td>'
+            f'<td><small class="warn">{html.escape(x.note or "")}</small></td></tr>'
+            for x in r["table"].itertuples())
+        n = r["table"]["action"].value_counts().to_dict()
+        cap_txt = scenario.fmt_yuan(r["capital"]) if r["capital"] else "未设定"
+        cap_ph = f"{r['capital'] / 1e4:g}" if r["capital"] else ""
+        body = (f'<p><a href="/models">← 全部模型</a></p><h2>{html.escape(run)}</h2>'
+                f'<p class="mut">{html.escape(sc.get("universe", ""))} · {html.escape(sc.get("horizon", ""))} · '
+                f'{html.escape(sc.get("model") or meta["model"])} · 训练数据到 {html.escape(meta.get("train_end", ""))}</p>'
+                + "".join(f'<div class="box bad">{html.escape(w)}</div>' for w in warn) +
+                f'<form method="get" class="box"><label class="f">清单日期 <input name="date" value="{html.escape(date)}" '
+                f'placeholder="{r["data_end"]}（最新）" size="14"></label>'
+                f'<label class="f">资金（万元） <input name="capital" value="{html.escape(capital)}" '
+                f'placeholder="{cap_ph}" size="10"></label>'
+                '<button>更新清单</button></form>'
+                f'<div class="box"><b>{r["date"]} 收盘后的决策，{r["trade_on"]}执行</b>'
+                f'<p>股票池今天有 {r["universe_size"]} 只可选，按模型打分取前 {r["n_hold"]} 只等权持有，'
+                f'每只约 {cap_txt if not r["per_name"] else scenario.fmt_yuan(r["per_name"])}，持有 {r["hold_days"]} 个交易日后按同样方法换仓。'
+                f'相对 {r["hold_days"]} 个交易日前的清单：买入 {n.get("买入", 0)} 只，卖出 {n.get("卖出", 0)} 只，'
+                f'继续持有 {n.get("继续持有", 0)} 只。</p>'
+                '<p class="mut">参考价是当天收盘价；股数按资金和参考价估算，取整到一手（科创板 200 股）。'
+                '实际成交价是明天开盘价，可能不同。</p></div>'
+                f'<p><a class="btn" href="/models/{html.escape(run)}/picks.csv?date={html.escape(date)}&capital={html.escape(capital)}">'
+                '下载持仓清单 CSV</a>　<a href="/models/' + html.escape(run) + f'/scores.csv?date={html.escape(date)}">'
+                '下载全部股票打分 CSV</a></p>'
+                '<div class="tw"><table><tr><th>排名</th><th>代码</th><th>操作</th><th>目标权重</th>'
+                f'<th>参考价</th><th>估算股数</th><th>提示</th></tr>{rows}</table></div>'
+                '<p class="mut">不构成投资建议。模型只根据历史量价规律排序，不知道公告、新闻和你的个人情况。</p>')
+        return page(f"使用模型：{run}", body)
+
+    @app.get("/models/{run}/picks.csv")
+    def picks_csv(run: str, date: str = "", capital: str = ""):
+        from fastapi.responses import Response
+        try:
+            r = _picks_or_error(run, date, capital)
+        except (ValueError, FileNotFoundError) as e:
+            raise HTTPException(400, str(e)) from None
+        tab = r["table"].rename(columns={"code": "代码", "rank": "排名", "score": "模型打分", "action": "操作",
+                                         "weight": "目标权重", "ref_close": "参考价", "est_shares": "估算股数",
+                                         "note": "提示"})
+        data = tab.to_csv(index=False).encode("utf-8-sig")       # BOM so Excel shows Chinese
+        return Response(data, media_type="text/csv", headers={
+            "Content-Disposition": f'attachment; filename="{run}_{r["date"]}_holdings.csv"'})
+
+    @app.get("/models/{run}/scores.csv")
+    def scores_csv(run: str, date: str = ""):
+        from fastapi.responses import Response
+        try:
+            r = _picks_or_error(run, date, "")
+        except (ValueError, FileNotFoundError) as e:
+            raise HTTPException(400, str(e)) from None
+        data = r["full_rank"].rename(columns={"code": "代码", "rank": "排名", "score": "模型打分"}) \
+            .to_csv(index=False).encode("utf-8-sig")
+        return Response(data, media_type="text/csv", headers={
+            "Content-Disposition": f'attachment; filename="{run}_{r["date"]}_scores.csv"'})
 
     @app.post("/job/{jid}/cancel")
     async def cancel(req: Request, jid: str):
@@ -879,9 +1035,9 @@ input[type=number]{width:7.5em}input[type=radio]{margin-right:6px}
 button,.btn{background:var(--acc);color:var(--card);border:0;border-radius:8px;padding:9px 18px;cursor:pointer;
 text-decoration:none;display:inline-block}button.big{font-size:17px;padding:12px 28px}
 button.secondary{background:transparent;color:var(--acc);border:1px solid var(--acc)}
-.mut{color:var(--mut)}.warn{color:var(--warn)}.hw{font-size:13px;color:var(--mut)}
+.nav{margin:0 0 6px}.nav a{font-weight:600}.mut{color:var(--mut)}.warn{color:var(--warn)}.hw{font-size:13px;color:var(--mut)}
 .box{border-radius:10px;padding:12px 16px;margin:12px 0;background:var(--card);border:1px solid var(--line)}
-.box.ok{background:var(--okbg)}.box.bad{background:var(--badbg)}
+.box.ok{background:var(--okbg)}td.ok{color:var(--ok)}td.bad{color:var(--bad)}.warnt{color:var(--warn);border-color:var(--warn)}.box.bad{background:var(--badbg)}
 ul.verdict{padding-left:18px}ul.verdict li{margin:6px 0}li.ok{color:var(--ok)}li.warn{color:var(--warn)}li.bad{color:var(--bad)}
 .state{font-size:18px;font-weight:600}.state.succeeded{color:var(--ok)}.state.failed{color:var(--bad)}
 progress{width:260px;vertical-align:middle}
@@ -891,6 +1047,7 @@ pre.plain{white-space:pre-wrap;word-break:break-word;background:var(--code);padd
 code{background:var(--code);padding:1px 5px;border-radius:4px;font-size:13px}
 </style></head><body><main>
 <h1>qwb 本地量化工作台</h1>
+<p class="nav"><a href="/">训练模型</a>　·　<a href="/models">使用模型</a></p>
 <p class="mut">在自己电脑上训练选股模型。数据只在这台电脑上，不会上传。不构成投资建议。</p>
 {{body}}
 </main></body></html>"""

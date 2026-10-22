@@ -16,7 +16,7 @@ import numpy as np
 import pandas as pd
 import yaml
 
-from . import daily, env, leakcheck, ledger, metrics, netcost
+from . import advice, daily, env, leakcheck, ledger, metrics, netcost
 
 TZ = {"cn_a": "Asia/Shanghai", "us": "America/New_York"}
 
@@ -177,6 +177,15 @@ def run(rc: dict, cwd: Path, log: Callable[[str], None] = print) -> dict:
     pred_tab.to_parquet(out / "predictions.parquet", index=False)
     (out / "folds.json").write_text(json.dumps(res["manifests"], indent=2), encoding="utf-8")
     T["write"] = time.time() - t3
+    # the model to use from here on: refit on everything with a matured label
+    t4 = time.time()
+    final_model = daily.fit_final(P, card, cfg, snap, tz, out / "final_model", res["F"],
+                                  res["U"], log=log)
+    final_model.update({"cfg": cfg, "card": card, "data": rc["data"], "snapshot_id": snap,
+                        "data_end": f"{dates[-1]:%Y-%m-%d}", "run": rc["name"]})
+    (out / "final_model" / "meta.json").write_text(
+        json.dumps(final_model, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
+    T["final_model"] = time.time() - t4
     T["total"] = time.time() - t0
 
     best_base = max(rows[k]["final_test"]["mean"] for k in base)
@@ -194,7 +203,9 @@ def run(rc: dict, cwd: Path, log: Callable[[str], None] = print) -> dict:
                "net_of_cost": net,
                "go": go, "acceptance_hash": acc_hash, "acceptance_changed_after_lock": acc_changed,
                "deviations": rc["deviations"], "timing_s": {k: round(v, 1) for k, v in T.items()},
-               "env": meta, "rows_predicted": int(len(pred_tab))}
+               "env": meta, "rows_predicted": int(len(pred_tab)),
+               "final_model": {k: final_model[k] for k in ("model", "train_end", "n_train", "data_end")},
+               "advice": advice.check(cfg, card, len(set(dates.year)))}
     # guardrails: look-ahead check, and how often this test period has been scored
     summary["leak_check"] = leakcheck.prefix_invariance(P, cfg, st, F=res["F"], U=res["U"],
                                                        members=members)
@@ -322,6 +333,7 @@ def _report(rc, s, rows, null, seed_corr, seed_overlap, valid, final, T, meta, n
         "- 未执行：冲击成本（大单）、优化型组合构建" if s.get("net_of_cost")
         else "- 未执行：扣成本检验（未安装 ashare-tcost），以下 IC 不代表收益",
         *_guard_lines(s), "",
+        *advice.as_markdown(s.get("advice") or []),
         f"## 结果（日度 Rank IC 均值，Newey-West t，lag 事先固定为 {s['nw_lag']}；"
         "MDE 为 80% 功效下可检出的最小均值）", "",
         f"| 信号 | 验证期 {valid[0] if valid else ''}–{valid[-1] if valid else ''} | "

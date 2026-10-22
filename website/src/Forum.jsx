@@ -6,17 +6,21 @@ import {
   BookOpen,
   Check,
   ChevronRight,
+  ChartNoAxesCombined,
   Code2,
   FileText,
+  FolderGit2,
   FlaskConical,
   GitBranch,
   Layers3,
   LogIn,
   MessageCircle,
+  MessagesSquare,
   Plus,
   Search,
   Send,
   ShieldCheck,
+  SlidersHorizontal,
   Users,
   X,
 } from "lucide-react";
@@ -24,10 +28,10 @@ import "./forum.css";
 import "./forum-theme.css";
 
 const categories = {
-  models: ["模型分享", Layers3],
-  recipes: ["训练方法", Code2],
-  performance: ["业绩复盘", FlaskConical],
-  questions: ["问题讨论", MessageCircle],
+  models: ["模型分享", FolderGit2],
+  recipes: ["训练方法", SlidersHorizontal],
+  performance: ["业绩复盘", ChartNoAxesCombined],
+  questions: ["问题讨论", MessagesSquare],
 };
 const date = (value) =>
   new Date(value).toLocaleString("zh-CN", {
@@ -181,7 +185,7 @@ export default function Forum() {
         <aside className="forum-sidebar">
           <div className="forum-space-name">
             <span className="forum-space-icon">
-              <Users size={21} />
+              <MessagesSquare size={21} />
             </span>
             <div>
               <strong>研究社区</strong>
@@ -470,7 +474,7 @@ export default function Forum() {
               </div>
               <a className="forum-reference" href="/#community">
                 <div className="reference-symbol">
-                  <FlaskConical size={25} />
+                  <ChartNoAxesCombined size={25} />
                 </div>
                 <div>
                   <span>官方参考实验</span>
