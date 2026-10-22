@@ -361,9 +361,17 @@ def _convention_lines(conv: dict | None) -> list[str]:
     for k, v in conv.items():
         lines.append(f"| {k} | {v['gross_excess_ann']:+.1%} | {v['cost_ann']:.1%} | "
                      f"{v['net_excess_ann']:+.1%} | {v['net_excess_t']:.2f} |")
-    first, last = list(conv.values())[0], list(conv.values())[-1]
+    v = list(conv.values())
+    first, close_fill, limits, last = v[0], v[1], v[2], v[-1]
     gap = last["net_excess_ann"] - first["net_excess_ann"]
-    lines += ["", f"两种口径的净超额相差 {gap:+.1%}/年。差得越多，说明换个工具回测，结论越可能被高估。", ""]
+    cost_gap = first["cost_ann"] - last["cost_ann"]
+    fill_gap = close_fill["gross_excess_ann"] - first["gross_excess_ann"]
+    limit_gap = limits["gross_excess_ann"] - close_fill["gross_excess_ann"]
+    lines += ["", f"按 Qlib 基准口径，净超额 {last['net_excess_ann']:+.1%}/年，qwb 口径 "
+              f"{first['net_excess_ann']:+.1%}/年，相差 {gap:+.1%}。拆开看：固定费率比个股价差估计"
+              f"{'少算' if cost_gap > 0 else '多算'}成本 {abs(cost_gap):.1%}/年；收盘价成交让毛超额变化 "
+              f"{fill_gap:+.1%}；统一 9.5% 涨跌停让毛超额变化 {limit_gap:+.1%}。"
+              "几处差异方向不同，可能互相抵消，所以要看分项，不只看合计。", ""]
     return lines
 
 
