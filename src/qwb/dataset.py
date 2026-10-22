@@ -45,8 +45,11 @@ RULES = {
     "announce": "按公告日：文件里有公告日列 ann_date，公告后的下一个交易日起使用，并一直有效到下一条",
 }
 NAME_RE = re.compile(r"^[A-Za-z0-9_-]{1,40}$")
-COL_RE = re.compile(r"[^A-Za-z0-9_]")
+# column names keep letters, digits and CJK (情绪_利好 stays readable)
+COL_RE = re.compile(r"[^A-Za-z0-9_一-鿿]")
 MAX_FACTOR_COLS = 30
+MAX_LEVELS = 20               # text column with at most this many values -> 0/1 columns
+MIN_LEVEL_ROWS = 20           # a value must appear this often to become its own column
 OVERLAP_BAD_SHARE = 0.05      # share of overlapping stock-days whose close disagrees
 
 
@@ -229,13 +232,28 @@ def add_factor(dest: Path, df: pd.DataFrame, rule: str, label: str, origin: str)
                           else "缺少 date 列")
     skip = {"code", "date", "ann_date", "end_date", "name", "名称"}
     cols = [c for c in df.columns if c not in skip]
-    vals = {}
+    vals, cat_notes, skipped = {}, [], []
     for c in cols:
+        key_c = COL_RE.sub("_", str(c))[:30] or "col"
         v = pd.to_numeric(df[c], errors="coerce")
         if v.notna().mean() >= 0.5:               # mostly numeric -> a factor column
-            vals[COL_RE.sub("_", str(c))[:30] or "col"] = v
+            vals[key_c] = v
+            continue
+        s = df[c].astype("string").str.strip()
+        levels = s.dropna().value_counts()
+        if 2 <= len(levels) <= MAX_LEVELS:
+            # text labels (industry, sentiment, event type) -> one 0/1 column per value;
+            # rare values are pooled so a label seen a handful of times is not a feature
+            keep = [x for x in levels.index if levels[x] >= MIN_LEVEL_ROWS][:MAX_LEVELS]
+            for lv in keep:
+                vals[f"{key_c}_{COL_RE.sub('_', str(lv))[:12] or 'v'}"[:30]] = \
+                    (s == lv).astype("float64").where(s.notna())
+            cat_notes.append(f"文字列“{c}”有 {len(levels)} 种取值，转成 {len(keep)} 个 0/1 指标")
+        else:
+            skipped.append(str(c))
     if not vals:
-        raise SourceError("没找到数值列。除了 code、date（或 ann_date）之外，每一列应是一个数值指标")
+        raise SourceError("没找到能用的列。除了 code、date（或 ann_date）之外，每一列应是数值指标，"
+                          f"或取值不超过 {MAX_LEVELS} 种的文字标签（如行业、情绪：利好/利空）")
     if len(vals) > MAX_FACTOR_COLS:
         raise SourceError(f"一次最多 {MAX_FACTOR_COLS} 个指标列，现在有 {len(vals)} 个")
     cal = calendar(dest)
@@ -250,7 +268,10 @@ def add_factor(dest: Path, df: pd.DataFrame, rule: str, label: str, origin: str)
         raise SourceError("没有一行落在基础数据的交易日范围内，检查日期")
     known = set(pd.read_parquet(next((root(dest) / "bars").glob("*.parquet")), columns=["code"])["code"])
     match = out["code"].isin(known).mean() if known else 1.0
-    notes = []
+    notes = list(cat_notes)
+    if skipped:
+        notes.append(f"这些列没有使用：{'、'.join(skipped[:8])}（不是数值，或文字取值太多，"
+                     "比如新闻正文需要先转成打分或标签）")
     if match < 0.5:
         notes.append(f"只有 {match:.0%} 的股票代码在基础数据里找到，检查代码格式")
     if dropped:

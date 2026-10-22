@@ -110,3 +110,25 @@ def test_st_source_and_combined_training_with_leak_check(tmp_path):
     s = pipeline.run(rc, tmp_path, log=lambda *_: None)
     assert s["leak_check"]["ok"], s["leak_check"]["violations"]
     assert s["leak_check"]["items"] == len(daily.FEATURES) + 2      # + 1 added factor + universe
+
+
+def test_text_labels_become_indicator_columns_and_free_text_is_skipped(tmp_path):
+    root, b = base(tmp_path)
+    comb = tmp_path / "comb"
+    dataset.create(root, comb)
+    days = [d.strftime("%Y-%m-%d") for d in sorted(b["date"].unique())[:60]]
+    rows = pd.DataFrame({"code": "000001", "date": days,
+                         "情绪": ["利好", "利空", "中性"] * 20,
+                         "正文": [f"公告全文第{i}段……" for i in range(60)],
+                         "热度": np.arange(60.0)})
+    src = dataset.add_csv(comb, rows.to_csv(index=False).encode(), "factor", "evening",
+                          "舆情", "news.csv")
+    cols = src["columns"]
+    assert "热度" in cols
+    assert any(c.endswith("利好") for c in cols) and any(c.endswith("利空") for c in cols)
+    assert not any("正文" in c for c in cols)
+    assert any("正文" in n for n in src["notes"]) and any("3 种取值" in n for n in src["notes"])
+    P = dataset.load(comb)["P"]
+    good = next(k for k in P if k.startswith("x_") and k.endswith("利好"))
+    w = P[good]["000001.SZ"].dropna()
+    assert set(w.unique()) <= {0.0, 1.0} and w.sum() == 20
