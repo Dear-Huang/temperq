@@ -25,7 +25,7 @@
 研究社区位于 `/community`：按模型分享、训练方法、业绩复盘和问题讨论分板块。登录后可在 `/community/new` 发帖，帖子支持关联模型、附训练配方和持续回复讨论。
 
 - Windows：运行 `powershell -ExecutionPolicy Bypass -File website/start.ps1`，按终端地址访问。
-- 手动：在 `website/` 执行 `npm ci` 和 `npm run build`，在项目根目录执行 `python -m uvicorn share_site.app:app --host 127.0.0.1 --port 8800`。
+- 手动：在 `website/` 执行 `npm ci` 和 `npm run build`，在项目根目录执行 `QWB_SITE_DEV=1 python -m uvicorn share_site.app:app --host 127.0.0.1 --port 8800`（本地预览）。部署到服务器时改为设置 `HF_OAUTH_CLIENT_ID`、`HF_OAUTH_CLIENT_SECRET`、`HF_OAUTH_REDIRECT_URI` 和 `QWB_SITE_SECRET`；两者都没设时站点拒绝启动。
 - 设计参考、接口与部署说明：[website/DESIGN.md](website/DESIGN.md)。
 
 ## 报告首页会告诉你什么

@@ -18,6 +18,9 @@ while (Get-NetTCPConnection -State Listen -LocalPort $sitePort -ErrorAction Sile
     $sitePort++
 }
 Write-Host "Quant Workbench: http://127.0.0.1:$sitePort"
+# local preview only: passwordless dev login on 127.0.0.1. A server deployment sets
+# HF_OAUTH_* and QWB_SITE_SECRET instead; the site refuses to start without them.
+if (-not $env:HF_OAUTH_CLIENT_ID) { $env:QWB_SITE_DEV = '1' }
 Push-Location $repoRoot
 try {
     & $pythonExe -X utf8 -m uvicorn share_site.app:app --host 127.0.0.1 --port $sitePort

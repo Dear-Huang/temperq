@@ -10,7 +10,10 @@
 - Pages: two columns, tool report fields vs. author text (rendered as escaped
   plain text, not HTML). Source gone -> "源文件已不可用".
 
-Run:  QWB_SITE_SECRET=... python -X utf8 -m uvicorn share_site.app:app --port 8800
+Server:  HF_OAUTH_CLIENT_ID=... HF_OAUTH_CLIENT_SECRET=... HF_OAUTH_REDIRECT_URI=...
+         QWB_SITE_SECRET=... python -X utf8 -m uvicorn share_site.app:app --port 8800
+Local:   QWB_SITE_DEV=1 python -X utf8 -m uvicorn share_site.app:app --port 8800
+The app refuses to start with neither set.
 """
 
 from __future__ import annotations
@@ -106,16 +109,30 @@ def create_app(db_path: Path | None = None, hf: HFClient | None = None,
     app.mount("/assets", StaticFiles(directory=web_dist / "assets", check_dir=False), name="assets")
     app.mount("/brands", StaticFiles(directory=ROOT / "website" / "public" / "brands", check_dir=False), name="brands")
     app.mount("/fonts", StaticFiles(directory=ROOT / "website" / "public" / "fonts", check_dir=False), name="fonts")
-    secret = secret or os.environ.get("QWB_SITE_SECRET") or secrets.token_urlsafe(32)
+    if oauth is None:
+        # configured from the environment (the uvicorn entry point). Without OAuth the
+        # site would fall back to the passwordless dev login; behind a reverse proxy
+        # every request looks like 127.0.0.1, so that must be an explicit choice.
+        if os.environ.get("HF_OAUTH_CLIENT_ID"):
+            oauth = {"client_id": os.environ["HF_OAUTH_CLIENT_ID"],
+                     "client_secret": os.environ["HF_OAUTH_CLIENT_SECRET"],
+                     "redirect_uri": os.environ["HF_OAUTH_REDIRECT_URI"]}
+        elif os.environ.get("QWB_SITE_DEV") == "1":
+            oauth = {}
+        else:
+            raise RuntimeError(
+                "share site needs HF OAuth: set HF_OAUTH_CLIENT_ID, HF_OAUTH_CLIENT_SECRET and "
+                "HF_OAUTH_REDIRECT_URI. For local testing only, set QWB_SITE_DEV=1.")
+    secret = secret or os.environ.get("QWB_SITE_SECRET")
+    if not secret:
+        if oauth:
+            raise RuntimeError("set QWB_SITE_SECRET so sessions survive restarts and are not guessable")
+        secret = secrets.token_urlsafe(32)
+    # oauth is resolved by now, so production cookies are HTTPS-only
     app.add_middleware(SessionMiddleware, secret_key=secret, same_site="lax",
                        https_only=bool(oauth))
     con = db(db_path or ROOT / "runs" / "site.db")
     hf = hf or HFClient(proxy=os.environ.get("HTTPS_PROXY"))
-    oauth = oauth if oauth is not None else (
-        {"client_id": os.environ["HF_OAUTH_CLIENT_ID"],
-         "client_secret": os.environ["HF_OAUTH_CLIENT_SECRET"],
-         "redirect_uri": os.environ["HF_OAUTH_REDIRECT_URI"]}
-        if os.environ.get("HF_OAUTH_CLIENT_ID") else {})
 
     def user(req: Request) -> str | None:
         return req.session.get("user")
@@ -174,6 +191,9 @@ def create_app(db_path: Path | None = None, hf: HFClient | None = None,
     @app.get("/login/dev")
     def login_dev(req: Request):
         if oauth or (req.client and req.client.host not in ("127.0.0.1", "::1", "testclient")):
+            raise HTTPException(404)
+        # a reverse proxy makes every visitor look local; forwarded requests never qualify
+        if any(h in req.headers for h in ("x-forwarded-for", "x-real-ip", "forwarded")):
             raise HTTPException(404)
         req.session["user"] = "local-dev"
         return RedirectResponse(return_path(req.session.pop("return_to", "/")), 302)

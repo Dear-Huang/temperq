@@ -148,3 +148,32 @@ def test_author_research_is_validated_and_escaped(tmp_path):
     for value in ("NaN", "Infinity", "1.1", "not-a-number"):
         assert c.post("/share", data=data | {"rank_ic": value}).status_code == 422
     assert c.post("/share", data=data | {"test_period": ""}).status_code == 422
+
+
+def test_dev_login_refused_behind_a_proxy(tmp_path):
+    _, c = client(tmp_path)
+    r = c.get("/login/dev", headers={"X-Forwarded-For": "203.0.113.9"}, follow_redirects=False)
+    assert r.status_code == 404
+    r = c.get("/login/dev", headers={"Forwarded": "for=203.0.113.9"}, follow_redirects=False)
+    assert r.status_code == 404
+
+
+def test_env_startup_requires_oauth_or_explicit_dev(tmp_path, monkeypatch):
+    for k in ("HF_OAUTH_CLIENT_ID", "HF_OAUTH_CLIENT_SECRET", "HF_OAUTH_REDIRECT_URI",
+              "QWB_SITE_DEV", "QWB_SITE_SECRET"):
+        monkeypatch.delenv(k, raising=False)
+    with pytest.raises(RuntimeError, match="HF OAuth"):
+        site.create_app(tmp_path / "a.db", FakeHF())
+    monkeypatch.setenv("QWB_SITE_DEV", "1")
+    site.create_app(tmp_path / "b.db", FakeHF())                       # local testing: allowed
+    monkeypatch.delenv("QWB_SITE_DEV")
+    monkeypatch.setenv("HF_OAUTH_CLIENT_ID", "a")
+    monkeypatch.setenv("HF_OAUTH_CLIENT_SECRET", "b")
+    monkeypatch.setenv("HF_OAUTH_REDIRECT_URI", "https://x/oauth/callback")
+    with pytest.raises(RuntimeError, match="QWB_SITE_SECRET"):
+        site.create_app(tmp_path / "c.db", FakeHF())
+    monkeypatch.setenv("QWB_SITE_SECRET", "s" * 40)
+    app = site.create_app(tmp_path / "d.db", FakeHF())
+    c = TestClient(app, base_url="https://testserver")
+    c.get("/api/site")
+    assert any(ck.secure for ck in c.cookies.jar)                      # HTTPS-only session cookie
