@@ -28,7 +28,7 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
-from . import daily, dataset, experiments, runconfig, scenario
+from . import daily, data_readiness, dataset, experiments, runconfig, scenario
 from .jobs import JobSpec, Store
 
 NAME_RE = re.compile(r"^[A-Za-z0-9_-]{1,40}$")
@@ -166,9 +166,7 @@ def register_folder(workdir: Path, path: str) -> str:
 
 def auto_years(snap: dict) -> tuple[int, list[int]]:
     """Test years from the data range: last two years (one if the data is short)."""
-    y0, y1 = int(str(snap["start"])[:4]), int(str(snap["end"])[:4])
-    final = [y1 - 1, y1] if y1 - y0 + 1 >= 5 else [y1]
-    return max(y0 + 1, final[0] - 3), final
+    return data_readiness.auto_years(snap)
 
 
 # ----------------------------------------------------------------- config
@@ -211,6 +209,9 @@ def build_config(form: dict, ds: dict[str, dict]) -> tuple[dict | None, str, lis
     if dsid not in ds:
         return None, "第 2 步：请选择数据", notes
     d = ds[dsid]
+    readiness = data_readiness.assess(d["snap"], horizon=horizon, synthetic=dsid == SYNTHETIC)
+    if readiness["blocked"]:
+        return None, "第 2 步：先补数据。\n" + "\n".join(readiness["messages"]), notes
     if universe in ("st", "all_ex_st") and not d["snap"].get("has_st", True):
         if universe == "st":
             return None, "这份数据没有 ST 标记，不能只做 ST 股。请换数据，或在 CSV 里加 is_st 列", notes
@@ -362,8 +363,8 @@ def verdict(m: dict) -> list[tuple[str, str]]:
             out.append(("warn", f"扣掉交易成本后还剩年化 {net['net_excess_ann']:+.1%}，但统计上不显著（t={nt:.1f}），"
                                 f"不能确定是真本事还是运气。成本吃掉了 {net['cost_ann']:.1%}/年。"))
         else:
-            out.append(("bad", f"扣掉交易成本后是亏的：年化净超额 {net['net_excess_ann']:+.1%}。"
-                               f"成本 {net['cost_ann']:.1%}/年 超过了模型带来的收益。"))
+            out.append(("bad", f"扣成本后未胜过基准：年化净超额 {net['net_excess_ann']:+.1%}，"
+                               f"估计成本 {net['cost_ann']:.1%}/年。净超额为负不等于账户绝对亏损。"))
     else:
         out.append(("warn", "没有做扣成本检验（缺 ashare-tcost），上面的 IC 不代表能赚钱。"))
     base = [k for k in m["ic"] if not k.startswith("lgbm") and k != mk]
@@ -507,6 +508,8 @@ def create_app(workdir: Path, task_dir: Path | None = None,
                        .replace("__PART__", str(scenario.PARTICIPATION))
         body = INDEX.format(
             token=token, step1=step1_html(), datasets=ds_html,
+            data_requirements=data_readiness.REQUIREMENTS,
+            data_check=data_readiness.render(data_readiness.assess(avail[sel_ds]["snap"], synthetic=sel_ds == SYNTHETIC)),
             name=f"model_{datetime.now():%m%d_%H%M}",
             rounds=D["num_boost_round"], leaves=D["lgbm"]["num_leaves"],
             lr=D["lgbm"]["learning_rate"], seeds=len(D["seeds"]), alpha=D["ridge_alpha"],
@@ -515,11 +518,28 @@ def create_app(workdir: Path, task_dir: Path | None = None,
             memwarn='<p class="warn">内存不足 8GB，全市场数据可能跑不动，可以先用试运行或少量股票的 CSV。</p>'
             if low_mem else "",
             jobs=_job_rows(store)) + script
+        body += '''<script>(function(){var box=document.getElementById('data-check'),seq=0;
+          function update(){var ds=document.querySelector('input[name="dataset"]:checked');
+            var hz=document.querySelector('input[name="horizon"]:checked');if(!ds)return;
+            var request=++seq;
+            fetch('/data-readiness?dataset_id='+encodeURIComponent(ds.value)+'&horizon='+(hz?hz.value:'5'))
+              .then(function(r){if(!r.ok)throw Error();return r.text()}).then(function(t){if(request===seq)box.innerHTML=t})
+              .catch(function(){if(request===seq)box.textContent='数据初检暂不可用，请重新打开页面；提交训练时仍会检查。'});}
+          document.querySelectorAll('input[name="dataset"],input[name="horizon"]').forEach(function(e){e.addEventListener('change',update)});
+        })();</script>'''
         model_links = ''.join(f'<li><a href="/workflow/{html.escape(x["run"])}">{html.escape(x["display"])}</a></li>'
                               for x in trained_models()[:6])
         if model_links:
             body += '<section class="data-section"><h2>已训练模型</h2><ul>' + model_links + '</ul><a href="/models">查看全部模型</a></section>'
         return page("训练模型", body)
+
+    @app.get("/data-readiness", response_class=HTMLResponse)
+    def data_check(dataset_id: str, horizon: int = 5):
+        avail = datasets(workdir)
+        if dataset_id not in avail or horizon not in scenario.HORIZONS:
+            raise HTTPException(400, "数据或持有期无效")
+        return HTMLResponse(data_readiness.render(data_readiness.assess(
+            avail[dataset_id]["snap"], horizon=horizon, synthetic=dataset_id == SYNTHETIC)))
 
     @app.get("/template.csv")
     def template():
@@ -566,7 +586,8 @@ def create_app(workdir: Path, task_dir: Path | None = None,
                                 f'<p>{snap["start"]} 至 {snap["end"]}，{snap["trading_days"]} 个交易日，'
                                 f'{snap["codes"]} 只股票，{snap["rows"]:,} 行。</p>'
                                 + (f"<p>提示：</p><ul>{notes}</ul>" if notes else "") +
-                                f'</div><p><a class="btn" href="/?ds={html.escape(name)}#step3">'
+                                f'</div>' + data_readiness.render(data_readiness.assess(snap)) +
+                                f'<p><a class="btn" href="/?ds={html.escape(name)}#step2">'
                                 f'用这份数据继续 →</a></p>')
 
     @app.get("/data/{dsid}", response_class=HTMLResponse)
@@ -962,7 +983,7 @@ def create_app(workdir: Path, task_dir: Path | None = None,
             label, tone = ("试运行", "pending") if synth else (summary["label"], summary["tone"])
             name = html.escape(x["run"])
             net_txt = "仅演示" if synth else "未计算" if not net else f"{net['net_excess_ann']:+.1%}"
-            note = "合成数据，无投资含义" if synth else "未通过检验" if not ok else "历史诊断，不代表实盘认证"
+            note = "合成数据，无投资含义" if synth else summary["message"]
             net_t = "" if synth or not net else f't={net["net_excess_t"]:.2f}'
             cards.append(f'<article class="account-card model-result" data-model-card><div class="card-heading">'
                 f'<span class="scope-label">{html.escape(x["meta"]["model"])}</span><span class="status-badge {tone}">{label}</span></div>'
@@ -1321,7 +1342,9 @@ INDEX = """
 </section>
 
 <section class="step" id="step2"><h2><span class="num">2</span>用什么数据</h2>
+{data_requirements}
 {datasets}
+<div id="data-check" aria-live="polite">{data_check}</div>
 <p class="mut">还没有数据？用下面任意一种方式添加，添加后会出现在上面的列表里。
 一份数据还可以叠加多个来源（本地 CSV 和 API 混用）：点数据后面的“加更多数据来源”。</p>
 </section>
@@ -1331,7 +1354,7 @@ INDEX = """
 <details><summary>添加数据 · 方式 A：上传 CSV 文件</summary><div class="sub">
 <p>每行是一只股票一天的数据。必填列：<code>code 代码</code> <code>date 日期</code> <code>open 开盘</code>
 <code>high 最高</code> <code>low 最低</code> <code>close 收盘</code> <code>amount 成交额（元）</code>；
-选填：<code>adj_factor 复权因子</code> <code>is_st 是否ST（0/1）</code>。至少 3 年。
+建议提供：<code>adj_factor 复权因子</code> <code>is_st 是否ST（0/1）</code>。导入至少跨 3 个年份；训练建议约 3 整年，推荐 5–8 年。
 <a href="/template.csv">下载模板</a></p>
 <form method="post" action="/data/csv" enctype="multipart/form-data">
 <input type="hidden" name="token" value="{token}">

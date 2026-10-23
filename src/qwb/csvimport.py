@@ -19,7 +19,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from . import rules
+from . import data_readiness, rules
 from .connectors import cn_a
 from .formats import validate_frame
 
@@ -153,6 +153,7 @@ def import_csv(src, data_root: Path, name: str, original_name: str = "upload.csv
             "end": bars["date"].max(), "trading_days": int(bars["date"].nunique()),
             "codes": int(bars["code"].nunique()), "rows": int(len(bars)),
             "has_st": st is not None, "notes": notes,
+            "readiness": data_readiness.csv_profile(bars, df.columns),
             "warnings": [str(i) for i in rep.issues if i.level != "ERROR"]}
     (dest / "snapshot.json").write_text(json.dumps(snap, ensure_ascii=False, indent=2),
                                         encoding="utf-8")

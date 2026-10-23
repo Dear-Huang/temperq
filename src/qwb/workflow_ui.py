@@ -43,11 +43,43 @@ def evaluation_summary(workdir, source):
 
 def score_summary(score):
     ev = score.get("evaluation") or {}
+    if score.get("status") != "COMPLETED" or ev.get("comparable") is not True:
+        return {"label": "评价输入不合格", "tone": "blocked", "ready": False,
+                "message": "先修复数据、预测覆盖或训练记录，当前结果不能判断模型好坏。"}
     ready = (score.get("status") == "COMPLETED" and ev.get("comparable") is True and
              score.get("readiness", {}).get("level") == "SIGNAL_RESEARCH_CANDIDATE")
+    candidate = ev.get("models", {}).get("candidate", {})
+    if candidate.get("ci95") is None and candidate.get("ci_reason") == "insufficient_dates_or_valid_blocks":
+        message = f'有效检验日期不足（当前 {candidate.get("n", 0)} 日），无法计算可靠区间；请补充独立日期，不要只增加股票行数或重复调参。'
+    else:
+        message = "尚未确认稳定有效；可调参重训，或仅用纸面账户继续观察。"
     return {"label": "可进入纸面验证" if ready else "证据不足", "tone": "active" if ready else "pending",
             "ready": ready, "message": "历史信号达到研究门槛，下一步观察纸面账户。" if ready else
-            "尚未确认稳定有效；可调参重训，或仅用纸面账户继续观察。"}
+            message}
+
+
+def reason_panel(score):
+    """Separate signal, costs and data problems without implying a live certification."""
+    ev = score.get("evaluation") or {}
+    gates = {gate["id"]: gate for gate in score.get("readiness", {}).get("gates", [])}
+    labels = {"PASS": "达到当前门槛", "FAIL": "未达到门槛", "INCONCLUSIVE": "证据不足",
+              "NOT_EVALUATED": "尚未检验", "INVALID": "输入不合格"}
+    rows = []
+    for key, title, meaning in (
+        ("comparable_input", "数据与记录", "缺预测、时点或训练记录时先修输入，不算模型失效。"),
+        ("positive_signal", "预测能力", "看排序信号及区间；不显著不等于已经证明无效。"),
+        ("net_account", "扣成本超额", "看是否优于基准；未胜过基准不等于账户绝对亏损。"),
+    ):
+        if key in gates:
+            rows.append(f'<tr><td>{title}</td><td>{labels.get(gates[key]["status"], "待确认")}</td><td>{meaning}</td></tr>')
+    detail = ''
+    candidate = ev.get("models", {}).get("candidate", {})
+    if candidate.get("n") is not None:
+        detail += f'<p>本次有效预测检验日期：{esc(candidate["n"])} 日。更多股票不能替代更多独立日期。</p>'
+    if score.get("status") != "COMPLETED":
+        detail += '<p class="warn">评价未完成。请先检查数据范围、字段和冻结协议；不据此给模型判好坏。</p>'
+    return (('<div class="tw"><table><tr><th>检查内容</th><th>状态</th><th>怎么理解</th></tr>' +
+             ''.join(rows) + '</table></div>') if rows else '') + detail
 
 
 def register(app, workdir, *, page, guard, token, locate, submit):
@@ -104,6 +136,8 @@ def register(app, workdir, *, page, guard, token, locate, submit):
                      f'<input type="hidden" name="token" value="{token}"><button name="restore" value="yes">恢复模型</button></form>')
         body += (f'<section class="data-section"><h2>下一步：评价模型</h2><p>{esc(summary["message"])}</p>'
                  '<p class="mut">评价通过仅表示可开始纸面验证，不是实盘准入或收益承诺。</p>')
+        if summary.get("score"):
+            body += reason_panel(summary["score"])
         if summary.get("evaluation_id"):
             body += f'<p><a class="btn" href="/evaluations/{summary["evaluation_id"]}">查看基准结果</a></p>'
         protocols = available_protocols(meta)
