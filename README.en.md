@@ -95,6 +95,7 @@ Documentation is currently in Chinese:
 
 - [User manual](docs/使用手册.md): installation, training, reading reports, paper trading, data
 - [Product vision](docs/PRODUCT_VISION.md): why start from holdings
+- [Why this design](docs/WHY_THIS_DESIGN.md): what we measured about end-to-end learning, and why signal, governance and ledger are separate
 - [Common pitfalls](docs/PITFALLS.md): look-ahead, overnight gaps, treating IC as return
 - [Development](docs/DEVELOPMENT.md): structure, tests, website and deployment
 

@@ -95,6 +95,7 @@ TemperQ 不提供行情数据，你需要自备获得授权的数据。三种方
 
 - [使用手册](docs/使用手册.md)：安装、训练、读报告、纸面交易、数据准备
 - [产品理念](docs/PRODUCT_VISION.md)：为什么从持仓出发
+- [为什么这样设计](docs/WHY_THIS_DESIGN.md)：端到端测过什么，为什么分信号、治理、账本三层
 - [常见陷阱](docs/PITFALLS.md)：前视、隔夜跳空、把 IC 当收益等
 - [开发说明](docs/DEVELOPMENT.md)：项目结构、测试、网站与部署
 
