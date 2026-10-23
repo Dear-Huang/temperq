@@ -1,0 +1,162 @@
+{
+  "model": "lightgbm",
+  "files": [
+    "lgbm_seed0.txt"
+  ],
+  "features": [
+    "r1",
+    "r5",
+    "r20",
+    "r60",
+    "vol20",
+    "amt20",
+    "amt_ratio",
+    "gap",
+    "range",
+    "to_limit"
+  ],
+  "train_end": "2026-10-14",
+  "n_train": 50800,
+  "max_label_end": "2026-10-22 01:30:00+00:00",
+  "selection": [],
+  "cfg": {
+    "universe": "all_ex_st",
+    "min_age_days": 60,
+    "min_amount_quantile": 0.05,
+    "label_transform": "rank",
+    "first_test_year": 2022,
+    "final_test_years": [
+      2025,
+      2026
+    ],
+    "seeds": [
+      0
+    ],
+    "lgbm": {
+      "objective": "regression",
+      "learning_rate": 0.05,
+      "num_leaves": 63,
+      "min_data_in_leaf": 1000,
+      "feature_fraction": 0.8,
+      "bagging_fraction": 0.8,
+      "bagging_freq": 1,
+      "lambda_l2": 1.0,
+      "num_threads": 8,
+      "deterministic": true,
+      "force_row_wise": true,
+      "verbose": -1
+    },
+    "num_boost_round": 80,
+    "ridge_alpha": 1.0,
+    "shuffle_null_draws": 20,
+    "portfolio": {
+      "top": 0.1,
+      "commission_bp": 3.0,
+      "n_hold": 10
+    },
+    "min_adv_yuan": 600000
+  },
+  "card": {
+    "name": "cn_rank_5d",
+    "market": "cn_a",
+    "template": "daily",
+    "target": {
+      "type": "return_rank",
+      "horizon_days": 5
+    },
+    "timing": {
+      "signal_available": {
+        "day": 0,
+        "time": "15:00"
+      },
+      "decision": {
+        "day": 0,
+        "time": "15:30"
+      },
+      "execution": {
+        "day": 1,
+        "time": "09:30",
+        "price": "open"
+      }
+    },
+    "label": {
+      "start": {
+        "day": 1,
+        "time": "09:30",
+        "price": "open"
+      },
+      "end": {
+        "day": 6,
+        "time": "09:30",
+        "price": "open"
+      }
+    },
+    "output": "score",
+    "metrics": [
+      "rank_ic"
+    ],
+    "acceptance": {
+      "confirmatory": {
+        "metric": "rank_ic_mean"
+      },
+      "go": "rank_ic_mean > 0 with NW t > 2 on the final test years, and above every baseline",
+      "no_go": "NW t < 2 or not above the best simple baseline"
+    }
+  },
+  "data": {
+    "source": "snapshot",
+    "dir": "data/free_daily"
+  },
+  "snapshot_id": "sha256:18f6f3d6c9162850db56d03ddb469bd6bd6a90706b6ed4bb33b4c1a94a8618b0",
+  "data_end": "2026-10-22",
+  "run": "public40_lgbm_v1",
+  "run_id": "d03458b0cabb4bc9bc6be67d67452a95",
+  "experiment_id": "sha256:a53bfde0f5449beeb52c481f495a316afccca253e60c291d7198ff784ff38f34",
+  "code_hash": "sha256:c2479b71ffc39a2a5459fc5e5ccd006c2a5a95eb41eeca487a8e1a8f5d486d39",
+  "model_version": "sha256:c4343cf948e3f5d1f094b6f2dbfa72607c6e1171f77a807dfe98273e65c491b8",
+  "prediction_version": "sha256:ab919742851c91a12325fb87925dfdfe9a4e44c2f7b8049a0bc92c04577c8fbb",
+  "data_content_hash": "sha256:44d62354a6f124e323f665c5e0018c9f864c1dfa365d41a36ef729e46ff4251f",
+  "starter_universe": [
+    "000001.SZ",
+    "000002.SZ",
+    "000063.SZ",
+    "000100.SZ",
+    "000333.SZ",
+    "000338.SZ",
+    "000568.SZ",
+    "000625.SZ",
+    "000651.SZ",
+    "000725.SZ",
+    "000768.SZ",
+    "000858.SZ",
+    "002027.SZ",
+    "002050.SZ",
+    "002142.SZ",
+    "002230.SZ",
+    "002352.SZ",
+    "002415.SZ",
+    "002475.SZ",
+    "600000.SH",
+    "600009.SH",
+    "600016.SH",
+    "600019.SH",
+    "600028.SH",
+    "600030.SH",
+    "600036.SH",
+    "600048.SH",
+    "600050.SH",
+    "600104.SH",
+    "600276.SH",
+    "600309.SH",
+    "600519.SH",
+    "600887.SH",
+    "600900.SH",
+    "601088.SH",
+    "601166.SH",
+    "601318.SH",
+    "601398.SH",
+    "601857.SH",
+    "601988.SH"
+  ],
+  "starter_id": "public40_lgbm_v1"
+}

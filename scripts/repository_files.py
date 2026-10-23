@@ -5,7 +5,7 @@ import subprocess
 from pathlib import Path, PurePosixPath
 
 ROOT = Path(__file__).resolve().parents[1]
-PRIVATE_ROOTS = {"archives", "artifacts", "tools", "data", "runs", "models", "backups", "前期经验"}
+PRIVATE_ROOTS = {"archives", "artifacts", "tools", "data", "runs", "models", "backups", "前期经验", "signals", "policy_templates"}
 PRIVATE_PARTS = {".git", ".venv", "__pycache__", ".pytest_cache", "node_modules",
                  "dist", "test-results", "playwright-report"}
 

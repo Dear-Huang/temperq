@@ -493,7 +493,7 @@ def create_app(workdir: Path, task_dir: Path | None = None,
 
     # ---------------------------------------------------------------- pages
     @app.get("/", response_class=HTMLResponse)
-    def index(ds: str = ""):
+    def index(ds: str = "", next_signal: str = ""):
         avail = datasets(workdir)
         sel_ds = ds if ds in avail else (next((k for k in avail if k != SYNTHETIC), SYNTHETIC))
         ds_html = "".join(
@@ -521,6 +521,10 @@ def create_app(workdir: Path, task_dir: Path | None = None,
             memwarn='<p class="warn">内存不足 8GB，全市场数据可能跑不动，可以先用试运行或少量股票的 CSV。</p>'
             if low_mem else "",
             jobs=_job_rows(store)) + script
+        from . import starter_models
+        if next_signal in {'starter_'+key for key in starter_models.catalog()}:
+            body=body.replace('<form method="post" action="/data/free">',
+                '<form method="post" action="/data/free"><input type="hidden" name="next_signal" value="'+html.escape(next_signal,quote=True)+'">')
         body += '''<script>(function(){var box=document.getElementById('data-check'),seq=0;
           function update(){var ds=document.querySelector('input[name="dataset"]:checked');
             var hz=document.querySelector('input[name="horizon"]:checked');if(!ds)return;
@@ -760,8 +764,12 @@ def create_app(workdir: Path, task_dir: Path | None = None,
                 raise ValueError("入门训练请至少下载 3 年日线，建议保留默认的 2021 年起始日期")
         except ValueError as exc:
             return oops(str(exc))
+        from . import starter_models
+        next_signal=str(form.get('next_signal',''))
+        if next_signal not in {'starter_'+key for key in starter_models.catalog()}:next_signal=''
         jid = submit("fetch", {"action": "free_data", "name": name, "start": start, "end": end,
-                               "ui": {"name": "免费日线 · 40 股入门数据", "what": "free_data", "dataset": name}})
+                               "ui": {"name": "免费日线 · 40 股入门数据", "what": "free_data", "dataset": name,
+                                      "next_signal":next_signal}})
         return RedirectResponse(f"/job/{jid}", 303)
 
     @app.post("/data/tushare")
@@ -874,8 +882,14 @@ def create_app(workdir: Path, task_dir: Path | None = None,
             if what == "free_data":
                 parts.append('<p>这是今天选定的 40 股入门样本，用于走通训练流程；'
                              '不能代表全市场表现，也不能用它证明未来收益。</p>')
-            parts.append(f'<p><a class="btn" href="/?ds={html.escape(ui.get("dataset", ""))}#step3">'
-                         '用这份数据继续 →</a></p>')
+            from . import starter_models
+            next_signal=ui.get('next_signal','')
+            if what=='free_data' and next_signal in {'starter_'+key for key in starter_models.catalog()}:
+                parts.append(f'<p><a class="btn" href="/strategies/new?source={html.escape(next_signal)}&amp;dataset=free_daily">'
+                             '数据已准备，继续配置政策 →</a></p>')
+            else:
+                parts.append(f'<p><a class="btn" href="/?ds={html.escape(ui.get("dataset", ""))}#step3">'
+                             '用这份数据继续 →</a></p>')
         parts.append(f'<details{" open" if st["state"] == "failed" else ""}><summary>运行日志</summary>'
                      f'<pre class="plain">{html.escape(log_txt) or "（暂无）"}</pre></details>')
         return page(name, "\n".join(parts), refresh=running)
@@ -1212,6 +1226,8 @@ def create_app(workdir: Path, task_dir: Path | None = None,
     from . import strategy_workspace_ui
     strategy_workspace_ui.register(app,workdir,page=page,guard=guard,token=token,locate=_run_dir,submit=submit,datasets=datasets)
     experience_ui.register(app, workdir, page=page, datasets=datasets)
+    from . import external_signals_ui
+    external_signals_ui.register(app,workdir,page=page,guard=guard,token=token)
     app.state.token = token
     app.state.store = store
     return app

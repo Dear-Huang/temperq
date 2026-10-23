@@ -2,3 +2,5 @@
 *.bat text eol=crlf
 *.ps1 text eol=crlf
 *.parquet binary
+# Distribution manifests hash exact bytes; checkouts must not convert newlines.
+src/qwb/bundled/** -text

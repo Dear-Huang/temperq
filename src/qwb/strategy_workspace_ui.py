@@ -9,7 +9,7 @@ import pandas as pd
 from fastapi import HTTPException, Request
 from fastapi.responses import RedirectResponse, Response, JSONResponse
 
-from . import experiments as ex, policy, strategy, strategy_workspace as ws, experience_ui
+from . import experiments as ex, policy, strategy, strategy_workspace as ws, experience_ui, starter_models, external_signals, policy_templates
 from .governance_ui import REASONS
 from .strategy_ui import reason_text
 
@@ -19,6 +19,15 @@ def esc(value):
 
 
 def register(app, workdir, *, page, guard, token, locate, submit, datasets):
+    training_locate=locate
+    def locate(source):
+        if source.startswith('starter_'):
+            if source not in {'starter_'+key for key in starter_models.catalog()}:raise ValueError('未知入门模型')
+            root=workdir/'runs'/source;starter_models.verify(root);return root
+        if source.startswith('external_'):
+            if not ex.ID_RE.fullmatch(source.removeprefix('external_')):raise ValueError('外部信号编号无效')
+            root=workdir/'runs'/source;external_signals.validate_meta(ex.read(root/'final_model/meta.json'));return root
+        return training_locate(source)
     def hidden():
         return f'<input type="hidden" name="token" value="{token}">'
 
@@ -54,32 +63,60 @@ def register(app, workdir, *, page, guard, token, locate, submit, datasets):
         return page("我的策略",body)
 
     @app.get("/strategies/new")
-    def new(source:str="",dataset:str=""):
+    def new(source:str="",dataset:str="",template:str=""):
+        if template:
+            try:policy_templates.read(workdir,template)
+            except (ValueError,OSError,KeyError) as exc:return error(exc)
         sources=experience_ui.signal_options(workdir)
-        options=''.join(f'<option value="{esc(candidate)}" {"selected" if candidate==source else ""}>{esc(candidate)} · {esc(meta["model"])} · 训练截止 {esc(meta["data_end"])}</option>' for candidate,meta in sources.items())
+        options=''.join(f'<option value="{esc(candidate)}" {"selected" if candidate==source else ""}>{esc(candidate)} · {esc(meta["model"])} · 数据/预测截止 {esc(meta["data_end"])}</option>' for candidate,meta in sources.items())
         available={k:v for k,v in datasets(workdir).items() if k!="_trial"}
         data_options=''.join(f'<option value="{esc(k)}" {"selected" if k==dataset else ""}>{esc(k)}'+(f' · {esc(v["snap"]["start"])} 至 {esc(v["snap"]["end"])}' if "snap" in v else '')+'</option>' for k,v in available.items())
-        body=header(1)+'<h1>先选给股票排名的模型</h1><p>信号负责打分，下一步才决定怎么买。这里使用已有训练模型的存档预测检验历史，用冻结模型处理启用后的新行情。</p>'
+        body=header(1)+'<h1>先选给股票排名的模型</h1><p>信号负责打分，下一步才决定怎么买。用存档预测检验历史；启用后，本地模型处理新行情，外部信号读取新追加的预测。</p><p><a href="/signals/import">我在别处训练：导入外部预测 →</a> · <a href="/policy-templates">导入别人分享的政策模板</a></p>'
+        if template:body+='<p class="box">已载入分享模板。先选自己的信号和行情，下一步会显示模板规则；模板不包含账户或成绩。</p>'
         if not sources or not available:
             missing='兼容的五日模型' if not sources else '持续行情数据源'
-            body+=f'<section class="policy-next"><h2>先准备{missing}</h2><p>当前没有可用的{missing}，不用在空列表里继续尝试。</p><a class="btn primary" href="/{"#free-data" if not available else ""}">{"准备数据并训练" if not available else "训练一个五日模型"}</a> <a href="/models">查看已有模型</a></section>'
-        body+='<details><summary>哪些模型可以继续？</summary><p>当前支持平台训练的 LightGBM / Ridge 五日模型。其他期限的模型仍可研究，但暂不进入每日纸面闭环。官方预训练模型和外部预测专用接入向导尚未发布。</p></details>'
+            starter_selected=source in {'starter_'+key for key in starter_models.catalog()}
+            href='/?next_signal='+source+'#free-data' if not available and starter_selected else '/'+('#free-data' if not available else '')
+            action='准备行情，继续使用已选模型' if not available and starter_selected else ('准备数据并训练' if not available else '训练一个五日模型')
+            body+=f'<section class="policy-next"><h2>先准备{missing}</h2><p>当前没有可用的{missing}，不用在空列表里继续尝试。</p><a class="btn primary" href="{esc(href)}">{action}</a> <a href="/models">查看已有模型</a></section>'
+        for key,card in starter_models.catalog().items():
+            body+=f'<section class="box"><h2>{esc(card["name"])}</h2><p>无需先训练。公开日线 {esc(card["data_start"])} 至 {esc(card["data_end"])}，声明的 40 股；这是入门范式，不代表全市场或收益优势。权重和存档预测随包提供，行情另行下载。</p><form action="/strategies/starter" method="post">'+hidden()+f'<input type="hidden" name="model_id" value="{esc(key)}"><button>使用入门模型</button></form><a href="/starter-models/{esc(key)}.json">数据来源、版本与复现配方</a></section>'
+        body+='<details><summary>哪些模型可以继续？</summary><p>当前支持平台训练或随包提供的 LightGBM / Ridge 五日模型。其他期限的模型仍可研究，但暂不进入每日纸面闭环。</p></details>'
         body+='<form action="/strategies/configure" method="get">'
+        if template:body+=f'<input type="hidden" name="template" value="{template}">'
         body+=f'<label class="f">信号来源<select name="source" required {"disabled" if not sources else ""}>{options or "<option>还没有兼容模型</option>"}</select></label>'
         body+=f'<label class="f">持续更新的数据源<select name="dataset" required {"disabled" if not available else ""}>{data_options or "<option>还没有行情数据</option>"}</select></label>'
         body+=f'<button {"disabled" if not sources or not available else ""}>下一步：配置政策</button></form>'
         body+='<div class="experience-help"><p><b>为什么选两项？</b>模型负责“怎么打分”，数据源负责“每天用什么新信息”。</p><p><b>接下来</b>选政策模板，再填写资金和持仓；选择模型不会立即买卖。</p></div>'
         return page("选择信号",body)
 
-    def editor(source,dataset,previous=None):
+    @app.get('/starter-models/{model_id}.json')
+    def starter_card(model_id:str):
+        if model_id not in starter_models.catalog():raise HTTPException(404)
+        return JSONResponse(starter_models.catalog()[model_id])
+
+    @app.post('/strategies/starter')
+    async def starter(req:Request):
+        form=await req.form();guard(req,form.get('token'))
+        try:
+            source=starter_models.install(workdir,str(form['model_id']))
+            return RedirectResponse('/strategies/new?source='+source.name+'&dataset=free_daily',303)
+        except (ValueError,OSError,KeyError) as exc:return error(exc)
+
+    def editor(source,dataset,previous=None,template=""):
         old=previous["spec"] if previous else None
         capital=ws.capital_context(ws.location(workdir,old["sid"])/"versions"/old["vid"] if old else locate(source),
             old["data_feed"] if old else datasets(workdir)[dataset]["path"],
             old["cash"] if old else 100000,old["holdings"] if old else [])
         resolved=old["resolved"] if old else policy.resolve("direct",capital=capital)
+        if template:
+            imported,origin=policy_templates.read(workdir,template)
+            resolved=policy.resolve(imported['preset'],imported['policy']['parameters'],imported['policy']['mode'],
+                capital=capital,cost_model=imported['policy']['cost_model'])
         chosen=resolved["policy"]; values=chosen["parameters"]
         body=header(2)+'<h1>你来定怎么使用排名</h1><p>先选预设、填可用现金；高级设置只在需要时展开。每五个交易日决策，下一开市日开盘模拟执行。</p>'
         body+='<form method="post" action="/strategies" enctype="multipart/form-data">'+hidden()
+        if template:body+=f'<input type="hidden" name="policy_template" value="{template}"><p class="box">正在使用导入的完整规则；模板参数按用户明确选择保留，资金变化不会自动覆盖。可微调，或恢复预设以重新采用资金默认值。</p>'
         body+=f'<input type="hidden" name="source" value="{esc(source)}"><input type="hidden" name="dataset" value="{esc(dataset)}">'
         if old:body+=f'<input type="hidden" name="sid" value="{old["sid"]}"><input type="hidden" name="parent" value="{old["vid"]}">'
         body+=f'<label class="f">策略名称<input name="name" maxlength="80" value="{esc(old["name"] if old else "我的策略")}" required></label>'
@@ -94,6 +131,9 @@ def register(app, workdir, *, page, guard, token, locate, submit, datasets):
         body+='<label class="f">风险控制<select name="mode" id="policy-mode">'+''.join(
             f'<option value="{k}" {"selected" if k==chosen["mode"] else ""}>{v}</option>' for k,v in
             (("fixed","固定仓位"),("ewma","EWMA 波动目标"),("ml","ML 风险辅助 · 实验")))+'</select></label>'
+        body+='<label class="f">成本口径<select name="cost_model" id="policy-cost-model">'+''.join(
+            f'<option value="{key}" {"selected" if key==chosen.get("cost_model","commission_only") else ""}>{label}</option>' for key,label in
+            (("struct_v1","STRUCT 上月半价差估计 + 佣金税费"),("commission_only","仅佣金税费 + 自填压力 · 成本不完整")))+'</select></label><p class="mut">STRUCT 默认系数拟合于 2021–2023；更早历史的结果属于事后成本估计。它估计报价价差，不是实际冲击成本；自填滑点作为额外压力相加。</p>'
         ui_schema=policy.schema()
         definition=next(v for v in ui_schema["$defs"].values() if "n_hold" in v.get("properties",{}))
         groups=(("选股与保留",("n_hold","hold_until_rank")),("仓位与现金",("max_weight","exposure_cap","cash_floor")),("风险与调整",("adjustment_speed","target_volatility")),("实际费用与压力",("commission_bp","minimum_commission","slippage_bp")))
@@ -119,10 +159,10 @@ def register(app, workdir, *, page, guard, token, locate, submit, datasets):
         return page("配置政策",body)
 
     @app.get("/strategies/configure")
-    def configure(source:str,dataset:str):
+    def configure(source:str,dataset:str,template:str=""):
         try:
             locate(source);datasets(workdir)[dataset]
-            return editor(source,dataset)
+            return editor(source,dataset,template=template)
         except (ValueError,OSError,KeyError) as exc:return error(exc)
 
     @app.get("/strategies/{sid}/{vid}/edit")
@@ -164,7 +204,9 @@ def register(app, workdir, *, page, guard, token, locate, submit, datasets):
                 x=int(form[k]) if type(v) is int else float(form[k])
                 if explicit is None or k in explicit:overrides[k]=x
             sid,vid=ws.create(workdir,source,feed,name=str(form["name"]),cash=float(form["cash"]),
-                preset=preset,overrides=overrides,mode=str(form["mode"]),holdings=holdings,sid=sid)
+                preset=preset,overrides=overrides,mode=str(form["mode"]),holdings=holdings,sid=sid,
+                cost_model=str(form.get("cost_model","struct_v1")),
+                template_origin=policy_templates.read(workdir,str(form['policy_template']))[1] if form.get('policy_template') else None)
             return RedirectResponse(f"/strategies/{sid}/{vid}",303)
         except (ValueError,OSError,KeyError) as exc:return error(exc)
 
@@ -206,13 +248,14 @@ def register(app, workdir, *, page, guard, token, locate, submit, datasets):
             arms=[ex.read(dirs[-1]/(k+".json")) for k,_ in labels]
             values=[[row["equity"]/arm["path"][0]["equity"] for row in arm["path"]] for arm in arms]
             lo,hi=min(min(v) for v in values),max(max(v) for v in values);span=max(hi-lo,.001)
+            plot_hi=lo+span;precision=4 if span<.01 else 3
             lines=''
             for v,color in zip(values,("#2984dd","#8c929c","#d68124")):
                 points=' '.join(f'{30+i*880/max(1,len(v)-1):.2f},{210-(x-lo)*180/span:.2f}' for i,x in enumerate(v))
                 lines+=f'<polyline points="{points}" fill="none" stroke="{color}" stroke-width="2"/>'
             axes=''.join(f'<line x1="30" x2="910" y1="{y}" y2="{y}" stroke="#8c929c" opacity=".2"/>'
-                f'<text x="32" y="{y-5}" fill="#737d8b" font-size="12">{value:.3f}</text>'
-                for value,y in ((lo,210),((hi+lo)/2,120),(hi,30)))
+                f'<text x="32" y="{y-5}" fill="#737d8b" font-size="12">{value:.{precision}f}</text>'
+                for value,y in ((lo,210),((plot_hi+lo)/2,120),(plot_hi,30)))
             axes+=f'<text x="30" y="235" fill="#737d8b" font-size="12">{esc(latest["start"])}</text><text x="910" y="235" text-anchor="end" fill="#737d8b" font-size="12">{esc(latest["end"])}</text>'
             body+='<svg class="policy-chart" viewBox="0 0 940 250" role="img" aria-label="历史归一净值对照">'+axes+lines+'</svg>'
             body+='<div class="tw"><table><tr><th>政策</th><th>收益</th><th>最大回撤</th><th>平均实际仓位</th><th>已计费用（元）</th><th>交易额 / 权益累计</th></tr>'
@@ -247,6 +290,9 @@ def register(app, workdir, *, page, guard, token, locate, submit, datasets):
             counts={scope:sum(r["scope"]==scope for r in records) for scope in ("forward_paper","late_reconstruction","historical_replay")}
             body+='<h2 id="running">日常运行</h2>'+f'<p>启用日 {esc(runtime["start_date"])} · 按时纸面记录 {counts["forward_paper"]} 天 · 迟到重建 {counts["late_reconstruction"]} 天 · 历史演示 {counts["historical_replay"]} 天</p>'
             body+='<p>自动检查只在工作台开启时运行，17:30 后每天尝试一次。BaoStock 数据源先下载并校验完整行情，成功后再记账；失败显示受阻，可手动重试。CSV 等外部行情仍须自行更新，不会被替换。建议清单是纸面目标，不是实盘订单。</p>'
+            if spec['signal'].get('kind')=='external_scores':
+                external=ex.read(ws.location(workdir,sid)/'versions'/vid/'final_model/meta.json')
+                body+=f'<p><a href="/signals/{esc(external["run_id"])}">追加外部预测</a>，然后检查并记账；缺失信号不会用昨日排名代替。源端生成时刻为自报，首次接收时刻由本平台记录。</p>'
             body+=f'<form method="post" action="{base}/tick">'+hidden()+'<button>检查新行情并记账</button></form>'
             body+=f'<form method="post" action="{base}/automation">'+hidden()+f'<input type="hidden" name="enabled" value="{"no" if runtime["enabled"] else "yes"}"><button class="secondary">{"关闭" if runtime["enabled"] else "开启"}每日检查</button></form>'
             if records:
@@ -257,10 +303,12 @@ def register(app, workdir, *, page, guard, token, locate, submit, datasets):
                 pending=next((r["decision"] for r in reversed(records) if r.get("decision")),None)
                 if pending:body+=f'<p>最近建议日 {esc(pending["date"])} → 计划执行日 {esc(pending["execution_date"])} · 目标股票仓位 {pending["target_exposure"]:.1%}。详见决策回放。</p>'
         body+=f'<p><a href="{base}/decisions">逐日决策与成交</a> · <a href="{base}/config.json">导出冻结配置</a> · <a href="{base}/records.csv">导出运行记录 CSV</a></p>'
+        body+=f'<details><summary>把这套规则分享给别人</summary><p>分享模板只包含政策参数、期限和版本，不含现金、持仓、账户路径、模型文件或成绩。对方须使用自己的信号和账户重新检验。</p><a href="{base}/policy-template.json">下载可分享政策模板</a> · <a href="/policy-templates">导入政策模板</a></details>'
         body+='<details><summary>实际生效值、修改与来源</summary><p>以下冻结配置同时用于检验和运行。固定模式的 target_volatility 不生效。</p>'
         body+=f'<pre class="plain">{esc(json.dumps(spec["resolved"],ensure_ascii=False,indent=2))}</pre>'
         body+=f'<p>配置哈希 <code>{esc(spec["spec_hash"])}</code></p></details>'
-        body+='<p class="mut">未独立认证上游无前视；已计佣金、按日印花税与自填滑点压力，未标定价差与冲击。公司行动尚不支持。</p>'
+        cost_name='STRUCT 上月报价半价差估计、佣金、按日印花税及额外滑点压力' if spec['resolved']['policy'].get('cost_model')=='struct_v1' else '佣金、按日印花税及自填滑点压力（未计报价价差）'
+        body+=f'<p class="mut">本版本成本：{cost_name}。未独立认证上游无前视，未标定实际成交冲击，公司行动尚不支持。STRUCT 的默认系数拟合于 2021–2023，更早历史仅为事后成本估计。</p>'
         return page(spec["name"],body)
 
     @app.post("/strategies/{sid}/{vid}/{action}")
@@ -287,6 +335,24 @@ def register(app, workdir, *, page, guard, token, locate, submit, datasets):
     def download(sid:str,vid:str):
         return Response(json.dumps(get(sid,vid)["spec"],ensure_ascii=False,indent=2),media_type="application/json",
                         headers={"Content-Disposition":"attachment; filename=strategy-config.json"})
+
+    @app.get('/strategies/{sid}/{vid}/policy-template.json')
+    def share_template(sid:str,vid:str):
+        return Response(json.dumps(policy_templates.export(get(sid,vid)['spec']),ensure_ascii=False,indent=2),
+            media_type='application/json',headers={'Content-Disposition':'attachment; filename=policy-template.json'})
+
+    @app.get('/policy-templates')
+    def templates():
+        body='<h1>复用一套政策规则</h1><p>导入 JSON 模板后，选择自己的信号、资金和持仓。模板不带收益保证，必须重新检验。</p><form method="post" action="/policy-templates/import" enctype="multipart/form-data">'+hidden()+'<label class="f">政策模板 JSON<input type="file" name="template" accept=".json" required></label><button>校验模板，选择我的信号</button></form>'
+        return page('政策模板',body)
+
+    @app.post('/policy-templates/import')
+    async def import_template(req:Request):
+        form=await req.form();guard(req,form.get('token'))
+        try:
+            sid=policy_templates.install(workdir,await form['template'].read(64001))
+            return RedirectResponse('/strategies/new?template='+sid,303)
+        except (ValueError,OSError,KeyError) as exc:return error(exc)
 
     @app.get("/strategies/{sid}/{vid}/records.csv")
     def csv(sid:str,vid:str):
@@ -321,7 +387,9 @@ def register(app, workdir, *, page, guard, token, locate, submit, datasets):
             done=[f for f in fills if f["date"]==row["execution_date"]]
             body+='<h3>模拟成交 / 受阻</h3>'
             if not done:body+='<p>尚无该次执行记录，或没有产生买卖。</p>'
-            for f in done:body+=f'<p>{esc(f["asset_id"])} · {esc(f["side"])} · {f["quantity"]} 股 · 费用 {f["total_cost"]:.2f} 元 · {esc(reason_text(f["reason"]))}</p>'
+            for f in done:
+                body+=f'<p>{esc(f["asset_id"])} · {esc(f["side"])} · {f["quantity"]} 股 · 费用 {f["total_cost"]:.2f} 元 · {esc(reason_text(f["reason"]))}</p>'
+                if f.get('cost_model')=='struct_v1':body+=f'<p class="mut">其中报价半价差估计 {f["struct_spread"]:.2f} 元（{f["estimated_half_spread_bp"]:.3f} bp，上月输入 {esc(f["cost_inputs_month"])}）；佣金 {f["commission"]:.2f}，印花税 {f["stamp_tax"]:.2f}，额外压力 {f["slippage"]:.2f}。不含实际冲击标定。</p>'
             body+='</details>'
         if records:
             for record in records:

@@ -14,7 +14,7 @@ import shutil
 import sqlite3
 import uuid
 
-from . import daily, daily_data, experiments as ex, governance as g, pipeline, strategy
+from . import daily, daily_data, experiments as ex, governance as g, pipeline, strategy, external_signals
 from .policy import Policy, resolve
 
 import numpy as np
@@ -37,9 +37,14 @@ def location(workdir, sid):
 
 
 def implementation():
+    import ashare_tcost.model as cost_model
     return ex.object_digest({str(p.name): ex.digest(p) for p in (
         Path(__file__), Path(__file__).with_name("policy.py"), Path(g.__file__), Path(strategy.__file__), Path(daily.__file__),
-        Path(__file__).parent/"portfolio/reference.py", Path(__file__).parent/"rules/cn_a.yaml")})
+        Path(__file__).parent/"portfolio/reference.py",Path(__file__).parent/"portfolio/struct_reference.py",
+        Path(__file__).with_name("struct_costs.py"),Path(__file__).with_name("netcost.py"),
+        Path(external_signals.__file__),
+        Path(cost_model.__file__),
+        Path(__file__).parent/"rules/cn_a.yaml")})
 
 
 def versions(workdir, sid):
@@ -67,9 +72,12 @@ def revision(workdir, sid, vid, *, verify_implementation=True):
 def inputs(workdir, root, spec):
     snapshot = daily_data.current(spec["data_feed"])
     meta = ex.read(root/"final_model/meta.json")
+    if meta.get("model")=="external_scores":external_signals.validate_meta(meta)
     meta["dir"] = root/"final_model"
     panel, snapshot_id, st, members = pipeline.load_data(
         {"data":{"source":"snapshot","dir":str(snapshot)},"cfg":meta["cfg"]},Path(workdir))
+    if meta.get("starter_universe") and set(meta["starter_universe"])!=set(panel["close"].columns):
+        raise ValueError("此入门模型按声明的 40 股训练；请选择匹配的 BaoStock 入门行情，或用自己的股票池重训")
     cal = pd.read_csv(snapshot/"calendar.csv",dtype=str)
     if set(cal.columns) != {"date","is_open"} or not cal.is_open.isin(["0","1"]).all():
         raise ValueError("需要有效的权威交易日历")
@@ -114,17 +122,19 @@ def capital_context(run_dir,feed,cash,holdings):
 
 
 def create(workdir, run_dir, feed, *, name, cash, preset="direct", overrides=None, mode=None,
-           holdings=None, sid=None):
+           holdings=None, sid=None,cost_model="struct_v1",template_origin=None):
     if not name.strip() or len(name)>80 or isinstance(cash,bool) or not np.isfinite(cash) or cash<0:
         raise ValueError("请填写策略名称与非负现金")
     run_dir,feed=Path(run_dir).resolve(),Path(feed).resolve()
     if feed.parent.name=="snapshots" and (feed.parent.parent/"current.json").is_file():
         feed=feed.parent.parent
     meta=ex.read(run_dir/"final_model/meta.json")
-    strategy.locked_recipe(meta)
+    if meta.get("model")=="external_scores":external_signals.validate_meta(meta)
+    else:strategy.locked_recipe(meta)
     holdings=strategy.read_holdings(pd.DataFrame(holdings or [],columns=sorted(strategy.HOLDING_COLUMNS)).to_csv(index=False).encode())
     if cash==0 and not holdings:raise ValueError("现金与初始持仓不能同时为空")
-    resolved=resolve(preset,overrides,mode,capital=capital_context(run_dir,feed,cash,holdings))
+    resolved=resolve(preset,overrides,mode,capital=capital_context(run_dir,feed,cash,holdings),cost_model=cost_model)
+    if template_origin:resolved['source_template']=template_origin
     sid=sid or uuid.uuid4().hex
     family=location(workdir,sid)
     if family.exists() and not (family/"identity.json").exists():
@@ -142,6 +152,7 @@ def create(workdir, run_dir, feed, *, name, cash, preset="direct", overrides=Non
         spec={"schema":"strategy_workspace_v1","sid":sid,"vid":vid,"name":name,"created_at":ex.now(),
               "cash":float(cash),"holdings":holdings,"data_feed":str(feed),"resolved":resolved,
               "signal":{"source":str(run_dir),"model_hash":strategy.model_identity(temporary/"final_model"),
+                        "kind":"external_scores" if meta.get("model")=="external_scores" else "local_model",
                         "predictions_hash":ex.digest(temporary/"predictions.parquet"),"task":meta["card"],
                         "final_model_data_end":meta["data_end"]},
               "protocol":strategy.protocol()[0],"implementation_hash":implementation()}
@@ -165,7 +176,8 @@ def replay(root,spec,panel,signals,snapshot_id,*,start,end,cfg=None,mode=None,sn
              if (mode or control)=="ml" else pd.DataFrame(columns=["date",*g.FEATURES,"variance","label_end"]))
     return g.replay(panel,signals,chosen,mode=mode or control,start=start,end=end,
         initial_cash=spec["cash"],initial_holdings=spec["holdings"],snapshot_id=snapshot_id,
-        samples=samples,snapshot_ids=snapshot_ids,allow_single=allow_single,trading_calendar=calendar,check=check)
+        samples=samples,snapshot_ids=snapshot_ids,allow_single=allow_single,trading_calendar=calendar,check=check,
+        cost_model=Policy.model_validate(spec["resolved"]["policy"]).cost_model)
 
 
 def evaluate(workdir,sid,vid,*,start,end,check=lambda:None,log=lambda x:None):
@@ -193,7 +205,8 @@ def evaluate(workdir,sid,vid,*,start,end,check=lambda:None,log=lambda x:None):
         matched=g.exposure_matched_control(panel,signals,matched_cfg,selected,fixed,
             start=start,end=end,initial_cash=spec["cash"],initial_holdings=spec["holdings"],
             snapshot_id=snapshot_id,samples=pd.DataFrame(),trading_calendar=calendar,
-            reference_arm="selected",check=check,log=log)
+            reference_arm="selected",check=check,log=log,
+            cost_model=Policy.model_validate(spec["resolved"]["policy"]).cost_model)
         arms={"selected":selected,"immediate":immediate,"exposure_matched":matched}
         for key,arm in arms.items():
             ex.write(out/(key+".json"),arm)
@@ -228,7 +241,7 @@ def phase_comparison(arms,cfg):
         for label,a,b in (("startup",1,min(len(path),cutoff+1)),("post_startup",cutoff+1,len(path))):
             if a>=b:
                 result[label]={"status":"NO_OBSERVATIONS","sessions":0};continue
-            anchor=dict(path[a-1],total_cost=0.,gross_traded_fraction=0.,actual_constraint_violations=0)
+            anchor=dict(path[a-1],total_cost=0.,struct_spread=0.,gross_traded_fraction=0.,actual_constraint_violations=0)
             metrics=g.summarize([anchor,*path[a:b]],[],anchor["equity"],cfg)
             result[label]={"status":"DESCRIPTIVE_ONLY","start":path[a]["date"],"end":path[b-1]["date"],**metrics}
         phases[name]=result
@@ -249,17 +262,24 @@ def preflight(workdir,sid,vid):
         observed_at=(day+pd.Timedelta(hours=15,minutes=30)).tz_localize("Asia/Shanghai"),snapshot_id=snap,
         locked_until=(day+pd.Timedelta(days=2)).tz_localize("Asia/Shanghai"))
     can_buy=0
+    spread=None
+    if Policy.model_validate(spec["resolved"]["policy"]).cost_model=="struct_v1":
+        from . import struct_costs
+        spread=struct_costs.estimates(panel)
     for code,w in intent.items():
         price=panel["close"].at[day,code]
         lot=strategy.session_bar(code,open_price=price,close_price=price,upper=price*2,lower=price/2).minimum_buy
         budget=state.equity*w
         cost=max(cfg.minimum_commission,lot*price*cfg.commission_bp/10000)+lot*price*cfg.slippage_bp/10000
+        if spread is not None:
+            if not np.isfinite(spread.at[day,code]):raise ValueError(f'{code} 缺少上月 STRUCT 输入')
+            cost+=lot*price*spread.at[day,code]/10000
         can_buy+=bool(budget>=lot*price+cost and state.cash>=lot*price+cost)
     if sum(intent.values())>0 and not can_buy and not spec["holdings"]:
         raise ValueError("按参考价、最小申报量和费用，没有任何目标能买入；请调整资金或持仓设置")
     return {"state":"CHECKED","reference_date":str(day.date()),"buyable_targets":can_buy,
             "message":"已检查信号、日历、参数和参考价数量可行性；不保证实际开盘成交。",
-            "unknown":["未独立证明上游训练无泄漏","价差与冲击未标定","公司行动尚不支持"]}
+            "unknown":["未独立证明上游训练无泄漏","报价价差估计不等于实际成交冲击","公司行动尚不支持"]}
 
 
 def inspect(workdir,sid,vid):
@@ -291,7 +311,7 @@ def start(workdir,sid,vid,*,historical_start=None,now=None):
             raise ValueError("历史演示的开始日必须是已经发生的交易日")
         if day not in history(root,panel).index:
             raise ValueError("历史演示首日没有存档当期预测")
-    elif pd.Timestamp(spec["signal"]["final_model_data_end"])>stamp.normalize().tz_localize(None):
+    elif spec["signal"].get("kind")!="external_scores" and pd.Timestamp(spec["signal"]["final_model_data_end"])>stamp.normalize().tz_localize(None):
         raise ValueError("模型训练截止日晚于启用日")
     with ex.output_lock(root/"operation"):
         if (root/"runtime.json").exists():raise ValueError("本版本已有账户，不能重置；请继续运行或建立新版本")
@@ -317,7 +337,8 @@ def start(workdir,sid,vid,*,historical_start=None,now=None):
     return runtime
 
 
-def _live_scores(meta,panel,st,members,days):
+def _live_scores(meta,panel,st,members,days,*,now=None):
+    if meta.get("model")=="external_scores":return external_signals.live_scores(meta,panel,days,now=now)
     features=daily.selected_features(panel,meta["cfg"])
     if daily.feature_names(features)!=meta["features"]:raise ValueError("新数据特征与冻结模型不一致")
     universe=daily.universe(panel,meta["cfg"],st,members)
@@ -371,8 +392,9 @@ def tick(workdir,sid,vid,*,now=None,check=lambda:None):
                         if day not in signals.index:raise ValueError("历史演示缺少当期存档预测，不能用最终模型倒填")
                     new_scores={str(day.date()):signals.loc[day].dropna().to_dict() for day in unseen}
                 else:
-                    new_scores=_live_scores(meta,panel,st,members,unseen)
+                    new_scores=_live_scores(meta,panel,st,members,unseen,now=stamp)
                 all_scores=dict(old_scores,**new_scores)
+                receipts=external_signals.current(meta['signal_feed'])[2] if meta.get('model')=='external_scores' else {}
                 for day,values in all_scores.items():
                     signals.loc[pd.Timestamp(day)]=pd.Series(values)
                 signals=signals.sort_index()
@@ -388,6 +410,7 @@ def tick(workdir,sid,vid,*,now=None,check=lambda:None):
                     computed.append({"day":key,"path":paths[key],"state":positions[key]["state"],
                         "constraint_violations":positions[key]["constraint_violations"],
                         "decision":decisions.get(key),"fills":[f for f in arm["fills"] if f["date"]==key],
+                        "signal_receipt_at":receipts.get(key),
                         "input_snapshot_id":ids[key],"spec_hash":spec["spec_hash"]})
                 for old,new in zip(records,computed):
                     if any(ex.object_digest(old[k])!=ex.object_digest(new[k]) for k in new):

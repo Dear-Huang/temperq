@@ -46,6 +46,10 @@ sys.addaudithook(offline)
 from pathlib import Path
 import sys
 import lightgbm
+from qwb import starter_models
+cards=starter_models.catalog()
+assert 'public40_lgbm_v1' in cards, 'Bundled model missing from installed package'
+starter_models.verify(starter_models.BUNDLED/'public40_lgbm_v1')
 kernel=ctypes.windll.kernel32
 kernel.GetModuleHandleW.restype=ctypes.c_void_p
 kernel.GetModuleHandleW.argtypes=[ctypes.c_wchar_p]
@@ -92,6 +96,7 @@ print(json.dumps(loaded,ensure_ascii=False))
             else:
                 raise TimeoutError("Portable startup timed out")
             assert "TemperQ" in page and "一键下载免费数据（BaoStock）" in page
+            assert "使用入门模型" in get("/strategies/new")
             assert len(opener.open(base + "/static/dm-sans.ttf").read()) > 1000
             token = re.search('name="token" value="([^"]+)"', page)[1]
             fields = dict(token=token, name="portable_acceptance", market="cn_a", horizon="5",
@@ -119,6 +124,7 @@ print(json.dumps(loaded,ensure_ascii=False))
                       "relocated_to": str(app), "startup": "start.bat", "external_network": "blocked by Python audit hook",
                       "path": env["PATH"], "user_site": "disabled", "gpu": "not bundled",
                       "detached_training_job": job_id, "elapsed_seconds": round(time.monotonic() - started, 2),
+                      "bundled_starter": "installed package files verified; visible in model selection",
                       "limit": "Same Windows host; fresh-machine CI and nondeveloper trials remain separate acceptance."}
             (destination / "acceptance.json").write_text(json.dumps(output, ensure_ascii=False, indent=2), encoding="utf-8")
             print(json.dumps(output, ensure_ascii=False, indent=2), flush=True)

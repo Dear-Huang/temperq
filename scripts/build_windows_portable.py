@@ -33,7 +33,7 @@ README = """# TemperQ · Windows 下载即用版
 1. 将整个 ZIP 解压到可写文件夹（不要直接在压缩包里运行）。
 2. 双击 start.bat，保留命令窗口，浏览器会打开本机工作台。
 3. 点击“一键下载免费数据（BaoStock）”，完成后选“用这份数据继续”，开始训练。
-4. 训练 → 评价 → 纸面交易 → 模拟持仓，按页面指引继续。
+4. 训练或选入门模型 → 配置政策 → 历史检验 → 纸面运行，按页面指引继续。
 
 Windows 10/11 x64；内含 Python 和 CPU 训练依赖，无需 Python、uv、git、Node 或显卡。
 启动及合成数据训练可离线；下载行情需要联网，免费服务可能中断。
@@ -44,7 +44,7 @@ Windows 10/11 x64；内含 Python 和 CPU 训练依赖，无需 Python、uv、gi
 数据、模型和任务保存在本文件夹的 data/ 与 runs/ 中。升级前备份，勿覆盖删除这些文件夹。
 完整手册：docs/使用手册.md。运行环境及各组件许可：THIRD_PARTY_NOTICES.md、runtime/LICENSE.txt。
 本项目源代码包含于 src/ 和 third_party/ashare-tcost/，AGPL-3.0-or-later，见 LICENSE。
-这是研究与模拟工具，不自动下单，不承诺收益；纸面账本尚未计价差与冲击。
+这是研究与模拟工具，不自动下单，不承诺收益。新策略默认计 STRUCT 上月报价半价差估计；实际成交冲击未标定，旧账户保留原口径。
 """
 
 

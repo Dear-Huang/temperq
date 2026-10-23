@@ -257,3 +257,18 @@ def test_refresh_failure_does_not_tick_and_recovery_keeps_idempotence(setup,monk
     before=w.inspect(root,s,v)['records']
     assert w.refresh_and_tick(root,s,v,now='2026-10-22T20:00:00+08:00')['new_sessions']==0
     assert w.inspect(root,s,v)['records']==before
+
+
+def test_chart_axis_and_points_use_same_scale_for_small_returns(setup):
+    import re
+    root,s,v=evaluated(setup,exposure_cap=.1)
+    client=TestClient(ui.create_app(root,runner=lambda fn:None))
+    page=client.get(f'/strategies/{s}/{v}').text
+    svg=re.search(r'<svg class="policy-chart".*?</svg>',page).group()
+    ticks=[float(x) for x in re.findall(r'<text x="32"[^>]*>([\d.]+)</text>',svg)]
+    first_curve=re.search(r'<polyline points="([^"]+)"',svg).group(1)
+    y=float(first_curve.split()[0].split(',')[1])
+    implied_value=ticks[0]+(210-y)*(ticks[-1]-ticks[0])/180
+    # Initial normalized equity is 1. A display floor must expand the axis as
+    # well as the data mapping; small returns cannot use two different scales.
+    assert implied_value==pytest.approx(1.,abs=.00005)

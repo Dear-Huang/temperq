@@ -1,0 +1,74 @@
+{
+  "name": "public40_lgbm_v1",
+  "task": {
+    "name": "cn_rank_5d",
+    "market": "cn_a",
+    "template": "daily",
+    "target": {
+      "type": "return_rank",
+      "horizon_days": 5
+    },
+    "timing": {
+      "signal_available": {
+        "day": 0,
+        "time": "15:00"
+      },
+      "decision": {
+        "day": 0,
+        "time": "15:30"
+      },
+      "execution": {
+        "day": 1,
+        "time": "09:30",
+        "price": "open"
+      }
+    },
+    "label": {
+      "start": {
+        "day": 1,
+        "time": "09:30",
+        "price": "open"
+      },
+      "end": {
+        "day": 6,
+        "time": "09:30",
+        "price": "open"
+      }
+    },
+    "output": "score",
+    "metrics": [
+      "rank_ic"
+    ],
+    "acceptance": {
+      "confirmatory": {
+        "metric": "rank_ic_mean"
+      },
+      "go": "rank_ic_mean > 0 with NW t > 2 on the final test years, and above every baseline",
+      "no_go": "NW t < 2 or not above the best simple baseline"
+    }
+  },
+  "data": {
+    "source": "snapshot",
+    "dir": "data/free_daily"
+  },
+  "model": {
+    "name": "lightgbm",
+    "num_boost_round": 80
+  },
+  "train": {
+    "universe": "all_ex_st",
+    "first_test_year": 2022,
+    "final_test_years": [
+      2025,
+      2026
+    ],
+    "seeds": [
+      0
+    ],
+    "min_adv_yuan": 600000,
+    "portfolio": {
+      "n_hold": 10
+    }
+  },
+  "output": "runs/build_public40_lgbm_v1"
+}

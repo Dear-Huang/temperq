@@ -182,9 +182,11 @@ class RiskHead:
 
 def replay(panel, signals, cfg, *, mode, start, end, initial_cash, snapshot_id, samples,
            check=lambda: None, log=lambda message: None, constant_exposure=None,
-           initial_holdings=None, snapshot_ids=None, allow_single=False, trading_calendar=None):
+           initial_holdings=None, snapshot_ids=None, allow_single=False, trading_calendar=None,
+           cost_model="commission_only"):
     if mode not in {"fixed", "ewma", "ml"}:
         raise ValueError("unknown risk control")
+    if cost_model not in {"commission_only","struct_v1"}:raise ValueError("未知成本口径")
     if constant_exposure is not None and (mode != "fixed" or isinstance(constant_exposure, bool)
             or not np.isfinite(constant_exposure) or not 0 <= constant_exposure <= cfg.exposure_cap):
         raise ValueError("固定仓位对照必须在原授权内，只适用于固定仓位政策")
@@ -197,8 +199,12 @@ def replay(panel, signals, cfg, *, mode, start, end, initial_cash, snapshot_id, 
     if not np.isfinite(initial_cash) or initial_cash < 0 or (initial_cash==0 and not initial_holdings):
         raise ValueError("初始现金需非负，现金与持仓不能同时为空")
     identity = experiments.object_digest({"schema": SCHEMA, "config": asdict(cfg), "mode": mode,
-                                         "constant_exposure": constant_exposure})
+                                         "constant_exposure": constant_exposure,"cost_model":cost_model})
     fees = Fees(cfg.commission_bp, cfg.minimum_commission, cfg.slippage_bp)
+    cost_estimates=None
+    if cost_model=="struct_v1":
+        from . import struct_costs
+        cost_estimates=struct_costs.estimates(panel)
     risk, head = RiskData(panel), RiskHead(samples)
     snapshot_ids = snapshot_ids or {}
     first = selected_days[0]
@@ -238,9 +244,14 @@ def replay(panel, signals, cfg, *, mode, start, end, initial_cash, snapshot_id, 
                         raise ValueError(f"{day:%Y-%m-%d} {code} 缺少行情/显式停牌状态，停止回放")
                     bars.append(strategy.session_bar(code, open_price=price("open"), close_price=price("close"),
                         upper=price("up_limit"), lower=price("down_limit"), suspended=price("open") is None))
-                state, audit = execute_session(state, target, tuple(bars), open_at=at(9, 30), close_at=at(15),
+                executor=execute_session
+                cost_args={}
+                if cost_estimates is not None:
+                    from .portfolio.struct_reference import execute_session as executor
+                    cost_args={"fees_by_asset":struct_costs.fees_for_day(cost_estimates,day,assets,fees)}
+                state, audit = executor(state, target, tuple(bars), open_at=at(9, 30), close_at=at(15),
                     next_open_at=nxt, decision_assets=assets, universe_id=universe_id, protocol_id=identity,
-                    fees=fees, max_weight=cfg.max_weight, min_cash=cfg.cash_floor)
+                    fees=fees, max_weight=cfg.max_weight, min_cash=cfg.cash_floor,**cost_args)
                 if audit["notices"]:
                     raise ValueError(f"{day:%Y-%m-%d} 行情或估值缺失，停止回放：{audit['notices']}")
                 fills += [{"date": str(day.date()), **f} for f in audit["fills"]]
@@ -310,6 +321,7 @@ def replay(panel, signals, cfg, *, mode, start, end, initial_cash, snapshot_id, 
         paths.append({"date": str(day.date()), "equity": state.equity, "cash": state.cash,
             "exposure": 1-state.cash/state.equity, "net_return": state.equity/before-1,
             "total_cost": total_cost, "gross_traded_fraction": traded/before,
+            "struct_spread":sum(f.get("struct_spread",0.) for f in audit["fills"]) if audit else 0.,
             "actual_constraint_violations": len(violations),
             "decision_status": "REBALANCE" if pending is not None else "NOT_REBALANCE_DAY"})
         positions.append({"date": str(day.date()), "state": state.to_dict(), "constraint_violations": violations})
@@ -321,7 +333,7 @@ def replay(panel, signals, cfg, *, mode, start, end, initial_cash, snapshot_id, 
 
 def exposure_matched_control(panel, signals, cfg, reference, fixed, *, start, end,
         initial_cash, snapshot_id, samples, check=lambda: None, log=lambda message: None,
-        initial_holdings=None, trading_calendar=None, reference_arm="ml"):
+        initial_holdings=None, trading_calendar=None, reference_arm="ml",cost_model="commission_only"):
     """Post-hoc explanation only: calibrate constant intent to actual ML exposure.
 
     Integer execution and policy feedback make the mapping discontinuous and not
@@ -341,7 +353,7 @@ def exposure_matched_control(panel, signals, cfg, reference, fixed, *, start, en
             arm = replay(panel, signals, cfg, mode="fixed", start=start, end=end,
                 initial_cash=initial_cash, snapshot_id=snapshot_id, samples=samples,
                 constant_exposure=candidate, check=check, initial_holdings=initial_holdings,
-                trading_calendar=trading_calendar)
+                trading_calendar=trading_calendar,cost_model=cost_model)
             actual = arm["metrics"]["mean_exposure"]
             trials.append({"constant_target": candidate, "actual_mean": actual})
             current = abs(actual-target)
@@ -379,6 +391,7 @@ def summarize(path, decisions, cash, cfg):
         "risk_target_error": abs(annual_risk-cfg.target_volatility),
         "mean_exposure": float(np.mean([r["exposure"] for r in path[1:]])) if len(path)>1 else path[0]["exposure"],
         "total_cost": sum(r["total_cost"] for r in path),
+        "struct_spread":sum(r.get("struct_spread",0.) for r in path),
         "gross_traded_fraction": sum(r["gross_traded_fraction"] for r in path),
         "actual_constraint_violations": sum(r["actual_constraint_violations"] for r in path),
         "risk_qlike": float(np.mean(qlike)) if qlike else None, "risk_labels": len(qlike),

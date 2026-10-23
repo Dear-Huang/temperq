@@ -10,7 +10,8 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 from .governance import GovernanceConfig
 from . import scenario
 
-DEFAULTS_VERSION = "policy_defaults_v1"
+DEFAULTS_VERSION = "policy_defaults_v2"
+DEFAULT_COST_MODEL = "struct_v1"
 PRESETS = {
     "direct": {"name": "直接调整", "description": "每五日向目标调整；不预测风险，不放慢建仓。",
                "mode": "fixed", "overrides": {}},
@@ -36,6 +37,8 @@ HELP = {
 class Policy(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True, validate_default=True)
     mode: Literal["fixed", "ewma", "ml"] = "fixed"
+    # Missing field in an older frozen policy means its original fee-only path.
+    cost_model: Literal["commission_only","struct_v1"] = "commission_only"
     parameters: GovernanceConfig = Field(default_factory=GovernanceConfig)
 
     @model_validator(mode="before")
@@ -50,7 +53,7 @@ class Policy(BaseModel):
         return value
 
 
-def resolve(preset, overrides=None, mode=None, *, capital=None):
+def resolve(preset, overrides=None, mode=None, *, capital=None,cost_model=DEFAULT_COST_MODEL):
     if preset not in PRESETS:
         raise ValueError("请选择已有政策预设")
     base = asdict(GovernanceConfig())
@@ -63,10 +66,11 @@ def resolve(preset, overrides=None, mode=None, *, capital=None):
         values.update(derived)
     changes = dict(overrides or {})
     values.update(changes)
-    policy = Policy.model_validate({"mode": mode or PRESETS[preset]["mode"], "parameters": values})
+    policy = Policy.model_validate({"mode": mode or PRESETS[preset]["mode"], "parameters": values,"cost_model":cost_model})
     return {"defaults_version": DEFAULTS_VERSION, "preset": preset,
             "preset_version": 1, "policy": policy.model_dump(mode="json"),
             "mode_provenance": "user" if mode and mode != PRESETS[preset]["mode"] else "preset",
+            "cost_model_provenance":"default" if cost_model==DEFAULT_COST_MODEL else "user",
             "provenance": {k: "user" if k in changes else "preset" if k in PRESETS[preset]["overrides"]
                            else "capital_tier" if k in derived else "engineering_default" for k in values},
             "capital_defaults":({**capital,**tier,"parameters":derived,
@@ -74,7 +78,8 @@ def resolve(preset, overrides=None, mode=None, *, capital=None):
             "inactive": ["target_volatility"] if policy.mode == "fixed" else [],
             "changed_from_preset": {**{k: v for k,v in changes.items()
                                     if v != dict(base, **PRESETS[preset]["overrides"],**derived).get(k)},
-                                    **({"mode":policy.mode} if policy.mode!=PRESETS[preset]["mode"] else {})}}
+                                    **({"mode":policy.mode} if policy.mode!=PRESETS[preset]["mode"] else {}),
+                                    **({"cost_model":cost_model} if cost_model!=DEFAULT_COST_MODEL else {})}}
 
 
 def schema():
@@ -83,6 +88,7 @@ def schema():
     for f in fields(GovernanceConfig):
         definition["properties"][f.name].update(dict(f.metadata))
     value["defaults_version"]=DEFAULTS_VERSION
+    value["properties"]["cost_model"]["default"]=DEFAULT_COST_MODEL
     value["ui"] = {key: {"label": label, "unit": unit, "help": help,
                          "applies_when": "mode != fixed" if key == "target_volatility" else "always"}
                    for key,(label,unit,help) in HELP.items()}

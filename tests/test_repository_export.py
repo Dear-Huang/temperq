@@ -18,6 +18,7 @@ spec.loader.exec_module(repository)
     "runs/site.db", "config.local.yaml", "deploy/.env", "website/node_modules/a.js",
     "third_party/ashare-tcost/runs/paper.csv", "third_party/ashare-tcost/.git/config",
     "third_party/Kronos/model.py",
+    "signals/private/predictions.parquet", "policy_templates/private/template.json",
 ])
 def test_private_paths_cannot_enter_export(path):
     assert repository.private_path(path)

@@ -5,6 +5,7 @@
   const presets = JSON.parse(presetData.textContent);
   const select = document.getElementById('policy-preset');
   const mode = document.getElementById('policy-mode');
+  const costModel = document.getElementById('policy-cost-model');
   const editor = select.form;
   const fields = [...editor.querySelectorAll('[data-field]')];
   const input = name => editor.elements.namedItem(name);
@@ -49,6 +50,7 @@
     const baseline = presets[current];
     const changes = Object.keys(baseline.parameters).filter(key => Number(input(key).value) !== baseline.parameters[key]);
     if (mode.value !== baseline.mode) changes.push('mode');
+    if (costModel && costModel.value !== baseline.cost_model) changes.push('cost_model');
     return changes;
   };
   const filter = () => {
@@ -93,6 +95,7 @@
     for (const key of changes) {
       const item = document.createElement('li');
       if (key === 'mode') item.textContent = `风险控制：${base.mode} → ${mode.value}`;
+      else if (key === 'cost_model') item.textContent = `成本口径：${base.cost_model} → ${costModel.value}`;
       else {
         const value = input(key).value;
         const format = v => percentKeys.has(key) ? `${v}（${percent(v)}）` : v;
@@ -113,6 +116,7 @@
     current = name;
     select.value = name;
     mode.value = presets[name].mode;
+    if (costModel) costModel.value = presets[name].cost_model;
     for (const [key, value] of Object.entries(presets[name].parameters)) input(key).value = value;
     pinned.clear(); syncPins();
     update();

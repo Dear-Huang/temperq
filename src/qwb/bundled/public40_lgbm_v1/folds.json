@@ -1,0 +1,57 @@
+[
+  {
+    "fold": 0,
+    "fit_cutoff": "2021-12-31 15:30:00+08:00",
+    "train_start": "2021-01-04",
+    "train_end": "2021-12-23",
+    "n_train": 6716,
+    "n_dropped_immature": 6,
+    "max_label_end": "2021-12-31 01:30:00+00:00",
+    "data_snapshot_id": "sha256:18f6f3d6c9162850db56d03ddb469bd6bd6a90706b6ed4bb33b4c1a94a8618b0",
+    "model_version": "lightgbm-fold0"
+  },
+  {
+    "fold": 1,
+    "fit_cutoff": "2022-12-30 15:30:00+08:00",
+    "train_start": "2021-01-04",
+    "train_end": "2022-12-22",
+    "n_train": 15894,
+    "n_dropped_immature": 6,
+    "max_label_end": "2022-12-30 01:30:00+00:00",
+    "data_snapshot_id": "sha256:18f6f3d6c9162850db56d03ddb469bd6bd6a90706b6ed4bb33b4c1a94a8618b0",
+    "model_version": "lightgbm-fold1"
+  },
+  {
+    "fold": 2,
+    "fit_cutoff": "2023-12-29 15:30:00+08:00",
+    "train_start": "2021-01-04",
+    "train_end": "2023-12-21",
+    "n_train": 25090,
+    "n_dropped_immature": 6,
+    "max_label_end": "2023-12-29 01:30:00+00:00",
+    "data_snapshot_id": "sha256:18f6f3d6c9162850db56d03ddb469bd6bd6a90706b6ed4bb33b4c1a94a8618b0",
+    "model_version": "lightgbm-fold2"
+  },
+  {
+    "fold": 3,
+    "fit_cutoff": "2024-12-31 15:30:00+08:00",
+    "train_start": "2021-01-04",
+    "train_end": "2024-12-23",
+    "n_train": 34286,
+    "n_dropped_immature": 6,
+    "max_label_end": "2024-12-31 01:30:00+00:00",
+    "data_snapshot_id": "sha256:18f6f3d6c9162850db56d03ddb469bd6bd6a90706b6ed4bb33b4c1a94a8618b0",
+    "model_version": "lightgbm-fold3"
+  },
+  {
+    "fold": 4,
+    "fit_cutoff": "2025-12-31 15:30:00+08:00",
+    "train_start": "2021-01-04",
+    "train_end": "2025-12-23",
+    "n_train": 43504,
+    "n_dropped_immature": 6,
+    "max_label_end": "2025-12-31 01:30:00+00:00",
+    "data_snapshot_id": "sha256:18f6f3d6c9162850db56d03ddb469bd6bd6a90706b6ed4bb33b4c1a94a8618b0",
+    "model_version": "lightgbm-fold4"
+  }
+]

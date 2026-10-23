@@ -4,7 +4,7 @@ from __future__ import annotations
 import html
 from urllib.parse import urlencode
 
-from . import experiments as ex, strategy, workflow_ui
+from . import experiments as ex, strategy, workflow_ui, external_signals
 
 
 def esc(value):
@@ -57,7 +57,8 @@ def signal_options(workdir):
             alias = source.with_name(record.get("name", source.name))
             if workflow_ui.hidden(workdir, source) or workflow_ui.hidden(workdir, alias):
                 continue
-            strategy.locked_recipe(meta)
+            if meta.get('model')=='external_scores':external_signals.validate_meta(meta)
+            else:strategy.locked_recipe(meta)
             found[source.name] = {"name": source.name, "model": meta["model"],
                                   "data_end": meta["data_end"]}
         except (ValueError, OSError, KeyError, TypeError):
@@ -110,7 +111,7 @@ def register(app, workdir, *, page, datasets):
         if models and available:
             body += f'<p class="mut">发现 {len(models)} 个符合当前五日治理口径的模型、{len(available)} 份数据。</p><a class="btn secondary" href="/strategies/new">选择已有模型</a>'
         else:
-            body += '<p class="mut">还需要一个兼容模型和持续行情源。当前支持本地 LightGBM / Ridge 五日模型。</p><a href="/models">查看本地模型 →</a>'
+            body += '<p class="mut">可以选择随包的公开日线入门模型，再准备匹配行情；也可以使用本地 LightGBM / Ridge 五日模型。</p><a class="btn secondary" href="/strategies/new">选择入门或已有模型</a>'
         body += '</article></section><section class="experience-panel"><h2>每一步都能深入</h2><div class="experience-depth"><p><b>先跑起来</b><span>核心选择 + 默认值，随时知道下一步。</span></p><p><b>再做微调</b><span>查参数、看改动和生效条件；切换显示不改变计算。</span></p><p><b>留下证据</b><span>同一配置用于检验与运行，修改生成新版本，旧记录保留。</span></p></div></section>'
-        body += '<details><summary>数据、模型和扩展能力</summary><p>官方预训练模型、外部信号持续接入向导和统一插件安装仍在规划中。现在可训练本地模型、使用已有模型，或通过高级工具体检外部预测。</p><p><a href="/models">本地模型</a> · <a href="/audit">外部预测体检</a> · <a href="/policy-schema.json">政策参数格式</a></p></details>'
+        body += '<details><summary>数据、模型和扩展能力</summary><p>可训练本地模型，或选择随包的 40 股入门模型；行情须另行准备。外部预测可通过 CSV 向导声明口径并持续追加；统一插件安装仍在规划中。</p><p><a href="/signals/import">导入外部预测</a> · <a href="/models">本地模型</a> · <a href="/audit">外部预测体检</a> · <a href="/policy-schema.json">政策参数格式</a></p></details>'
         return page("工作台", body)

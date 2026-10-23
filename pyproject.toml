@@ -39,7 +39,7 @@ where = ["src"]
 
 [tool.setuptools.package-data]
 "qwb.rules" = ["*.yaml"]
-"qwb" = ["static/*"]
+"qwb" = ["static/*", "bundled/*/*", "bundled/*/final_model/*"]
 
 [tool.pytest.ini_options]
 pythonpath = ["src"]

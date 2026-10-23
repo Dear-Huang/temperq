@@ -28,7 +28,9 @@ B2 暂停是资源与产品次序选择，不代表理论无效或永远无法�
 
 ## 简单模式与全流程
 
-参照 LM Studio：简单设置和高级展开，共用实际生效配置；四步流程分别显示可运行性、经济增量、运行健康。首个路径接已有模型、版本化政策及独立纸面运行，官方目录与外部适配待后续。见 [简单模式 SPEC](SIMPLE_MODE_SPEC.md) 与 [用户指南](../STRATEGY_WORKSPACE.md)。
+参照 LM Studio：简单设置和高级展开，共用实际生效配置；四步流程分别显示可运行性、经济增量、运行健康。已接本地训练、随包入门模型、外部预测、版本化政策及纸面运行。见 [简单模式 SPEC](SIMPLE_MODE_SPEC.md) 与 [用户指南](../STRATEGY_WORKSPACE.md)。
+
+本轮新增：[资金默认值、三组对照与每日更新](ACCOUNT_DEFAULTS_AND_CONTROLS.md)、[信号与政策交换](SIGNAL_AND_POLICY_EXCHANGE.md)、[STRUCT 账本](STRUCT_LEDGER_V1.md)。独立用户验收见 [试用脚本](../FIRST_RUN_PILOT.md)，竞品事实与体验选择见 [官方资料核查](../research/USER_EXPERIENCE_COMPARISON_20261023.md)。
 
 同一工作台如何兼顾初次使用与专业微调、各页的明确下一步、修改清单和验证方式，见 [工作台体验](WORKBENCH_EXPERIENCE.md)。
 
