@@ -7,7 +7,7 @@ import json
 
 import pandas as pd
 from fastapi import HTTPException, Request
-from fastapi.responses import RedirectResponse, Response
+from fastapi.responses import RedirectResponse, Response, JSONResponse
 
 from . import experiments as ex, policy, strategy, strategy_workspace as ws, experience_ui
 from .governance_ui import REASONS
@@ -73,7 +73,10 @@ def register(app, workdir, *, page, guard, token, locate, submit, datasets):
 
     def editor(source,dataset,previous=None):
         old=previous["spec"] if previous else None
-        resolved=old["resolved"] if old else policy.resolve("direct")
+        capital=ws.capital_context(ws.location(workdir,old["sid"])/"versions"/old["vid"] if old else locate(source),
+            old["data_feed"] if old else datasets(workdir)[dataset]["path"],
+            old["cash"] if old else 100000,old["holdings"] if old else [])
+        resolved=old["resolved"] if old else policy.resolve("direct",capital=capital)
         chosen=resolved["policy"]; values=chosen["parameters"]
         body=header(2)+'<h1>你来定怎么使用排名</h1><p>先选预设、填可用现金；高级设置只在需要时展开。每五个交易日决策，下一开市日开盘模拟执行。</p>'
         body+='<form method="post" action="/strategies" enctype="multipart/form-data">'+hidden()
@@ -81,6 +84,7 @@ def register(app, workdir, *, page, guard, token, locate, submit, datasets):
         if old:body+=f'<input type="hidden" name="sid" value="{old["sid"]}"><input type="hidden" name="parent" value="{old["vid"]}">'
         body+=f'<label class="f">策略名称<input name="name" maxlength="80" value="{esc(old["name"] if old else "我的策略")}" required></label>'
         body+=f'<label class="f">可用现金（元）<input name="cash" type="number" min="0" step="0.01" value="{old["cash"] if old else 100000}" required></label>'
+        body+='<p class="mut" id="capital-default-note" aria-live="polite">持仓数、单票上限和保留排名由现金加初始持仓的参考权益推导；手动改过的值保留。</p><input type="hidden" name="explicit_overrides" id="explicit-overrides">'
         body+='<label class="f">政策预设<select name="preset" id="policy-preset">'+''.join(
             f'<option value="{k}" {"selected" if k==resolved["preset"] else ""}>{esc(v["name"])}</option>' for k,v in policy.PRESETS.items())+'</select></label>'
         body+='<p id="preset-help" class="mut"></p><button type="button" class="secondary" id="reset-policy">恢复该预设</button><p class="mut">切换预设会载入该预设的参数。分步调整来自自有研究的机制，默认 0.5 是待验证的工程选择，不承诺更赚钱。</p>'
@@ -106,9 +110,11 @@ def register(app, workdir, *, page, guard, token, locate, submit, datasets):
         if old and old["holdings"]:body+='<p>未上传新文件时保留旧版本的初始持仓。</p>'
         body+='</details><details><summary>固定执行口径与费用说明</summary><p>T+1、申报数量、涨跌停、按日期生效的印花税及收盘决策口径固定。佣金和最低佣金可以按券商填写；价差与冲击未标定。遇到持仓公司行动或行情缺口停止。</p></details>'
         body+='<button>冻结设置，进入检验</button></form>'
-        presets={k:policy.resolve(k)["policy"]|{"description":v["description"],"name":v["name"]} for k,v in policy.PRESETS.items()}
+        presets={k:policy.resolve(k,capital=capital)["policy"]|{"description":v["description"],"name":v["name"]} for k,v in policy.PRESETS.items()}
         data=json.dumps(presets,ensure_ascii=False).replace("<","\\u003c")
         body+='<script type="application/json" id="policy-presets">'+data+'</script>'
+        pins=[k for k,v in resolved["provenance"].items() if v=="user"]
+        body+='<script type="application/json" id="policy-capital">'+json.dumps({"pinned":pins,"capital":capital},ensure_ascii=False).replace("<","\\u003c")+'</script>'
         body+='<dialog id="preset-change-dialog" class="preset-dialog" aria-labelledby="preset-change-title"><h2 id="preset-change-title">载入另一套预设？</h2><p>当前微调还未冻结。载入会替换政策参数，策略名称、现金和已选的持仓文件保留。</p><div class="actions"><button type="button" class="secondary" id="keep-policy">保留当前微调</button><button type="button" id="replace-policy">切换并载入默认</button></div></dialog>'
         return page("配置政策",body)
 
@@ -124,23 +130,39 @@ def register(app, workdir, *, page, guard, token, locate, submit, datasets):
         state=get(sid,vid)
         return editor(state["spec"]["signal"]["source"],state["spec"]["data_feed"],state)
 
+    async def form_context(form):
+        parent=str(form.get("parent",""));sid=str(form.get("sid","")) or None
+        old=ws.revision(workdir,sid,parent,verify_implementation=False) if parent and sid else None
+        source=old[0] if old else locate(str(form["source"]))
+        feed=old[1]["data_feed"] if old else datasets(workdir)[str(form["dataset"])]["path"]
+        uploaded=form.get("holdings");holdings=old[1]["holdings"] if old else []
+        if uploaded and getattr(uploaded,"filename",""):
+            holdings=strategy.read_holdings(await uploaded.read(2_000_001))
+        return source,feed,holdings,sid
+
+    @app.post("/strategies/defaults")
+    async def defaults(req:Request):
+        form=await req.form();guard(req,form.get("token"))
+        try:
+            source,feed,holdings,_=await form_context(form)
+            capital=ws.capital_context(source,feed,float(form["cash"]),holdings)
+            return JSONResponse(policy.resolve(str(form["preset"]),capital=capital))
+        except (ValueError,OSError,KeyError) as exc:return JSONResponse({"error":str(exc)},status_code=400)
+
     @app.post("/strategies")
     async def create(req:Request):
         form=await req.form();guard(req,form.get("token"))
         try:
-            parent=str(form.get("parent",""));sid=str(form.get("sid","")) or None
-            old=ws.revision(workdir,sid,parent,verify_implementation=False) if parent and sid else None
-            source=old[0] if old else locate(str(form["source"]))
-            feed=old[1]["data_feed"] if old else datasets(workdir)[str(form["dataset"])]["path"]
+            source,feed,holdings,sid=await form_context(form)
             preset=str(form["preset"]);base=policy.resolve(preset)["policy"]["parameters"]
             overrides={}
+            explicit=json.loads(str(form["explicit_overrides"])) if form.get("explicit_overrides") else None
+            if explicit is not None and (not isinstance(explicit,list) or any(k not in base for k in explicit)):
+                raise ValueError("参数修改清单无效")
             for k,v in base.items():
                 if k not in form:continue
                 x=int(form[k]) if type(v) is int else float(form[k])
-                if x!=v:overrides[k]=x
-            uploaded=form.get("holdings");holdings=old[1]["holdings"] if old else []
-            if uploaded and getattr(uploaded,"filename",""):
-                holdings=strategy.read_holdings(await uploaded.read(2_000_001))
+                if explicit is None or k in explicit:overrides[k]=x
             sid,vid=ws.create(workdir,source,feed,name=str(form["name"]),cash=float(form["cash"]),
                 preset=preset,overrides=overrides,mode=str(form["mode"]),holdings=holdings,sid=sid)
             return RedirectResponse(f"/strategies/{sid}/{vid}",303)
@@ -171,19 +193,21 @@ def register(app, workdir, *, page, guard, token, locate, submit, datasets):
         dates=pd.to_datetime(predictions.decision_time,utc=True).dt.tz_convert("Asia/Shanghai").dt.strftime("%Y-%m-%d")
         body+='<details id="history"><summary>历史检验与对照（展开）</summary>' if state["runtime"] else '<section id="history">'
         if not state["runtime"]:
-            body+='<h2>如果过去这样做，会怎样？</h2><p>与相同信号、风险方式和授权的“立即调整”比较。只改变调整速度；双方敞口可能不同，收益差不直接归因于算法。</p>'
+            body+='<h2>如果过去这样做，会怎样？</h2><p>与相同信号、风险方式和授权的“立即调整”比较；另加平均实际仓位匹配的固定仓位对照，帮助识别多拿现金的影响。后者仅供事后解释，不可部署。</p>'
             body+=f'<form method="post" action="{base}/evaluate">'+hidden()
             body+=f'<label class="f">开始<input type="date" name="start" value="{esc(dates.min())}" required></label>'
             body+=f'<label class="f">结束<input type="date" name="end" value="{esc(dates.max())}" required></label><button>记录尝试并检验</button></form>'
         if latest:
-            body+='<h2>历史对照</h2><p>蓝色：当前政策 · 灰色：立即调整</p>'
+            labels=[("selected","当前政策"),("immediate","立即调整")]
+            if "exposure_matched" in latest["metrics"]:labels.append(("exposure_matched","平均仓位匹配 · 固定仓位立即调整"))
+            body+='<h2>历史对照</h2><p>蓝色：当前政策 · 灰色：立即调整 · 橙色：平均仓位匹配（如有）</p>'
             root,_=ws.revision(workdir,sid,vid,verify_implementation=False)
             dirs=[p.parent for p in sorted(root.glob("evaluations/*/result.json"),key=lambda p:p.stat().st_mtime) if ex.read(p)["status"]=="SUCCEEDED"]
-            arms=[ex.read(dirs[-1]/(k+".json")) for k in ("selected","immediate")]
+            arms=[ex.read(dirs[-1]/(k+".json")) for k,_ in labels]
             values=[[row["equity"]/arm["path"][0]["equity"] for row in arm["path"]] for arm in arms]
             lo,hi=min(min(v) for v in values),max(max(v) for v in values);span=max(hi-lo,.001)
             lines=''
-            for v,color in zip(values,("#2984dd","#8c929c")):
+            for v,color in zip(values,("#2984dd","#8c929c","#d68124")):
                 points=' '.join(f'{30+i*880/max(1,len(v)-1):.2f},{210-(x-lo)*180/span:.2f}' for i,x in enumerate(v))
                 lines+=f'<polyline points="{points}" fill="none" stroke="{color}" stroke-width="2"/>'
             axes=''.join(f'<line x1="30" x2="910" y1="{y}" y2="{y}" stroke="#8c929c" opacity=".2"/>'
@@ -192,12 +216,25 @@ def register(app, workdir, *, page, guard, token, locate, submit, datasets):
             axes+=f'<text x="30" y="235" fill="#737d8b" font-size="12">{esc(latest["start"])}</text><text x="910" y="235" text-anchor="end" fill="#737d8b" font-size="12">{esc(latest["end"])}</text>'
             body+='<svg class="policy-chart" viewBox="0 0 940 250" role="img" aria-label="历史归一净值对照">'+axes+lines+'</svg>'
             body+='<div class="tw"><table><tr><th>政策</th><th>收益</th><th>最大回撤</th><th>平均实际仓位</th><th>已计费用（元）</th><th>交易额 / 权益累计</th></tr>'
-            for key,label in (("selected","当前政策"),("immediate","立即调整")):
+            for key,label in labels:
                 m=latest["metrics"][key]
                 body+=f'<tr><td>{label}</td><td>{m["total_return"]:.2%}</td><td>{m["max_drawdown"]:.2%}</td><td>{m["mean_exposure"]:.2%}</td><td>{m["total_cost"]:.2f}</td><td>{m["gross_traded_fraction"]:.2f}</td></tr>'
             body+='</table></div>'+f'<p>{latest["metrics"]["selected"]["sessions"]} 段日收益；{esc(latest["message"])}</p>'
             difference=latest["cost_difference"]
             body+=f'<p>这段路径已计费用比立即调整{"多" if difference>0 else "少"} {abs(difference):.2f} 元；请同时比较平均实际仓位。费用差包含交易规模和持仓路径变化，不代表全部成本或收益增量。</p>'
+            match=latest.get("exposure_match")
+            if match:
+                body+=f'<p>平均实际仓位匹配：{"已进入容差" if match["status"]=="MATCHED_WITHIN_TOLERANCE" else "未匹配成功，不据此归因"}；误差 {match["signed_match_error"]:.2%}，容差 ±{match["tolerance"]:.2%}。使用全段历史校准，仅用于解释，不是可运行政策，也不是收益优势证明。</p>'
+            phases=latest.get("phases")
+            if phases:
+                body+=f'<details><summary>建仓观察期与后段分开看</summary><p>预先规定前 {phases["startup_sessions"]} 段日收益为建仓观察期；按调整速度计算，不根据收益挑日期。后段仍不保证达到稳态。短区间可能没有后段样本。</p>'
+                body+='<div class="tw"><table><tr><th>组别</th><th>阶段</th><th>日收益段数</th><th>收益</th><th>回撤</th><th>平均仓位</th><th>费用（元）</th></tr>'
+                for key,label in labels:
+                    for phase,title in (("startup","建仓观察期"),("post_startup","后段")):
+                        m=phases[key][phase]
+                        body+=f'<tr><td>{label}</td><td>{title}</td><td>{m["sessions"]}</td>'
+                        body+=(f'<td>{m["total_return"]:.2%}</td><td>{m["max_drawdown"]:.2%}</td><td>{m["mean_exposure"]:.2%}</td><td>{m["total_cost"]:.2f}</td>' if m["sessions"] else '<td colspan="4">无样本，不能比较</td>')+'</tr>'
+                body+='</table></div></details>'
         body+='</details>' if state["runtime"] else '</section>'
         failures=[r for r in results if r["status"]!="SUCCEEDED"]
         if failures:body+='<details><summary>未完成的尝试</summary>'+''.join(f'<p>{esc(r["status"])} · {esc(r.get("error","运行中"))}</p>' for r in failures)+'</details>'
@@ -209,7 +246,7 @@ def register(app, workdir, *, page, guard, token, locate, submit, datasets):
             runtime=state["runtime"];records=state["records"]
             counts={scope:sum(r["scope"]==scope for r in records) for scope in ("forward_paper","late_reconstruction","historical_replay")}
             body+='<h2 id="running">日常运行</h2>'+f'<p>启用日 {esc(runtime["start_date"])} · 按时纸面记录 {counts["forward_paper"]} 天 · 迟到重建 {counts["late_reconstruction"]} 天 · 历史演示 {counts["historical_replay"]} 天</p>'
-            body+='<p>自动检查只在工作台开启时运行，17:30 后每天尝试一次，读取已经更新的数据源；当前不自动下载行情。手动检查可在补数据后重试。建议清单是纸面目标，不是已经成交的实盘订单。</p>'
+            body+='<p>自动检查只在工作台开启时运行，17:30 后每天尝试一次。BaoStock 数据源先下载并校验完整行情，成功后再记账；失败显示受阻，可手动重试。CSV 等外部行情仍须自行更新，不会被替换。建议清单是纸面目标，不是实盘订单。</p>'
             body+=f'<form method="post" action="{base}/tick">'+hidden()+'<button>检查新行情并记账</button></form>'
             body+=f'<form method="post" action="{base}/automation">'+hidden()+f'<input type="hidden" name="enabled" value="{"no" if runtime["enabled"] else "yes"}"><button class="secondary">{"关闭" if runtime["enabled"] else "开启"}每日检查</button></form>'
             if records:

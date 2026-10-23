@@ -2,11 +2,13 @@
 from __future__ import annotations
 
 from dataclasses import asdict, fields
+from math import ceil
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from .governance import GovernanceConfig
+from . import scenario
 
 DEFAULTS_VERSION = "policy_defaults_v1"
 PRESETS = {
@@ -48,11 +50,17 @@ class Policy(BaseModel):
         return value
 
 
-def resolve(preset, overrides=None, mode=None):
+def resolve(preset, overrides=None, mode=None, *, capital=None):
     if preset not in PRESETS:
         raise ValueError("请选择已有政策预设")
     base = asdict(GovernanceConfig())
     values = dict(base, **PRESETS[preset]["overrides"])
+    derived={}
+    if capital is not None:
+        tier=scenario.for_equity(capital["equity"])
+        n=tier["n_hold"]
+        derived={"n_hold":n,"hold_until_rank":ceil(n*1.5),"max_weight":1/n}
+        values.update(derived)
     changes = dict(overrides or {})
     values.update(changes)
     policy = Policy.model_validate({"mode": mode or PRESETS[preset]["mode"], "parameters": values})
@@ -60,10 +68,12 @@ def resolve(preset, overrides=None, mode=None):
             "preset_version": 1, "policy": policy.model_dump(mode="json"),
             "mode_provenance": "user" if mode and mode != PRESETS[preset]["mode"] else "preset",
             "provenance": {k: "user" if k in changes else "preset" if k in PRESETS[preset]["overrides"]
-                           else "engineering_default" for k in values},
+                           else "capital_tier" if k in derived else "engineering_default" for k in values},
+            "capital_defaults":({**capital,**tier,"parameters":derived,
+                "liquidity_note":"流动性门槛为训练资金档位的参考值；当前政策未另行按此门槛过滤股票，不保证成交。"} if capital is not None else None),
             "inactive": ["target_volatility"] if policy.mode == "fixed" else [],
             "changed_from_preset": {**{k: v for k,v in changes.items()
-                                    if v != dict(base, **PRESETS[preset]["overrides"]).get(k)},
+                                    if v != dict(base, **PRESETS[preset]["overrides"],**derived).get(k)},
                                     **({"mode":policy.mode} if policy.mode!=PRESETS[preset]["mode"] else {})}}
 
 

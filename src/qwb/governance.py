@@ -320,7 +320,8 @@ def replay(panel, signals, cfg, *, mode, start, end, initial_cash, snapshot_id, 
 
 
 def exposure_matched_control(panel, signals, cfg, reference, fixed, *, start, end,
-        initial_cash, snapshot_id, samples, check=lambda: None, log=lambda message: None):
+        initial_cash, snapshot_id, samples, check=lambda: None, log=lambda message: None,
+        initial_holdings=None, trading_calendar=None, reference_arm="ml"):
     """Post-hoc explanation only: calibrate constant intent to actual ML exposure.
 
     Integer execution and policy feedback make the mapping discontinuous and not
@@ -339,7 +340,8 @@ def exposure_matched_control(panel, signals, cfg, reference, fixed, *, start, en
             candidate = 0. if step == 0 else (lo+hi)/2
             arm = replay(panel, signals, cfg, mode="fixed", start=start, end=end,
                 initial_cash=initial_cash, snapshot_id=snapshot_id, samples=samples,
-                constant_exposure=candidate, check=check)
+                constant_exposure=candidate, check=check, initial_holdings=initial_holdings,
+                trading_calendar=trading_calendar)
             actual = arm["metrics"]["mean_exposure"]
             trials.append({"constant_target": candidate, "actual_mean": actual})
             current = abs(actual-target)
@@ -354,7 +356,7 @@ def exposure_matched_control(panel, signals, cfg, reference, fixed, *, start, en
                 hi = candidate
     # Do not mutate the original fixed arm if it already meets the tolerance.
     result = dict(best)
-    result["diagnostic"] = {"scope": "post_hoc_explanation_not_deployable", "reference_arm": "ml",
+    result["diagnostic"] = {"scope": "post_hoc_explanation_not_deployable", "reference_arm": reference_arm,
         "matched_quantity": "mean_actual_close_exposure_excluding_initial_state",
         "reference_mean_exposure": target, "constant_target_exposure": float(constant),
         "actual_mean_exposure": best["metrics"]["mean_exposure"],
@@ -362,7 +364,7 @@ def exposure_matched_control(panel, signals, cfg, reference, fixed, *, start, en
         "tolerance": EXPOSURE_MATCH_TOLERANCE,
         "status": "MATCHED_WITHIN_TOLERANCE" if gap <= EXPOSURE_MATCH_TOLERANCE else "NOT_MATCHED",
         "selection_criterion": "absolute_exposure_error_only_not_return",
-        "trials": trials, "limitation": "使用整个回放区间的 ML 仓位校准；不能区分所有风格/择时效应或证明 alpha。"}
+        "trials": trials, "limitation": "使用整个回放区间的参考组仓位校准；不能区分所有风格/择时效应或证明 alpha。"}
     return result
 
 

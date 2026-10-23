@@ -4,6 +4,7 @@ from __future__ import annotations
 from datetime import timedelta
 from pathlib import Path
 import socket
+import tempfile
 
 import pandas as pd
 
@@ -12,20 +13,23 @@ from . import daily_data, experiments, rules, strategy
 DEFAULT_CODES = Path(__file__).parent / "static" / "free_daily_codes.csv"
 
 
-def completed_day():
-    # Conservative: never request a possibly incomplete current session.
-    return str(pd.Timestamp.now(tz="Asia/Shanghai").date() - timedelta(days=1))
+def completed_day(*, now=None, allow_today=False):
+    stamp=pd.Timestamp(now) if now is not None else pd.Timestamp.now(tz="Asia/Shanghai")
+    if stamp.tzinfo is None:raise ValueError("下载检查时间需要时区")
+    stamp=stamp.tz_convert("Asia/Shanghai")
+    same_day=allow_today and (stamp.hour,stamp.minute)>=(17,30)
+    return str(stamp.date() if same_day else stamp.date()-timedelta(days=1))
 
 
-def dates(start, end):
+def dates(start, end, *, now=None, allow_today=False):
     try:
         a, b = pd.Timestamp(start), pd.Timestamp(end)
         if str(a.date()) != start or str(b.date()) != end:
             raise ValueError()
-        if a > b or a < pd.Timestamp("2005-01-01") or end > completed_day():
+        if a > b or a < pd.Timestamp("2005-01-01") or end > completed_day(now=now,allow_today=allow_today):
             raise ValueError()
     except (ValueError, TypeError):
-        raise ValueError("日期须为 YYYY-MM-DD，开始不早于 2005 年，结束不晚于昨天") from None
+        raise ValueError("日期须为 YYYY-MM-DD，开始不早于 2005 年；普通下载不晚于昨天，每日更新仅在 17:30 后可请求当天") from None
     return a, b
 
 
@@ -43,10 +47,10 @@ def table(response):
 
 
 def fetch(feed, codes_file=DEFAULT_CODES, start="2021-01-01", end=None, *,
-          log=print, progress=None, check_cancel=lambda: None, sdk=None):
+          log=print, progress=None, check_cancel=lambda: None, sdk=None, now=None, allow_today=False):
     """Use a serialized worker: BaoStock owns process-global socket state."""
-    end = end or completed_day()
-    _, end_day = dates(start, end)
+    end = end or completed_day(now=now,allow_today=allow_today)
+    _, end_day = dates(start, end,now=now,allow_today=allow_today)
     if sdk is None:
         import baostock as sdk
     feed = Path(feed)
@@ -94,9 +98,9 @@ def fetch(feed, codes_file=DEFAULT_CODES, start="2021-01-01", end=None, *,
         if not expected:
             if (feed / "current.json").is_file():
                 latest = daily_data.current(feed)
-                meta = experiments.read(latest / "snapshot.json")
                 log("所选区间没有新交易日")
-                return {"snapshot": str(latest), "data_snapshot_id": meta["data_snapshot_id"], "added_rows": 0}
+                return daily_data.update(feed,(latest/"source.csv").read_bytes(),
+                    calendar.to_csv(index=False).encode(),source="baostock")
             raise ValueError("所选日期没有交易日")
         frames = []
         fields = "date,code,open,high,low,close,preclose,amount,tradestatus,isST"
@@ -148,3 +152,26 @@ def fetch(feed, codes_file=DEFAULT_CODES, start="2021-01-01", end=None, *,
                 sdk.logout()
         finally:
             socket.setdefaulttimeout(previous_timeout)
+
+
+def refresh_existing(feed, *, now=None, log=print, check_cancel=lambda:None, sdk=None):
+    """Refresh only an existing BaoStock feed, preserving its exact stock set."""
+    feed=Path(feed)
+    snapshot=daily_data.current(feed)
+    meta=experiments.read(snapshot/"snapshot.json")
+    if meta.get("source")!="baostock":
+        return {"state":"EXTERNAL_FEED","message":"此数据源不由 BaoStock 管理，请通过原来源更新"}
+    if not (feed/"current.json").is_file():raise ValueError("不可向固定快照追加，请选择可更新数据源")
+    day=completed_day(now=now,allow_today=True)
+    if meta["end"]>=day:
+        return {"state":"UP_TO_DATE","snapshot":str(snapshot),"added_rows":0}
+    calendar=pd.read_csv(snapshot/"calendar.csv",dtype=str)
+    between=calendar.loc[calendar.date.gt(meta["end"]) & calendar.date.le(day)]
+    if calendar.date.max()>=day and not between.is_open.eq("1").any():
+        return {"state":"MARKET_CLOSED","snapshot":str(snapshot),"added_rows":0}
+    codes=pd.read_csv(snapshot/"source.csv",usecols=["code"],dtype=str).drop_duplicates().sort_values("code")
+    with tempfile.TemporaryDirectory(prefix="temperq-refresh-") as temporary:
+        path=Path(temporary)/"codes.csv";codes.to_csv(path,index=False)
+        result=fetch(feed,path,start=meta["start"],end=day,now=now,allow_today=True,
+            sdk=sdk,log=log,check_cancel=check_cancel)
+    return {"state":"UPDATED",**result}

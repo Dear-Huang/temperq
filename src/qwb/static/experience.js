@@ -16,6 +16,34 @@
   let pending = null;
   const dialog = document.getElementById('preset-change-dialog');
   const search = document.getElementById('policy-search');
+  const capitalData = document.getElementById('policy-capital');
+  const pinned = new Set(capitalData ? JSON.parse(capitalData.textContent).pinned : []);
+  const derivedKeys = ['n_hold', 'hold_until_rank', 'max_weight'];
+  const syncPins = () => { if (input('explicit_overrides')) input('explicit_overrides').value = JSON.stringify([...pinned]); };
+  let capitalRequest = 0;
+  const refreshCapital = async () => {
+    if (!capitalData) return;
+    const request = ++capitalRequest;
+    const submit = editor.querySelector('button:not([type])');
+    const note = document.getElementById('capital-default-note');
+    submit.disabled = true;
+    note.textContent = '正在根据现金和初始持仓计算默认值…';
+    try {
+      const response = await fetch('/strategies/defaults', { method: 'POST', body: new FormData(editor) });
+      const result = await response.json();
+      if (request !== capitalRequest) return;
+      if (!response.ok) throw Error(result.error || '默认值预览失败');
+      for (const preset of Object.values(presets)) {
+        for (const key of derivedKeys) preset.parameters[key] = result.capital_defaults.parameters[key];
+      }
+      for (const key of derivedKeys) if (!pinned.has(key)) input(key).value = presets[current].parameters[key];
+      note.textContent = `参考总权益 ${number(result.capital_defaults.equity)} 元，资金档位 ${result.capital_defaults.label}；默认 ${result.capital_defaults.n_hold} 只。手动改过的参数保留。流动性门槛仅为训练参考，不保证成交。`;
+      submit.disabled = false;
+      syncPins(); update();
+    } catch (error) {
+      if (request === capitalRequest) note.textContent = `默认值尚未确认：${error.message}。请修正现金或持仓后重试。`;
+    }
+  };
 
   const differences = () => {
     const baseline = presets[current];
@@ -86,6 +114,7 @@
     select.value = name;
     mode.value = presets[name].mode;
     for (const [key, value] of Object.entries(presets[name].parameters)) input(key).value = value;
+    pinned.clear(); syncPins();
     update();
   };
   select.addEventListener('change', () => {
@@ -99,12 +128,19 @@
   dialog.addEventListener('cancel', () => { pending = null; });
   document.getElementById('reset-policy').addEventListener('click', () => load(current));
   search.addEventListener('input', filter);
-  editor.addEventListener('input', update);
+  editor.addEventListener('input', event => {
+    if (event.target.closest('[data-field]')) { pinned.add(event.target.name); syncPins(); }
+    update();
+  });
+  input('cash').addEventListener('change', refreshCapital);
+  input('holdings').addEventListener('change', refreshCapital);
+  mode.addEventListener('change', () => { syncPins(); });
   editor.addEventListener('change', event => { if (event.target !== select) update(); });
   editor.addEventListener('invalid', event => {
     let parent = event.target.parentElement;
     while (parent && parent !== editor) { if (parent.tagName === 'DETAILS') parent.open = true; parent = parent.parentElement; }
     search.value = ''; filter();
   }, true);
-  update();
+  syncPins(); update();
+  refreshCapital();
 })();

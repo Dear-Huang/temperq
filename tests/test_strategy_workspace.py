@@ -180,3 +180,80 @@ def test_ui_four_steps_jobs_exports_and_new_version(setup,monkeypatch):
     assert newer.status_code==303 and newer.headers["location"]!=base
     assert client.get(base+"/config.json").json()==frozen
     assert len(w.versions(root,sid))==2
+
+
+def test_partial_adjustment_has_actual_exposure_control_and_fixed_phase_boundary(setup):
+    root,s,v=evaluated(setup)
+    state=w.inspect(root,s,v);result=state["evaluations"][-1]
+    assert set(result["metrics"])=={"selected","immediate","exposure_matched"}
+    diagnostic=result["exposure_match"]
+    assert diagnostic["scope"]=="post_hoc_explanation_not_deployable"
+    assert diagnostic["reference_arm"]=="selected"
+    assert abs(diagnostic["signed_match_error"])<=diagnostic["tolerance"]
+    assert result["metrics"]["immediate"]["mean_exposure"]>result["metrics"]["selected"]["mean_exposure"]
+    assert result["phases"]["startup_sessions"]==25
+    assert result["phases"]["selected"]["post_startup"]["status"]=="NO_OBSERVATIONS"
+    # The boundary comes from speed, not from realized returns or signal ranks.
+    loc,spec=w.revision(root,s,v);cfg,_=w.config(spec)
+    signal=w.history(loc,setup[3])
+    arm=w.replay(loc,spec,setup[3],signal,"fixture",start="2026-10-09",end="2026-10-30")
+    phases=w.phase_comparison({"selected":arm},replace(cfg,adjustment_speed=1.))
+    assert phases["startup_sessions"]==5
+    assert phases["selected"]["startup"]["sessions"]+phases["selected"]["post_startup"]["sessions"]==arm["metrics"]["sessions"]
+    assert phases["selected"]["startup"]["total_cost"]+phases["selected"]["post_startup"]["total_cost"]==pytest.approx(arm["metrics"]["total_cost"])
+
+
+def test_capital_defaults_use_equity_and_never_discard_explicit_override(setup):
+    root,run,feed,panel=setup
+    s,v=w.create(root,run,feed,name="大账户",cash=5_000_000)
+    _,spec=w.revision(root,s,v)
+    resolved=spec["resolved"]
+    assert resolved["policy"]["parameters"]["n_hold"]==30
+    assert resolved["policy"]["parameters"]["hold_until_rank"]==45
+    assert resolved["policy"]["parameters"]["max_weight"]==pytest.approx(1/30)
+    assert resolved["provenance"]["n_hold"]=="capital_tier"
+    s,v=w.create(root,run,feed,name="自定",cash=5_000_000,overrides={"n_hold":10,"max_weight":.08})
+    _,spec=w.revision(root,s,v)
+    assert spec["resolved"]["policy"]["parameters"]["n_hold"]==10
+    assert spec["resolved"]["provenance"]["n_hold"]=="user"
+    holding={"code":panel["close"].columns[0],"quantity":100000,"sellable_quantity":100000}
+    basis=w.capital_context(run,feed,100000,[holding])
+    assert basis["equity"]==pytest.approx(100000+100000*panel["close"].iloc[-1,0])
+    assert basis["holdings_reference_date"]==str(panel["close"].index[-1].date())
+
+
+def test_defaults_preview_and_freeze_share_automatic_values(setup,monkeypatch):
+    root,run,feed,_=setup
+    monkeypatch.setattr(ex,"frozen_source",lambda p:p)
+    monkeypatch.setattr(ui,"datasets",lambda p:{"daily":{"path":feed}})
+    app=ui.create_app(root,runner=lambda fn:fn());client=TestClient(app)
+    form={"token":app.state.token,"source":"model","dataset":"daily","name":"资金默认",
+          "cash":"5000000","preset":"direct","mode":"fixed","n_hold":"10","explicit_overrides":"[]"}
+    assert client.post('/strategies/defaults',data=dict(form,token='bad')).status_code==403
+    preview=client.post('/strategies/defaults',data=form).json()
+    response=client.post('/strategies',data=form,follow_redirects=False)
+    frozen=client.get(response.headers['location']+'/config.json').json()
+    assert frozen['resolved']['policy']==preview['policy']
+    assert frozen['resolved']['policy']['parameters']['n_hold']==30
+    form['explicit_overrides']='["n_hold"]'
+    response=client.post('/strategies',data=form,follow_redirects=False)
+    assert client.get(response.headers['location']+'/config.json').json()['resolved']['policy']['parameters']['n_hold']==10
+
+
+def test_refresh_failure_does_not_tick_and_recovery_keeps_idempotence(setup,monkeypatch):
+    from qwb import free_data
+    root,s,v=evaluated(setup);w.start(root,s,v,historical_start='2026-10-09')
+    events=[]
+    def failed(*args,**kwargs):
+        events.append('download');raise ValueError('当日行情尚未齐全')
+    monkeypatch.setattr(free_data,'refresh_existing',failed)
+    with pytest.raises(ValueError,match='尚未齐全'):
+        w.refresh_and_tick(root,s,v,now='2026-10-22T18:00:00+08:00')
+    assert not w.inspect(root,s,v)['records']
+    assert w.inspect(root,s,v)['health']['state']=='BLOCKED'
+    monkeypatch.setattr(free_data,'refresh_existing',lambda *a,**k:events.append('complete') or {'state':'UPDATED'})
+    result=w.refresh_and_tick(root,s,v,now='2026-10-22T19:00:00+08:00')
+    assert result['new_sessions']==10 and result['data_update']['state']=='UPDATED'
+    before=w.inspect(root,s,v)['records']
+    assert w.refresh_and_tick(root,s,v,now='2026-10-22T20:00:00+08:00')['new_sessions']==0
+    assert w.inspect(root,s,v)['records']==before

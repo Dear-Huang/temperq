@@ -32,7 +32,7 @@ def execute(ctx, config: dict, workdir: Path, *, echo=False) -> None:
             out=workspace.evaluate(workdir,config["sid"],config["vid"],start=config["start"],
                 end=config["end"],check=ctx.check_cancel,log=log)
         else:
-            workspace.tick(workdir,config["sid"],config["vid"],check=ctx.check_cancel)
+            workspace.refresh_and_tick(workdir,config["sid"],config["vid"],check=ctx.check_cancel,log=log,serialized=True)
             out=workspace.location(workdir,config["sid"])/"versions"/config["vid"]
     elif action == "governance":
         from . import governance

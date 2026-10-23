@@ -92,6 +92,27 @@ def config(spec):
     return policy.parameters,policy.mode
 
 
+def capital_context(run_dir,feed,cash,holdings):
+    """Mark initial holdings at the latest available close; freeze the basis."""
+    if isinstance(cash,bool) or not np.isfinite(cash) or cash<0:
+        raise ValueError("可用现金须非负且有限")
+    equity=float(cash)
+    reference=None
+    snapshot=daily_data.current(feed)
+    if holdings:
+        meta=ex.read(Path(run_dir)/"final_model/meta.json")
+        panel,_,_,_=pipeline.load_data({"data":{"source":"snapshot","dir":str(snapshot)},"cfg":meta["cfg"]},Path(run_dir))
+        close=panel["close"].iloc[-1];reference=str(panel["close"].index[-1].date())
+        for item in holdings:
+            price=close.get(item["code"],np.nan)
+            if not np.isfinite(price) or price<=0:raise ValueError(f'初始持仓 {item["code"]} 缺少参考收盘价')
+            equity+=item["quantity"]*float(price)
+    if equity<=0:raise ValueError("现金与初始持仓不能同时为空")
+    return {"equity":equity,"cash":float(cash),"holdings_reference_date":reference,
+        "snapshot_id":ex.read(snapshot/"snapshot.json").get("data_snapshot_id"),
+        "basis":"cash_plus_holdings_at_latest_available_close"}
+
+
 def create(workdir, run_dir, feed, *, name, cash, preset="direct", overrides=None, mode=None,
            holdings=None, sid=None):
     if not name.strip() or len(name)>80 or isinstance(cash,bool) or not np.isfinite(cash) or cash<0:
@@ -101,9 +122,9 @@ def create(workdir, run_dir, feed, *, name, cash, preset="direct", overrides=Non
         feed=feed.parent.parent
     meta=ex.read(run_dir/"final_model/meta.json")
     strategy.locked_recipe(meta)
-    resolved=resolve(preset,overrides,mode)
     holdings=strategy.read_holdings(pd.DataFrame(holdings or [],columns=sorted(strategy.HOLDING_COLUMNS)).to_csv(index=False).encode())
     if cash==0 and not holdings:raise ValueError("现金与初始持仓不能同时为空")
+    resolved=resolve(preset,overrides,mode,capital=capital_context(run_dir,feed,cash,holdings))
     sid=sid or uuid.uuid4().hex
     family=location(workdir,sid)
     if family.exists() and not (family/"identity.json").exists():
@@ -165,7 +186,16 @@ def evaluate(workdir,sid,vid,*,start,end,check=lambda:None,log=lambda x:None):
         log("回放相同信号、授权与风险方式的立即调整对照")
         immediate=replay(root,spec,panel,signals,snapshot_id,start=start,end=end,
                          cfg=replace(cfg,adjustment_speed=1.),calendar=calendar,check=check)
-        for key,arm in (("selected",selected),("immediate",immediate)):
+        log("校准相同平均实际仓位的固定仓位、立即调整对照（仅事后解释）")
+        matched_cfg=replace(cfg,adjustment_speed=1.)
+        fixed=immediate if mode=="fixed" else replay(root,spec,panel,signals,snapshot_id,
+            start=start,end=end,cfg=matched_cfg,mode="fixed",calendar=calendar,check=check)
+        matched=g.exposure_matched_control(panel,signals,matched_cfg,selected,fixed,
+            start=start,end=end,initial_cash=spec["cash"],initial_holdings=spec["holdings"],
+            snapshot_id=snapshot_id,samples=pd.DataFrame(),trading_calendar=calendar,
+            reference_arm="selected",check=check,log=log)
+        arms={"selected":selected,"immediate":immediate,"exposure_matched":matched}
+        for key,arm in arms.items():
             ex.write(out/(key+".json"),arm)
         try:
             operability=preflight(workdir,sid,vid)
@@ -173,14 +203,36 @@ def evaluate(workdir,sid,vid,*,start,end,check=lambda:None,log=lambda x:None):
             operability={"state":"BLOCKED","message":str(exc)}
         result.update(status="SUCCEEDED",snapshot_id=snapshot_id,
             operability=operability,
-            metrics={"selected":selected["metrics"],"immediate":immediate["metrics"]},
+            metrics={key:arm["metrics"] for key,arm in arms.items()},
+            exposure_match=matched["diagnostic"], phases=phase_comparison(arms,cfg),
             cost_difference=selected["metrics"]["total_cost"]-immediate["metrics"]["total_cost"],
             evidence="INSUFFICIENT",message="历史路径对照完成；没有据此证明收益增量。",
-            limitations=g.LIMITATIONS+["此对照只改变调整速度；实际敞口、风险与换手可能不同。"])
+            limitations=g.LIMITATIONS+["立即调整组保留风险方式；相同平均仓位组改用固定仓位，仅为事后解释，不可部署。",
+                "整手、价格漂移与受阻可能使仓位无法精确匹配；平均仓位相近也不代表风险或择时相同。"])
     except BaseException as exc:
         result.update(status="FAILED",error=str(exc));ex.write(out/"result.json",result);raise
     ex.write(out/"result.json",result)
     return out
+
+
+def phase_comparison(arms,cfg):
+    """An ex-ante startup budget, never a boundary selected from realized P&L."""
+    cycles=1 if cfg.adjustment_speed==1 else int(np.ceil(np.log(.05)/np.log1p(-cfg.adjustment_speed)))
+    cutoff=cycles*5
+    phases={"definition":"first_K_five_session_cycles_then_post_startup",
+        "startup_cycles":cycles,"startup_sessions":cutoff,"residual_threshold":.05,
+        "limitation":"按理想静态目标剩余差距不超过 5% 预设建仓观察期；后段不保证已达稳态。"}
+    for name,arm in arms.items():
+        path=arm["path"]
+        result={}
+        for label,a,b in (("startup",1,min(len(path),cutoff+1)),("post_startup",cutoff+1,len(path))):
+            if a>=b:
+                result[label]={"status":"NO_OBSERVATIONS","sessions":0};continue
+            anchor=dict(path[a-1],total_cost=0.,gross_traded_fraction=0.,actual_constraint_violations=0)
+            metrics=g.summarize([anchor,*path[a:b]],[],anchor["equity"],cfg)
+            result[label]={"status":"DESCRIPTIVE_ONLY","start":path[a]["date"],"end":path[b-1]["date"],**metrics}
+        phases[name]=result
+    return phases
 
 
 def preflight(workdir,sid,vid):
@@ -369,6 +421,28 @@ def automation(workdir,sid,vid,enabled):
         ex.write(root/"runtime.json",runtime)
 
 
+def refresh_and_tick(workdir,sid,vid,*,now=None,check=lambda:None,log=lambda message:None,serialized=False):
+    """A successful complete refresh precedes accounting; failure appends nothing."""
+    from .free_data import refresh_existing
+    root,spec=revision(workdir,sid,vid)
+    try:
+        if serialized:
+            updated=refresh_existing(spec["data_feed"],now=now,check_cancel=check,log=log)
+        else:
+            # Same lock as detached UI workers: BaoStock has process-global sockets.
+            with ex.output_lock(Path(workdir)/"runs/jobs/worker"):
+                updated=refresh_existing(spec["data_feed"],now=now,check_cancel=check,log=log)
+        status=tick(workdir,sid,vid,now=now,check=check)
+        status["data_update"]=updated
+        ex.write(root/"health.json",status)
+        return status
+    except Exception as exc:
+        ex.write(root/"health.json",{"state":"BLOCKED","stage":"data_refresh_or_accounting",
+            "message":f"更新或记账受阻：{exc}；未发布不完整数据，不追加失败批次。补齐后可手动重试。",
+            "checked_at":str(now if now is not None else pd.Timestamp.now(tz="Asia/Shanghai"))})
+        raise
+
+
 def auto_check(workdir,*,now=None):
     stamp=pd.Timestamp(now) if now is not None else pd.Timestamp.now(tz="Asia/Shanghai")
     stamp=stamp.tz_convert("Asia/Shanghai")
@@ -379,7 +453,7 @@ def auto_check(workdir,*,now=None):
                 value=ex.read(path)
                 if not value["enabled"] or value.get("attempted_day")==str(stamp.date()):continue
                 value["attempted_day"]=str(stamp.date());ex.write(path,value)
-            tick(workdir,path.parents[2].name,path.parent.name,now=stamp)
+            refresh_and_tick(workdir,path.parents[2].name,path.parent.name,now=stamp)
         except Exception as exc:
             try:
                 ex.write(path.parent/"health.json",{"state":"BLOCKED","message":str(exc),"checked_at":str(stamp)})

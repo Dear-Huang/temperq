@@ -69,6 +69,15 @@ def derive(tier: str) -> dict:
             "per_name": per_name, "min_adv_yuan": per_name / PARTICIPATION}
 
 
+def for_equity(equity: float) -> dict:
+    """Use the same tier boundaries for training and account policy defaults."""
+    import math
+    if isinstance(equity, bool) or not math.isfinite(equity) or equity <= 0:
+        raise ValueError("账户总权益须为正数")
+    tier=next((key for key,_,cap,_ in CAPITAL_TIERS if equity <= cap),CAPITAL_TIERS[-1][0])
+    return {"tier":tier,**derive(tier)}
+
+
 def task_card(horizon: int, market: str = "cn_a") -> dict:
     """Rank stocks by the open-to-open return over `horizon` trading days."""
     if horizon not in HORIZONS:

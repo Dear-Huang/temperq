@@ -149,3 +149,34 @@ def test_ui_free_download_persistent_worker_and_selection(tmp_path, monkeypatch)
     job_id = response.headers["location"].split("/")[-1]
     assert app.state.store.spec(job_id)["config"]["action"] == "free_data"
     assert "free_daily" in ui.datasets(tmp_path)
+
+
+def test_refresh_can_request_today_only_after_close_and_preserves_symbol_list(tmp_path):
+    sdk,feed=SDK(),tmp_path/'feed'
+    free_data.fetch(feed,codes(tmp_path),'2025-01-02','2025-01-03',sdk=sdk)
+    assert free_data.completed_day(now='2025-01-06T17:29:00+08:00',allow_today=True)=='2025-01-05'
+    assert free_data.completed_day(now='2025-01-06T17:30:00+08:00',allow_today=True)=='2025-01-06'
+    with pytest.raises(ValueError):
+        free_data.fetch(feed,codes(tmp_path),'2025-01-02','2025-01-06',sdk=sdk,
+            now='2025-01-06T17:29:00+08:00',allow_today=True)
+    sdk.missing=True
+    before=(feed/'current.json').read_bytes()
+    with pytest.raises(ValueError,match='行情缺日'):
+        free_data.refresh_existing(feed,now='2025-01-06T17:30:00+08:00',sdk=sdk)
+    assert (feed/'current.json').read_bytes()==before
+    sdk.missing=False
+    result=free_data.refresh_existing(feed,now='2025-01-06T18:00:00+08:00',sdk=sdk)
+    assert result['added_rows']==2
+    sdk.login=lambda:pytest.fail('current or closed sessions need no network')
+    assert free_data.refresh_existing(feed,now='2025-01-06T19:00:00+08:00',sdk=sdk)['added_rows']==0
+    assert free_data.refresh_existing(feed,now='2025-01-05T18:00:00+08:00',sdk=sdk)['state']=='UP_TO_DATE'
+
+
+def test_refresh_skips_holiday_and_never_replaces_external_feed(tmp_path):
+    feed=tmp_path/'feed';sdk=SDK()
+    free_data.fetch(feed,codes(tmp_path),'2025-01-02','2025-01-03',sdk=sdk)
+    sdk.login=lambda:pytest.fail('weekend is already covered by authoritative calendar')
+    assert free_data.refresh_existing(feed,now='2025-01-04T18:00:00+08:00',sdk=sdk)['state']=='MARKET_CLOSED'
+    meta_path=daily_data.current(feed)/'snapshot.json'
+    meta=experiments.read(meta_path);meta['source']='user_csv';experiments.write(meta_path,meta)
+    assert free_data.refresh_existing(feed,now='2025-01-06T18:00:00+08:00',sdk=sdk)['state']=='EXTERNAL_FEED'
