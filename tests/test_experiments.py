@@ -298,3 +298,17 @@ def test_runs_cli_and_export_refuses_overwrite(research, monkeypatch, capsys):
     output = root / "public-evidence.zip"
     assert cli.main(["runs", "export", first["run_id"], "--evaluation", str(a), "--output", str(output)]) == 0
     assert cli.main(["runs", "export", first["run_id"], "--output", str(output)]) == 1
+
+
+def test_imported_legacy_run_is_listed_once(research, tmp_path, monkeypatch):
+    import shutil
+    _, first, *_ = research
+    work = tmp_path / "work"
+    legacy = work / "runs" / "old_model"
+    shutil.copytree(first["output"], legacy)
+    (legacy / "run.json").unlink()
+    experiments.import_legacy(legacy, work)
+    monkeypatch.setattr(ui, "hardware", lambda: {"cpu": "fixture", "cores": 2, "mem_gb": 8, "gpus": []})
+    page = TestClient(ui.create_app(work, runner=lambda fn: fn())).get("/").text
+    section = page.split("已训练模型", 1)[1].split("</ul>", 1)[0]
+    assert section.count("<li") == 1

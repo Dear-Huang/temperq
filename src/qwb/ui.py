@@ -931,8 +931,20 @@ def create_app(workdir: Path, task_dir: Path | None = None,
         candidates = list((runs_root / "history").glob("*/final_model/meta.json"))
         candidates += list(runs_root.glob("*/final_model/meta.json"))
         seen = set()
+        # A legacy run imported into history keeps its original folder without run.json;
+        # list it once, through the archived copy.
+        imported = set()
+        for rp in (runs_root / "history").glob("*/run.json"):
+            try:
+                latest = experiments.read(rp).get("latest_dir")
+            except (OSError, ValueError):
+                continue
+            if latest:
+                imported.add(os.path.normcase(str(Path(latest).resolve())))
         for mp in candidates:
             d = mp.parent.parent
+            if not (d / "run.json").is_file() and os.path.normcase(str(d.resolve())) in imported:
+                continue
             if (d / "run.json").is_file():
                 try:
                     identity = experiments.read(d / "run.json")["run_id"]
