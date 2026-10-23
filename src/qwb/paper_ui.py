@@ -8,7 +8,7 @@ import pandas as pd
 from fastapi import Request
 from fastapi.responses import RedirectResponse, Response
 
-from . import daily_data, paper
+from . import daily_data, daily_operation, paper
 from .strategy_ui import reason_text
 
 
@@ -80,12 +80,27 @@ def register(app, workdir, *, page, guard, token):
             chart = f'<svg viewBox="0 0 720 170" role="img" aria-label="模拟账户权益曲线" style="width:100%;height:170px">' \
                     f'<polyline points="{points}" fill="none" stroke="var(--acc)" stroke-width="2"/></svg>'
         status = value["status"]
+        tracking = daily_operation.coverage(workdir, name)
+        operation = tracking["operation"]
+        operation_time = (pd.Timestamp(operation["attempted_at"]).tz_convert("Asia/Shanghai")
+                          .strftime("%Y-%m-%d %H:%M")) if operation else ""
+        operations = (f'<p>最近每日任务：{esc(operation_time)} · '
+                      f'{esc(operation.get("message", ""))}</p>') if operation else ''
+        if operation and operation.get("data_end"):
+            operations += f'<p>已核验行情截至 {esc(operation["data_end"])}</p>'
+        if not tracking.get("calendar_available", True):
+            operations += '<p class="warn">交易日历未覆盖检查日期，漏记列表可能不完整。</p>'
+        gaps = ''.join(f'<tr><td>{esc(r["day"])}</td><td>{esc(r["record_type"])}</td>'
+                       f'<td>{esc(r["reason"])}</td></tr>' for r in tracking["missed"])
+        if gaps:
+            operations += ('<h3>未及时记录的交易日</h3><div class="tw"><table><tr><th>日期</th>'
+                           f'<th>记录</th><th>原因</th></tr>{gaps}</table></div>')
         return page(f"模拟账户 {name}", f'<p><a href="/paper">全部账户</a></p><h2>{esc(name)}</h2>'
                     f'<p>{esc({"WAITING_DATA": "等待数据", "WAITING_CALENDAR": "等待交易日历", "RUNNING": "运行中", "BLOCKED": "已停止"}.get(status["state"], status["state"]))} · {esc(status["message"])}</p>'
                     '<p class="warn">日线开盘价模拟，只扣佣金和印花税，未计价差与冲击；历史补记单独标识。</p>'
                     f'<form method="post" action="/paper/{esc(name)}/tick">'
                     f'<input type="hidden" name="token" value="{token}"><button>更新记账</button></form>'
-                    f'<p><a href="/paper/{esc(name)}/history.csv">下载账户历史</a></p>{chart}'
+                    f'<p><a href="/paper/{esc(name)}/history.csv">下载账户历史</a></p>{operations}{chart}'
                     '<h3>账户权益</h3><div class="tw"><table><tr><th>日期</th><th>权益</th><th>现金</th>'
                     f'<th>费用</th><th>记录类型</th></tr>{rows}</table></div>'
                     '<h3>当前持仓</h3><div class="tw"><table><tr><th>代码</th><th>持仓</th><th>可卖</th>'
@@ -99,7 +114,12 @@ def register(app, workdir, *, page, guard, token):
         form = await req.form()
         guard(req, form.get("token"))
         try:
-            paper.tick(workdir, name)
+            root = paper.location(workdir, name)
+            if (root / "operation.json").exists():
+                config = paper.inspect(workdir, name)["config"]
+                daily_operation.run(workdir, name, config["data"]["dir"])
+            else:
+                paper.tick(workdir, name)
         except (ValueError, OSError, KeyError) as exc:
             return page("记账已停止", f'<p>{esc(exc)}</p>')
         return RedirectResponse(f"/paper/{name}", 303)
