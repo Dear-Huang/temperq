@@ -93,6 +93,18 @@ def build(out: Path, python_home: Path, uv: str):
     python = runtime / "python.exe"
     # The copied runtime is ours, not the uv-managed original installation.
     (runtime / "Lib" / "EXTERNALLY-MANAGED").unlink(missing_ok=True)
+    # LightGBM's wheel requires MSVC/OpenMP beyond the DLLs shipped by CPython.
+    # Use a versioned redistributable wheel, never arbitrary developer System32 files.
+    microsoft = out / "microsoft-runtime-wheel"
+    run([uv, "pip", "install", "--python", python, "--target", microsoft, "--no-deps",
+         "--only-binary", ":all:", "msvc-runtime==14.44.35112"])
+    for dll in microsoft.glob("*.dll"):
+        shutil.copy2(dll, runtime / dll.name)
+    shutil.copy2(microsoft / "msvc_runtime-14.44.35112.dist-info/licenses/LICENSE",
+                 runtime / "MICROSOFT_RUNTIME_LICENSE.txt")
+    signature_check = "$ErrorActionPreference='Stop'; Get-ChildItem -LiteralPath $env:TEMPERQ_RUNTIME_PAYLOAD -Filter '*.dll' | ForEach-Object { $s=Get-AuthenticodeSignature -LiteralPath $_.FullName; if($s.Status -ne 'Valid' -or $s.SignerCertificate.Subject -notmatch 'O=Microsoft Corporation') { throw ('Invalid Microsoft signature: '+$_.Name) } }"
+    run([shutil.which("pwsh") or "powershell.exe", "-NoProfile", "-Command", signature_check],
+        env=dict(os.environ, TEMPERQ_RUNTIME_PAYLOAD=str(microsoft)))
     run([uv, "pip", "install", "--python", python, "--only-binary", ":all:", "-r", ROOT / "requirements.lock"])
     run([uv, "pip", "install", "--python", python, "--no-deps", stage, stage / "third_party/ashare-tcost"])
     packages = runtime / "Lib" / "site-packages"
@@ -111,6 +123,7 @@ def build(out: Path, python_home: Path, uv: str):
     inventory_code = "import importlib.metadata as m,json; print(json.dumps(sorted([(d.metadata['Name'],d.version,d.metadata.get('License-Expression') or d.metadata.get('License','')) for d in m.distributions()]),ensure_ascii=False))"
     dependencies = json.loads(subprocess.check_output([str(python), "-I", "-X", "utf8", "-c", inventory_code], text=True, encoding="utf-8"))
     notices = ["# Bundled software\n", "Python: " + version.strip(),
+               "\nMicrosoft C++/OpenMP DLLs: msvc-runtime 14.44.35112 wheel; original signatures verified. Redistribution terms: runtime/MICROSOFT_RUNTIME_LICENSE.txt.",
                "\nPython distribution license: runtime/LICENSE.txt. Dependency license files are retained in runtime/Lib/site-packages/*dist-info/ (including licenses/).",
                "\nThe complete corresponding TemperQ and ashare-tcost source is included. Build script: scripts/build_windows_portable.py. Font license: src/qwb/static/OFL.txt.",
                "\n| Package | Version | Declared license |\n| --- | --- | --- |"]

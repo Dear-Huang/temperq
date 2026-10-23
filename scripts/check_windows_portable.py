@@ -42,6 +42,26 @@ sys.addaudithook(offline)
     env = dict(os.environ, PATH=str(Path(os.environ["SystemRoot"]) / "System32"),
                PYTHONHOME="Z:/no-system-python", PYTHONPATH="Z:/no-source-checkout",
                PYTHONNOUSERSITE="1", PYTHONUTF8="1")
+    runtime_probe = '''import ctypes, json
+from pathlib import Path
+import sys
+import lightgbm
+kernel=ctypes.windll.kernel32
+kernel.GetModuleHandleW.restype=ctypes.c_void_p
+kernel.GetModuleHandleW.argtypes=[ctypes.c_wchar_p]
+kernel.GetModuleFileNameW.argtypes=[ctypes.c_void_p,ctypes.c_wchar_p,ctypes.c_uint]
+loaded={}
+for name in ['msvcp140.dll','vcomp140.dll']:
+    handle=kernel.GetModuleHandleW(name)
+    assert handle, name
+    buffer=ctypes.create_unicode_buffer(32768)
+    assert kernel.GetModuleFileNameW(handle,buffer,len(buffer))
+    assert Path(buffer.value).resolve().parent == Path(sys.executable).resolve().parent, buffer.value
+    loaded[name]=buffer.value
+print(json.dumps(loaded,ensure_ascii=False))
+'''
+    dlls = subprocess.check_output([str(app / "runtime/python.exe"), "-E", "-s", "-X", "utf8", "-c", runtime_probe],
+                                   cwd=app, env=env, encoding="utf-8", timeout=30)
     cli = subprocess.run([os.environ.get("COMSPEC", "cmd.exe"), "/d", "/c", "temperq.bat", "--help"],
                          cwd=app, env=env, capture_output=True, encoding="utf-8", timeout=30)
     assert cli.returncode == 0 and "temperq" in cli.stdout.lower(), cli.stderr
@@ -95,6 +115,7 @@ sys.addaudithook(offline)
             assert "一句话结论" in report and "完整报告" in report
             assert (app / "runs/portable_acceptance/final_model/meta.json").is_file()
             output = {"status": "PASS", "source_commit": manifest["source_commit"],
+                      "microsoft_runtime_loaded_from": json.loads(dlls),
                       "relocated_to": str(app), "startup": "start.bat", "external_network": "blocked by Python audit hook",
                       "path": env["PATH"], "user_site": "disabled", "gpu": "not bundled",
                       "detached_training_job": job_id, "elapsed_seconds": round(time.monotonic() - started, 2),
