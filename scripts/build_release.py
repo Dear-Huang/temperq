@@ -23,7 +23,7 @@ UV_VERSION = "0.11.24"
 UV_LINUX = (f"https://github.com/astral-sh/uv/releases/download/{UV_VERSION}/"
             "uv-x86_64-unknown-linux-gnu.tar.gz")
 LOCAL_EXCLUDE = {"SPEC.md", "SETUP-依赖拉取清单.md", "docs/QW_BENCH_RESEARCH.md",
-                 "docs/DEVELOPMENT.md", "docs/INTEGRATION.md", "docs/VALIDATION.md",
+                 "docs/DEVELOPMENT.md", "docs/VALIDATION.md",
                  "scripts/build_release.py", "scripts/check_repository.py",
                  "scripts/repository_files.py", "scripts/m1_pilot.py", "scripts/m2_kronos.py", "scripts/qa_workbench.mjs",
                  "tests/test_repository_export.py", "docs/使用手册.docx"}

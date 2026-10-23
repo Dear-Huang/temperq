@@ -9,7 +9,7 @@
 新增 `src/qwb/bench/lifecycle.py`。生命周期文件由缓存中的 tushare `suspend_d`（停牌类型 S）和 `stock_basic`（退市日期）生成：
 
 ```powershell
-.venv\Scripts\python.exe -X utf8 -c "from qwb.bench import lifecycle; print(lifecycle.build_from_cache('E:/data/qwb_cache','E:/data/qwb_lifecycle/lifecycle.parquet'))"
+.venv\Scripts\python.exe -X utf8 -c "from qwb.bench import lifecycle; print(lifecycle.build_from_cache('<缓存目录>','<输出目录>/lifecycle.parquet'))"
 ```
 
 本机结果：103,540 行，其中停牌 103,199 条、退市 341 条。

@@ -35,3 +35,4 @@ build/
 *.db-shm
 *.baiduyun.uploading.cfg
 *.tmp
+docs/INTEGRATION.md

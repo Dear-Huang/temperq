@@ -21,7 +21,7 @@ v0.3 新增：独立分数复权单位账户、逐笔费用/拒单、每日现�
 
 ## 快速运行
 
-在 `D:\huang\quant-workbench` 的 PowerShell 中运行。先用当前评分器建立新协议，固定本地行情、费用/账户规则和 LightGBM 参考产物；以下输出路径必须不存在。
+在仓库根目录的 PowerShell 中运行。先用当前评分器建立新协议，固定本地行情、费用/账户规则和 LightGBM 参考产物；以下输出路径必须不存在。
 
 ```powershell
 # 评估自己训练好的运行目录；输出目录必须不存在。
@@ -46,7 +46,7 @@ v0.3 新增：独立分数复权单位账户、逐笔费用/拒单、每日现�
 ## 在其他机器或任务上建立协议
 
 ```powershell
-.venv\Scripts\python.exe -m qwb.cli bench init runs/cn_rank_5d_lgbm --data-dir E:/data/qwb_data --output bench/protocols/my_development.yaml
+.venv\Scripts\python.exe -m qwb.cli bench init runs/cn_rank_5d_lgbm --data-dir <你的数据目录> --output bench/protocols/my_development.yaml
 
 # 示例：预先规定正信号至少 1 IC 分，并要求相对锚点至少提高 0.5 IC 分。
 # 只是任务开发目标示例，不是学术标准或实盘门槛。

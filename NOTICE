@@ -1,0 +1,19 @@
+TemperQ
+Copyright (C) 2026 Dear-Huang
+
+This program is free software: you can redistribute it and/or modify it under
+the terms of the GNU Affero General Public License as published by the Free
+Software Foundation, version 3 of the License or (at your option) any later
+version. See LICENSE for the full text.
+
+If you modify this program and let users interact with it over a network, you
+must offer those users the corresponding source code of your modified version
+(AGPL-3.0 section 13).
+
+Third-party components keep their own licenses:
+- third_party/ashare-tcost/  STRUCT cost library, MIT License (see its LICENSE)
+- src/qwb/static/dm-sans.ttf and website/public/fonts/  DM Sans, SIL Open Font License 1.1 (OFL.txt)
+- Python and JavaScript dependencies are installed separately under their own licenses.
+
+This software is for research and education. It does not provide investment
+advice, guarantees of returns, or automated live trading.

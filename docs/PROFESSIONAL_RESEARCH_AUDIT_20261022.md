@@ -55,7 +55,7 @@
 运行命令：
 
 ```powershell
-.venv\Scripts\python.exe scripts/compare_training_quality.py --data-dir E:/data/qwb_data --output artifacts/my-quality-audit --codes 240 --end-year 2023
+.venv\Scripts\python.exe scripts/compare_training_quality.py --data-dir <你的数据目录> --output artifacts/my-quality-audit --codes 240 --end-year 2023
 ```
 
 目标目录必须不存在。先从历史股票代码并集中按 `sha256(code)` 固定抽样，排除北交所，选择 240 只沪深股票；选股不使用收益或当前上市名单。使用 2018–2023 行情，2021–2023 按年滚动预测，两个种子；本轮不读取 2024–2025 行情文件来选择设置。它仍是已经接触过的历史开发数据，不能称为独立确认。

@@ -12,7 +12,7 @@
 
 2026-10-23 最小交付：账户建议与每日模拟软件链路已验收；全市场独立数据源已补至 2026-10-22，主力前向账户已接入。Windows 每天 17:30 先更新行情、核验截止日，再记账；更新失败会受阻并留痕，漏记/晚到补记在账户页显示。当前上午核验仍为 0 日真实前向记录，收盘后才开始积累；192 日补齐不算前向成绩。原研究快照与模型保留。执行实验 A 已复用同一预测做四种口径对照，见 [实验报告](docs/research/EXECUTION_A_20261023.md)；这是口径适配实验，不是运行 Qlib 引擎或平台胜负结论。外部试用、服务器与免费 BaoStock 联网路径仍待验收。各步骤状态见 [实施 SPEC](docs/specs/PRODUCT_WORKFLOW_SPEC.md)。
 
-**本目录是唯一开发主目录。** 不再到 `D:/huang/qwb_release_*` 中改代码。历史副本已归档，成本库已并入项目，GitHub 克隆无需另找同级仓库。整合记录见 [docs/INTEGRATION.md](docs/INTEGRATION.md)。
+成本库已并入本仓库，克隆后无需另找同级仓库。
 
 ## 项目结构
 
@@ -42,7 +42,8 @@ quant-workbench/
 源码安装需要 [uv](https://docs.astral.sh/uv/)。本地用户发布包已附带 Windows/Linux uv。
 
 ```powershell
-cd D:\huang\quant-workbench
+git clone https://github.com/Dear-Huang/temperq.git
+cd temperq
 .\install.bat
 .\start.bat
 ```
@@ -167,4 +168,4 @@ git push -u origin main
 
 原始行情序列、目标账户与 B2 的开发资料保留在 [研究实施记录](docs/E2E_IMPLEMENTATION.md)、[序列训练](docs/PIT_SEQUENCE_RUNS.md)、[目标 Bench](docs/TARGET_BENCH.md) 和 [实验效用训练](docs/UTILITY_TRAINING.md)。B2 暂停扩展，已有合成验证及未关闭问题保留，不作为产品已盈利或已部署的证据。
 
-MIT 许可见 [LICENSE](LICENSE)，成本库保留其 [独立许可](third_party/ashare-tcost/LICENSE)。数据和模型权重的授权需分别核对。项目用于研究与复现，不提供收益承诺或自动实盘交易。
+版权所有 © 2026 Dear-Huang。本项目以 [AGPL-3.0](LICENSE) 授权：可以自由使用、修改和再分发；修改后通过网络向他人提供服务，须同样公开修改后的源码。成本库 `third_party/ashare-tcost` 保留其 [MIT 许可](third_party/ashare-tcost/LICENSE)，字体为 OFL 1.1，详见 [NOTICE](NOTICE)。数据和模型权重的授权需分别核对。项目用于研究与复现，不提供收益承诺或自动实盘交易。

@@ -26,7 +26,7 @@
 ## 复现与身份
 
 ```powershell
-.venv/Scripts/python.exe -X utf8 scripts/compare_execution_a.py --data E:/data/qwb_data --out artifacts/my-execution-a
+.venv/Scripts/python.exe -X utf8 scripts/compare_execution_a.py --data <你的数据目录> --out artifacts/my-execution-a
 ```
 
 输出目录必须不存在。命令会取得固定版本的官方配置；离线可加 `--qlib-reference <先前输出>/qlib-reference.yaml`。原研究数据、预测文件由本机保存，未随 GitHub 分发；只有代码和这份报告不能自动重现私有行情。

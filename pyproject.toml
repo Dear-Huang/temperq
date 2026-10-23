@@ -3,6 +3,8 @@ name = "temperq"
 version = "0.0.1"
 description = "TemperQ: local model training, account simulation and honest evaluation"
 readme = "README.md"
+license = {text = "AGPL-3.0-or-later"}
+authors = [{name = "Dear-Huang"}]
 requires-python = ">=3.10"
 dependencies = [
     "pandas>=2.0",
