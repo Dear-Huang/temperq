@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import html
+import math
 
 import pandas as pd
 from fastapi import Request
@@ -16,15 +17,83 @@ def esc(value):
     return html.escape(str(value))
 
 
+STATES = {"WAITING_DATA": ("等待数据", "pending"), "WAITING_CALENDAR": ("等待日历", "pending"),
+          "RUNNING": ("运行中", "active"), "BLOCKED": ("运行受阻", "blocked")}
+SCOPES = {"historical_replay": "历史演示", "late_reconstruction": "晚到补记", "forward_paper": "当日前向"}
+
+
+def statistics(value):
+    records = value["sessions"]
+    cash = records[-1]["state"]["cash"] if records else value["config"]["cash"]
+    equity = records[-1]["equity"] if records else cash if not value["config"]["holdings"] else None
+    change = records[-1]["equity"] / records[0]["equity"] - 1 if len(records) > 1 else None
+    peak, drawdown = 0, 0
+    for record in records:
+        peak = max(peak, record["equity"])
+        if peak:
+            drawdown = min(drawdown, record["equity"] / peak - 1)
+    return {"equity": equity, "cash": cash, "change": change,
+            "drawdown": drawdown if len(records) > 1 else None,
+            "fees": sum((r["audit"] or {}).get("total_cost", 0) for r in records),
+            "forward_days": sum(r["scope"] == "forward_paper" for r in records)}
+
+
+def metric(label, value, note=""):
+    return f'<div class="metric"><span>{esc(label)}</span><strong>{esc(value)}</strong><small>{esc(note)}</small></div>'
+
+
+def equity_chart(records, *, compact=False):
+    if len(records) < 2:
+        label = "等待首个完整收盘记录" if not records else "已有 1 日记录，等待下个交易日"
+        return f'<div class="chart-empty{" compact" if compact else ""}"><span>{label}</span></div>'
+    values = [r["equity"] / records[0]["equity"] for r in records]
+    if not all(math.isfinite(v) for v in values):
+        return '<p class="warn">权益记录异常，暂不绘制曲线</p>'
+    low, high = min(values), max(values)
+    padding = max((high-low) * .12, .0005)
+    bottom, top = low-padding, high+padding
+    points = ' '.join(f'{50 + 660*i/(len(values)-1):.1f},{145-125*(v-bottom)/(top-bottom):.1f}' for i, v in enumerate(values))
+    labels = '' if compact else f'<div class="chart-scale"><span>{high:.4f}</span><span>{low:.4f}</span></div>'
+    return (f'<div class="chart-plot">{labels}<svg class="equity-chart{" compact" if compact else ""}" viewBox="0 0 720 160" preserveAspectRatio="none" '
+            'role="img" aria-label="账户净值曲线，首个记录日为 1">'
+            '<line x1="50" y1="145" x2="710" y2="145" stroke="var(--line)"/>'
+            f'<polyline points="{points}" fill="none" stroke="var(--acc)" stroke-width="2" '
+            'vector-effect="non-scaling-stroke"/></svg></div>'
+            f'<div class="chart-dates"><span>{esc(records[0]["day"])}</span><span>{esc(records[-1]["day"])}</span></div>')
+
+
 def register(app, workdir, *, page, guard, token):
     @app.get("/paper")
     def index():
-        links = []
+        accounts = []
         for path in sorted((workdir / "runs" / "paper").glob("*/strategy.json")):
             name = path.parent.name
-            links.append(f'<li><a href="/paper/{esc(name)}">{esc(name)}</a></li>')
-        return page("模拟账户", '<h2>模拟账户</h2><ul>' + ''.join(links) + '</ul>'
-                    '<p><a href="/models">选择模型</a> · <a href="/paper/data">更新日线数据</a></p>')
+            value = paper.inspect(workdir, name)
+            accounts.append((name, value))
+        accounts.sort(key=lambda pair: (pair[1]["config"]["scope"] != "forward_paper", pair[0]))
+        cards = []
+        for name, value in accounts:
+            stats = statistics(value)
+            state, tone = STATES.get(value["status"]["state"], (value["status"]["state"], "pending"))
+            records = value["sessions"]
+            scope = "前向模拟" if value["config"]["scope"] == "forward_paper" else "历史演示"
+            position_count = len(records[-1]["state"]["positions"]) if records else len(value["config"]["holdings"])
+            cards.append(f'<article class="account-card"><div class="card-heading"><span class="scope-label">{scope}</span>'
+                f'<span class="status-badge {tone}">{esc(state)}</span></div>'
+                f'<h3><a href="/paper/{esc(name)}">{esc(name)}</a></h3>'
+                '<div class="metrics compact-metrics">' +
+                metric("账户权益（元）", f'{stats["equity"]:,.2f}' if stats["equity"] is not None else "待估值") +
+                metric("记录期收益", f'{stats["change"]:+.2%}' if stats["change"] is not None else "暂无", f'{len(records)} 个记录日') +
+                '</div>' + equity_chart(records, compact=True) +
+                f'<div class="card-meta"><span>持仓 {position_count} 只</span><span>当日前向 {stats["forward_days"]} 日</span></div>'
+                f'<p class="mut account-message">{esc(value["status"]["message"])}</p>'
+                f'<a class="card-link" href="/paper/{esc(name)}">查看账户</a></article>')
+        content = '<div class="account-grid">' + ''.join(cards) + '</div>' if cards else (
+            '<div class="empty-state"><h3>还没有模拟账户</h3><a class="btn" href="/models">选择模型</a></div>')
+        return page("模拟账户", '<div class="page-heading"><div><h1>模拟账户</h1>'
+                    f'<p class="mut">{len(accounts)} 个账户 · 前向模拟与历史演示分别记录</p></div>'
+                    '<div class="actions"><a href="/paper/data">更新日线数据</a><a class="btn" href="/models">选择模型</a></div></div>'
+                    '<p class="notice">模拟费用仅含佣金和印花税，未含价差与冲击。历史演示和晚到补记不算前向成绩。</p>' + content)
 
     @app.get("/paper/data")
     def data_page():
@@ -61,24 +130,27 @@ def register(app, workdir, *, page, guard, token):
         except (ValueError, OSError) as exc:
             return page("模拟账户", f'<p>{esc(exc)}</p>')
         records = value["sessions"]
+        stats = statistics(value)
         rows = ''.join(f'<tr><td>{esc(r["day"])}</td><td>{r["equity"]:,.2f}</td>'
                        f'<td>{r["state"]["cash"]:,.2f}</td><td>{(r["audit"] or {}).get("total_cost", 0):,.2f}</td>'
-                       f'<td>{esc({"historical_replay": "历史演示", "late_reconstruction": "晚到补记", "forward_paper": "当日前向"}.get(r["scope"], r["scope"]))}</td></tr>' for r in records[-60:])
-        positions = (records[-1]["state"]["positions"] if records else [])
+                       f'<td>{esc(SCOPES.get(r["scope"], r["scope"]))}</td></tr>' for r in records[-60:])
+        positions = records[-1]["state"]["positions"] if records else [dict(p, asset_id=p["code"], mark=None) for p in value["config"]["holdings"]]
         held = ''.join(f'<tr><td>{esc(p["asset_id"])}</td><td>{p["quantity"]}</td>'
-                       f'<td>{p["sellable_quantity"]}</td><td>{p["mark"]:,.2f}</td></tr>' for p in positions)
-        fills = [dict(day=r["day"], **f) for r in records[-10:] for f in (r["audit"] or {}).get("fills", [])]
+                       f'<td>{p["sellable_quantity"]}</td><td>{format(p["mark"], ",.2f") if p["mark"] is not None else "待估值"}</td></tr>' for p in positions)
+        submissions = [dict(day=r["day"], **f) for r in records[-10:] for f in (r["audit"] or {}).get("fills", [])]
+        fills = [f for f in submissions if f["quantity"] > 0]
+        rejected = [f for f in submissions if not f["quantity"]]
         trades = ''.join(f'<tr><td>{esc(f["day"])}</td><td>{esc(f["asset_id"])}</td>'
                          f'<td>{"买入" if f["side"] == "BUY" else "卖出"}</td><td>{f["quantity"]}</td><td>{esc(reason_text(f["reason"]))}</td></tr>'
                          for f in fills)
-        chart = ''
-        if len(records) > 1:
-            values = [r["equity"] for r in records]
-            low, high = min(values), max(values)
-            points = ' '.join(f'{10 + 700 * i / (len(values)-1):.1f},{150 - 130 * (v-low)/max(high-low,1):.1f}'
-                              for i, v in enumerate(values))
-            chart = f'<svg viewBox="0 0 720 170" role="img" aria-label="模拟账户权益曲线" style="width:100%;height:170px">' \
-                    f'<polyline points="{points}" fill="none" stroke="var(--acc)" stroke-width="2"/></svg>'
+        chart = equity_chart(records)
+        rejections = ''
+        if rejected:
+            rejected_rows = ''.join(f'<tr><td>{esc(f["day"])}</td><td>{esc(f["asset_id"])}</td>'
+                                   f'<td>{esc(reason_text(f["reason"]))}</td></tr>' for f in rejected)
+            rejections = (f'<details><summary>未成交申报（{len(rejected)} 条）</summary>'
+                       '<div class="tw"><table><tr><th>日期</th><th>代码</th><th>原因</th></tr>'
+                       f'{rejected_rows}</table></div></details>')
         status = value["status"]
         tracking = daily_operation.coverage(workdir, name)
         operation = tracking["operation"]
@@ -95,19 +167,32 @@ def register(app, workdir, *, page, guard, token):
         if gaps:
             operations += ('<h3>未及时记录的交易日</h3><div class="tw"><table><tr><th>日期</th>'
                            f'<th>记录</th><th>原因</th></tr>{gaps}</table></div>')
-        return page(f"模拟账户 {name}", f'<p><a href="/paper">全部账户</a></p><h2>{esc(name)}</h2>'
-                    f'<p>{esc({"WAITING_DATA": "等待数据", "WAITING_CALENDAR": "等待交易日历", "RUNNING": "运行中", "BLOCKED": "已停止"}.get(status["state"], status["state"]))} · {esc(status["message"])}</p>'
-                    '<p class="warn">日线开盘价模拟，只扣佣金和印花税，未计价差与冲击；历史补记单独标识。</p>'
+        state, tone = STATES.get(status["state"], (status["state"], "pending"))
+        scope = "前向模拟" if value["config"]["scope"] == "forward_paper" else "历史演示"
+        empty_row = lambda columns, label: f'<tr><td colspan="{columns}" class="empty-cell">{label}</td></tr>'
+        summary = '<div class="metrics account-metrics">' + \
+            metric("账户权益（元）", f'{stats["equity"]:,.2f}' if stats["equity"] is not None else "待估值", f'现金 {stats["cash"]:,.2f}') + \
+            metric("记录期收益", f'{stats["change"]:+.2%}' if stats["change"] is not None else "暂无", "相对首个记录日") + \
+            metric("最大回撤", f'{stats["drawdown"]:.2%}' if stats["drawdown"] is not None else "暂无", "记录期内") + \
+            metric("累计费用（元）", f'{stats["fees"]:,.2f}', "佣金与印花税") + '</div>'
+        return page(f"模拟账户 {name}", '<p class="breadcrumb"><a href="/paper">全部账户</a> / 账户详情</p>'
+                    f'<div class="page-heading"><div><span class="scope-label">{scope}</span><h1>{esc(name)}</h1></div>'
+                    f'<div class="actions"><a href="/paper/{esc(name)}/history.csv">下载账户历史</a>'
                     f'<form method="post" action="/paper/{esc(name)}/tick">'
-                    f'<input type="hidden" name="token" value="{token}"><button>更新记账</button></form>'
-                    f'<p><a href="/paper/{esc(name)}/history.csv">下载账户历史</a></p>{operations}{chart}'
-                    '<h3>账户权益</h3><div class="tw"><table><tr><th>日期</th><th>权益</th><th>现金</th>'
-                    f'<th>费用</th><th>记录类型</th></tr>{rows}</table></div>'
-                    '<h3>当前持仓</h3><div class="tw"><table><tr><th>代码</th><th>持仓</th><th>可卖</th>'
-                    f'<th>估值</th></tr>{held}</table></div>'
-                    '<h3>近期模拟成交</h3><div class="tw"><table><tr><th>日期</th><th>代码</th><th>方向</th>'
-                    f'<th>成交股数</th><th>状态</th></tr>{trades}</table></div>'
-                    f'<p class="mut">协议 <code>{esc(value["config"]["protocol_hash"])}</code></p>')
+                    f'<input type="hidden" name="token" value="{token}"><button>更新记账</button></form></div></div>'
+                    f'<p><span class="status-badge {tone}">{esc(state)}</span> {esc(status["message"])}</p>'
+                    '<p class="notice">日线开盘价模拟，只扣佣金和印花税，未计价差与冲击；历史补记单独标识。</p>'
+                    f'{summary}<section class="data-section"><div class="section-heading"><h2>账户净值</h2>'
+                    f'<span class="mut">{len(records)} 个记录日 · 当日前向 {stats["forward_days"]} 日</span></div>{chart}</section>'
+                    '<div class="account-detail-grid"><section class="data-section"><h2>当前持仓</h2>'
+                    '<div class="tw"><table><tr><th>代码</th><th>持仓</th><th>可卖</th><th>参考价</th></tr>'
+                    f'{held or empty_row(4, "尚无已记账持仓")}</table></div></section>'
+                    '<section class="data-section"><h2>近期模拟成交</h2><div class="tw"><table><tr><th>日期</th><th>代码</th><th>方向</th>'
+                    f'<th>成交股数</th><th>状态</th></tr>{trades or empty_row(5, "暂无模拟成交")}</table></div>{rejections}</section></div>'
+                    '<section class="data-section"><h2>每日账户记录</h2><div class="tw"><table><tr><th>日期</th><th>权益</th><th>现金</th>'
+                    f'<th>费用</th><th>记录类型</th></tr>{rows or empty_row(5, "尚无记录，等待完整收盘数据")}</table></div></section>'
+                    f'<details open class="operation-details"><summary>任务状态与记录完整性</summary>{operations or "尚无每日任务记录"}</details>'
+                    f'<details><summary>冻结协议</summary><code>{esc(value["config"]["protocol_hash"])}</code></details>')
 
     @app.post("/paper/{name}/tick")
     async def tick(req: Request, name: str):

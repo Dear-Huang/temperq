@@ -7,7 +7,7 @@ if not exist ".venv\Scripts\python.exe" (
   pause
   exit /b 1
 )
-echo 正在启动 qwb 工作台，浏览器会自动打开。
+echo 正在启动 WiseHold 工作台，浏览器会自动打开。
 echo 使用期间不要关闭这个窗口；关闭它就退出工作台。
 ".venv\Scripts\python.exe" -X utf8 -m qwb.cli ui %*
 pause

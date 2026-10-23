@@ -36,7 +36,7 @@ step() {
   echo "这一步失败了：$*" >&2; echo "请检查网络后重新运行 sh install.sh" >&2; exit 1
 }
 
-say "== qwb 安装 =="
+say "== WiseHold 安装 =="
 command -v curl >/dev/null 2>&1 || { echo "需要 curl：sudo apt install curl（或 yum install curl）" >&2; exit 1; }
 
 # 1. uv（安装工具）
@@ -75,7 +75,7 @@ step "$UV" pip install --python "$PY" --no-deps -e .
 if [ -f third_party/ashare-tcost/pyproject.toml ]; then
   step "$UV" pip install --python "$PY" --no-deps -e third_party/ashare-tcost
 else
-  echo "缺少 third_party/ashare-tcost，请获取完整的 quant-workbench 源码或发布包" >&2
+  echo "缺少 third_party/ashare-tcost，请获取完整的 WiseHold 源码或发布包" >&2
   exit 1
 fi
 if [ "$GPU" -eq 1 ]; then

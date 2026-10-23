@@ -63,7 +63,7 @@ def test_release_ignores_sync_sidecars_created_during_copy(tmp_path, monkeypatch
 
     monkeypatch.setattr(build_release.shutil, "copy2", copy_with_sidecar)
     assert build_release.main() == 0
-    manifest = json.loads((output / "quant-workbench/SOURCE_MANIFEST.json").read_text(encoding="utf-8"))
+    manifest = json.loads((output / "wisehold/SOURCE_MANIFEST.json").read_text(encoding="utf-8"))
     assert set(manifest["files_sha256"]) == {"README.md"}
-    with zipfile.ZipFile(output / "quant-workbench-source.zip") as archive:
-        assert set(archive.namelist()) == {"quant-workbench/README.md", "quant-workbench/SOURCE_MANIFEST.json"}
+    with zipfile.ZipFile(output / "wisehold-source.zip") as archive:
+        assert set(archive.namelist()) == {"wisehold/README.md", "wisehold/SOURCE_MANIFEST.json"}

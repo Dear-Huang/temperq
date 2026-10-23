@@ -199,7 +199,7 @@ def create(base: Path, dest: Path) -> dict:
     """New combined dataset on top of `base` (itself a base or a combined dataset)."""
     base, dest = Path(base), Path(dest)
     if not is_dataset(base):
-        raise SourceError("基础数据不是 qwb 数据文件夹")
+        raise SourceError("基础数据不是 WiseHold 数据文件夹")
     if dest.exists():
         raise SourceError(f"已经有叫 {dest.name} 的数据了，换个名字")
     s = spec(base)

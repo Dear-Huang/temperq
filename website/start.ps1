@@ -19,7 +19,7 @@ $sitePort = 8800
 while (Get-NetTCPConnection -State Listen -LocalPort $sitePort -ErrorAction SilentlyContinue) {
     $sitePort++
 }
-Write-Host "Quant Workbench: http://127.0.0.1:$sitePort"
+Write-Host "WiseHold: http://127.0.0.1:$sitePort"
 # local preview only: passwordless dev login on 127.0.0.1. A server deployment sets
 # HF_OAUTH_* and QWB_SITE_SECRET instead; the site refuses to start without them.
 if (-not $env:HF_OAUTH_CLIENT_ID) { $env:QWB_SITE_DEV = '1' }

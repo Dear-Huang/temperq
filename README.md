@@ -1,4 +1,8 @@
-# Quant Workbench
+# WiseHold
+
+训练你自己的模型，看清你的每一笔持仓。对外品牌与命令为 **WiseHold / `wisehold`**；现有主目录 `quant-workbench`、Python 模块 `qwb` 与旧命令保持兼容，已有模型和账户无需迁移。目前从源码或本地发布包安装，尚未发布到 PyPI。
+
+本轮界面已完成，预览与发布前核对项见 [UI 核对说明](docs/UI_REVIEW_20261023.md)。本地工作台运行时不需要 Node，也不联网加载字体；官网构建需要 Node，构建后的站点由服务器直接提供。
 
 让普通投资者在自己的电脑或服务器上，用数据训练、修改和比较 A 股模型，并逐步运行成每日可追踪的策略。工作台提供数据准备、训练、前视与成本检查、报告和模型分享；每日账户决策、自动更新与模拟运行仍在补齐，不能把现有参考选股清单视为完整账户交易系统。
 
@@ -69,9 +73,9 @@ sh start.sh --no-browser
 CLI 与网页使用同一训练链路：
 
 ```bash
-qwb run examples/run_smoke.yaml
-qwb run examples/run_cn_rank_5d.yaml --check
-qwb run examples/run_cn_rank_5d.yaml
+wisehold run examples/run_smoke.yaml
+wisehold run examples/run_cn_rank_5d.yaml --check
+wisehold run examples/run_cn_rank_5d.yaml
 ```
 
 真实数据设置：复制 `config.example.yaml` 为 `config.local.yaml`，填写本机数据/缓存路径和 token **文件路径**。现有本机配置会保留，不会被整合覆盖。数据下载可运行 `python scripts/fetch_cn_daily.py`，或使用本地 UI 的 CSV/API 导入。完整步骤见 [使用手册.md](docs/使用手册.md)。
@@ -104,16 +108,16 @@ QWB_SITE_DEV=1 .venv/bin/python -m uvicorn share_site.app:app --host 127.0.0.1 -
 
 ## 训练、分享、Bench 的衔接
 
-1. 训练：UI/`qwb run` 将每次尝试归档到 `runs/history/<run_id>/`；成功后刷新兼容入口 `runs/<名称>/`，保留同名重跑历史。
+1. 训练：UI/`wisehold run` 将每次尝试归档到 `runs/history/<run_id>/`；成功后刷新兼容入口 `runs/<名称>/`，保留同名重跑历史。
 2. 分享：用模型包与模型卡描述产物，在 HF 模型仓库保存可分发文件；网站读取固定提交的卡片与元信息，不下载执行模型代码。
-3. 评价：`qwb bench model` 读取运行目录/预测文件，在冻结的原始快照与参考模型上独立重算标签、诊断和研究账户。
+3. 评价：`wisehold bench model` 读取运行目录/预测文件，在冻结的原始快照与参考模型上独立重算标签、诊断和研究账户。
 4. 追踪：本地“实验记录”关联训练版本、折预测、最终模型和独立 Bench，支持配对比较和导出不含数据/权重的研究摘要。训练与网页评价由持久化 worker 执行。
 
 ```bash
-qwb bench init runs/cn_rank_5d_lgbm --data-dir data/snapshots/cn_daily --output bench/protocols/my_development.yaml
-qwb bench model runs/cn_rank_5d_lgbm --protocol bench/protocols/my_development.yaml --output runs/bench/my_model_001
-qwb bench verify runs/bench/my_model_001 --inputs
-qwb bench traps --help
+wisehold bench init runs/cn_rank_5d_lgbm --data-dir data/snapshots/cn_daily --output bench/protocols/my_development.yaml
+wisehold bench model runs/cn_rank_5d_lgbm --protocol bench/protocols/my_development.yaml --output runs/bench/my_model_001
+wisehold bench verify runs/bench/my_model_001 --inputs
+wisehold bench traps --help
 ```
 
 完整操作、后台任务、兼容与评价边界见 [研究闭环说明](docs/RESEARCH_WORKFLOW.md)。网站尚未自动接收模型并排队执行 Bench；本地工作台已支持冻结协议、运行 Bench 和比较。当前 Bench 是历史开发评价，不是实盘认证。已有 `bench/protocols/cn_rank_5d_development_v*.yaml` 固定原机器路径与数据哈希；换机器须按 [bench/README.md](bench/README.md) 建立新协议。原始行情和参考训练产物不随 GitHub 仓库分发。
@@ -133,7 +137,7 @@ git diff --check
 ```powershell
 git add .
 git commit -m "Consolidate workbench, cost library and deployment setup"
-git remote add origin https://github.com/YOUR_ACCOUNT/quant-workbench.git
+git remote add origin https://github.com/YOUR_ACCOUNT/wisehold.git
 git push -u origin main
 ```
 

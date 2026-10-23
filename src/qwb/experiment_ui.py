@@ -268,4 +268,4 @@ def register(app, workdir: Path, *, page, guard, submit, token: str, markdown):
         except (OSError, ValueError, KeyError) as exc:
             raise HTTPException(400, str(exc)) from None
         return Response(payload, media_type="application/zip", headers={
-            "Content-Disposition": f'attachment; filename="qwb-evidence-{run_id}.zip"'})
+            "Content-Disposition": f'attachment; filename="wisehold-evidence-{run_id}.zip"'})

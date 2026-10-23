@@ -65,7 +65,7 @@ def build(run: Path, evaluation: Path | None = None) -> bytes:
             "economic_status": score["economic"]["status"],
             "economic_candidate": (score["economic"].get("results", {}).get("extra_0bp_per_side") or {}).get("candidate"),
             "live_capital_eligible": False}
-    fm = {"qwb_version": "0.0.1", "tags": ["qwb", "quant", task["market"]],
+    fm = {"qwb_version": "0.0.1", "tags": ["wisehold", "quant", task["market"]],
           "task": task["name"], "market": task["market"], "template": task["template"],
           "base_model": record["model"], "run_id": record["run_id"],
           "model_version": record["model_version"] or "unknown",
@@ -75,7 +75,7 @@ def build(run: Path, evaluation: Path | None = None) -> bytes:
           "evaluation_id": (summary["bench"] or {}).get("evaluation_id", "not_evaluated"),
           "protocol_id": (summary["bench"] or {}).get("protocol_id", "not_evaluated"),
           "custom_code": False, "includes_data": False}
-    body = ("# Quant Workbench research evidence\n\n"
+    body = ("# WiseHold research evidence\n\n"
             f"Task: `{task['name']}`. Model: `{record['model']}`. Run: `{record['run_id']}`.\n\n"
             "This is an author-submitted summary of local research, not platform certification.\n"
             "See `evidence.json` for fixed version identifiers and evaluation scope.\n\n"

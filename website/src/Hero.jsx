@@ -7,7 +7,7 @@ export default function Hero({open,scroll}) {
   return <section className="hero" id="home">
     <motion.div className="hero-top" initial={reduced ? false : {opacity:0,y:18}} animate={{opacity:1,y:0}} transition={{duration:.8,ease:[.22,1,.36,1]}}>
       <a className="release-pill" href="/community"><span className="live-dot"/><span>独立研究，开放生长</span><span className="pill-divider"/><span>探索研究社区</span><ArrowUpRight size={13}/></a>
-      <h1>Quant Workbench<span>把你的想法，训练成模型。</span></h1>
+      <h1>WiseHold<span>训练你自己的模型，<br />看清你的每一笔持仓。</span></h1>
       <p className="hero-description">端到端量化机器学习平台。<br className="mobile-break"/> 本地训练，严谨验证，开放分享。</p>
       <div className="hero-actions"><button className="button button-dark button-large" onClick={()=>open('start')}>开始训练 <ArrowUpRight size={17}/></button><a className="hero-community-link" href="/community">进入研究社区 <ArrowRight size={16}/></a></div>
     </motion.div>

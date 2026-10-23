@@ -29,7 +29,7 @@ LOCAL_EXCLUDE = {"SPEC.md", "SETUP-依赖拉取清单.md", "docs/QW_BENCH_RESEAR
                  "tests/test_repository_export.py", "docs/使用手册.docx"}
 LOCAL_PREFIX = ("website/", "share_site/", "deploy/", ".github/", ".dockerignore",
                 "tests/test_site.py", "tests/test_forum.py")
-LOCAL_README = """# Quant Workbench 本地工作台
+LOCAL_README = """# WiseHold 本地工作台
 
 本包用于本地/计算服务器训练，包含 third_party/ashare-tcost 成本库。
 完整源码仓库还提供网站、社区和部署配置，本地用户包不包含这些服务。
@@ -42,7 +42,7 @@ Linux：sh install.sh，然后 sh start.sh --no-browser。
 真实数据路径填写在 config.local.yaml，可从 config.example.yaml 复制修改。
 不要分发本机密钥、真实行情、模型权重或含私密信息的运行目录。
 
-命令行试运行：qwb run examples/run_smoke.yaml
+命令行试运行：wisehold run examples/run_smoke.yaml
 训练与评价使用同一 Python 环境；GPU/Kronos 为可选扩展。
 实验记录、独立 Bench、版本比较与研究摘要导出见 [研究闭环说明](docs/RESEARCH_WORKFLOW.md)。
 这是研究工具，不提供收益承诺或实盘认证。代码许可见 LICENSE。
@@ -81,8 +81,8 @@ def main() -> int:
     kind = "source" if args.source_only else "local"
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     out = (args.out_dir or ROOT / "artifacts" / "releases" / f"{kind}-{stamp}").resolve()
-    stage = out / "quant-workbench"
-    zpath = out / f"quant-workbench-{kind}.zip"
+    stage = out / "wisehold"
+    zpath = out / f"wisehold-{kind}.zip"
     if stage.exists() or zpath.exists():
         raise FileExistsError(f"use a new output directory: {out}")
     if not args.source_only:
@@ -109,7 +109,7 @@ def main() -> int:
             content = path.read_bytes()
             if name in manifest and hashlib.sha256(content).hexdigest() != manifest[name]:
                 raise RuntimeError(f"staged source changed during export: {name}")
-            info = zipfile.ZipInfo.from_file(path, Path("quant-workbench") / path.relative_to(stage))
+            info = zipfile.ZipInfo.from_file(path, Path("wisehold") / path.relative_to(stage))
             if path.name == "uv" or path.suffix == ".sh":
                 info.external_attr = 0o100755 << 16
             info.compress_type = zipfile.ZIP_DEFLATED

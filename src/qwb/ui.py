@@ -26,6 +26,7 @@ import yaml
 # module level: with postponed annotations FastAPI must be able to resolve `Request`
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
+from fastapi.staticfiles import StaticFiles
 
 from . import daily, dataset, experiments, runconfig, scenario
 from .jobs import JobSpec, Store
@@ -139,7 +140,7 @@ def datasets(workdir: Path) -> dict[str, dict]:
                   "label":
                   f"{k}：{s.get('start', '?')} 至 {s.get('end', '?')}，"
                   f"{s.get('trading_days', '?')} 个交易日"
-                  + (f"，{s['codes']} 只股票" if "codes" in s else "")
+                  + (f"，{s['codes']} 只股票" if s.get("codes") is not None else "")
                   + ("，含 ST 标记" if s.get("has_st", True) else "，无 ST 标记")
                   + ("，含指数成分" if dataset.has_index(p) else "")
                   + (f"，另加 {n_src} 个数据来源" if n_src else "")
@@ -150,7 +151,7 @@ def datasets(workdir: Path) -> dict[str, dict]:
 def register_folder(workdir: Path, path: str) -> str:
     p = Path(path.strip().strip('"')).expanduser()
     if _read_snapshot(p) is None:
-        raise ValueError("这个文件夹里没有 snapshot.json 和 bars 目录，不是 qwb 数据文件夹")
+        raise ValueError("这个文件夹里没有 snapshot.json 和 bars 目录，不是 WiseHold 数据文件夹")
     root = workdir / "data"
     root.mkdir(parents=True, exist_ok=True)
     reg = root / "registry.json"
@@ -298,6 +299,9 @@ def _inline(s: str) -> str:
 
 def md_to_html(md: str) -> str:
     """Enough Markdown for qwb's own reports: headings, lists, tables, bold, code."""
+    # Display legacy reports with the current brand without changing archived evidence.
+    md = md.replace("Quant Workbench", "WiseHold").replace("QW-Bench", "WiseHold Bench")
+    md = md.replace("qwb 可成交口径", "WiseHold 可成交口径").replace("qwb 的可成交口径", "WiseHold 的可成交口径").replace("qwb 口径", "WiseHold 口径")
     out, table, lst = [], False, False
 
     def close():
@@ -402,16 +406,17 @@ def step1_html() -> str:
         f'{html.escape(v["label"])}</option>' for k, v in scenario.TIERS.items())
     dr = [_radio("direction", "long", "只做多", True)] + \
          [_radio("direction", k, v, disabled=True) for k, v in scenario.PLANNED["direction"]]
-    cards = []
+    cards, planned_cards = [], []
     for k, v in scenario.MODELS.items():
         off = v["status"] != "ready"
-        cards.append(
+        (planned_cards if off else cards).append(
             f'<label class="card{" off" if off else ""}"><input type="radio" name="model" '
             f'value="{k}" form="main"{" checked" if k == scenario.DEFAULT_MODEL else ""}'
             f'{" disabled" if off else ""}><b>{html.escape(v["label"])}</b>'
             f'{"<span class=tag>规划中</span>" if off else ""}'
             f'<span>{html.escape(v["note"])}</span></label>')
     return (
+        '<div class="scenario-grid">'
         f'<div class="q"><b>用在哪个市场</b><div>{"".join(mk)}</div></div>'
         f'<div class="q"><b>多久调一次仓（持有期）</b><div>{"".join(hz)}</div>'
         '<small class="mut">每天收盘后选股，第二天开盘买入，持有到期后开盘卖出。</small></div>'
@@ -421,8 +426,9 @@ def step1_html() -> str:
         '<small class="mut">指数成分股按每个历史时点当时的成分取，不用今天的名单回看过去。</small></div>'
         f'<div class="q"><b>打算投入多少资金</b><div><select name="capital" form="main" id="capital">{cap}</select></div>'
         '<small class="mut" id="capnote"></small></div>'
-        f'<div class="q"><b>交易方式</b><div>{"".join(dr)}</div></div>'
-        f'<div class="q"><b>用什么模型</b>{"".join(cards)}</div>')
+        f'<div class="q"><b>交易方式</b><div>{"".join(dr)}</div></div></div>'
+        f'<div class="q"><b>用什么模型</b><div class="model-choices">{"".join(cards)}</div>'
+        f'<details><summary>规划中的模型</summary>{"".join(planned_cards)}</details></div>')
 
 
 # ----------------------------------------------------------------- app
@@ -443,6 +449,7 @@ def create_app(workdir: Path, task_dir: Path | None = None,
 
     runner = runner or default_runner
     app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
+    app.mount("/static", StaticFiles(directory=Path(__file__).parent / "static"), name="static")
     allowed_hosts = {f"127.0.0.1:{port}", f"localhost:{port}", "testserver"}
 
     def guard(req: Request, tok) -> None:
@@ -507,12 +514,12 @@ def create_app(workdir: Path, task_dir: Path | None = None,
             memwarn='<p class="warn">内存不足 8GB，全市场数据可能跑不动，可以先用试运行或少量股票的 CSV。</p>'
             if low_mem else "",
             jobs=_job_rows(store)) + script
-        return page("qwb 本地工作台", body)
+        return page("训练模型", body)
 
     @app.get("/template.csv")
     def template():
         return FileResponse(workdir / "examples" / "csv_template.csv",
-                            filename="qwb_数据模板.csv", media_type="text/csv")
+                            filename="wisehold_数据模板.csv", media_type="text/csv")
 
     @app.post("/run")
     async def run(req: Request):
@@ -822,7 +829,7 @@ def create_app(workdir: Path, task_dir: Path | None = None,
                      for k, v in scenario.UNIVERSES.items() if k != "list")
         body = ('<h2>体检外部模型</h2>'
                 '<p>模型在 Qlib、vn.py、自己的 Python 脚本里训练都可以。只要上传它每天给每只股票的打分，'
-                'qwb 会用你的数据、按可成交的规则重新检验：扣成本后还剩多少、能不能赢简单方法、'
+                'WiseHold 会用你的数据、按可成交的规则重新检验：扣成本后还剩多少、能不能赢简单方法、'
                 '换成 Qlib 默认回测口径会被高估多少、打分有没有前视嫌疑。不需要模型文件。</p>'
                 '<div class="box"><b>打分文件格式（CSV）</b><p>每行一只股票一天：'
                 '<code>code</code> 股票代码、<code>date</code> 打分日期（当天收盘后算出的）、<code>score</code> 打分。'
@@ -922,29 +929,33 @@ def create_app(workdir: Path, task_dir: Path | None = None,
 
     @app.get("/models", response_class=HTMLResponse)
     def models_page():
-        rows = []
+        cards = []
         for x in trained_models():
             sc = x["m"].get("scenario") or {}
             net = x["net"]
             synth = x["meta"].get("snapshot_id") == "snap-synthetic"
             ok = (not synth) and x["m"].get("go") and net and net["net_excess_t"] > 2
-            badge = ('<span class="tag">试运行</span>' if synth else
-                     '<span class="tag">历史诊断通过</span>' if ok else '<span class="tag warnt">未通过检验</span>')
-            net_txt = "n/a" if not net else f"{net['net_excess_ann']:+.1%}（t={net['net_excess_t']:.1f}）"
-            rows.append(
-                f'<tr><td><a href="/models/{html.escape(x["run"])}"><b>{html.escape(x["run"])}</b></a> {badge}</td>'
-                f'<td>{html.escape(sc.get("universe") or x["m"].get("universe", ""))}<br>'
-                f'<small class="mut">{html.escape(sc.get("horizon", ""))} · {html.escape(sc.get("capital", ""))}</small></td>'
-                f'<td>{html.escape(sc.get("model") or x["meta"]["model"])}</td>'
-                f'<td>{x["ic"]["mean"]:+.3f}（t={x["ic"]["t"]:.1f}）</td>'
-                f'<td>{net_txt}</td>'
-                f'<td>{html.escape(x["meta"].get("data_end", ""))}</td></tr>')
-        table = ('<div class="tw"><table><tr><th>模型</th><th>用在哪</th><th>底座</th><th>测试期 IC</th>'
-                 '<th>扣成本后年化净超额</th><th>数据截止</th></tr>' + "".join(rows) + '</table></div>') \
-            if rows else '<p class="mut">还没有训练好的模型。先在“训练模型”页面训练一个。</p>'
-        body = ('<h2>使用模型</h2>'
-                '<p>选一个训练好的模型，它会用最新一天的数据给股票池里每只股票打分，给出明天开盘要持有的股票清单，'
-                '以及相对上一期的买入、卖出、继续持有。历史诊断和持仓清单仅用于研究，不代表可投入实盘。</p>' + table)
+            label, tone = ("试运行", "pending") if synth else ("历史诊断通过", "active") if ok else ("证据不足", "pending")
+            name = html.escape(x["run"])
+            net_txt = "仅演示" if synth else "未计算" if not net else f"{net['net_excess_ann']:+.1%}"
+            note = "合成数据，无投资含义" if synth else "未通过检验" if not ok else "历史诊断，不代表实盘认证"
+            net_t = "" if synth or not net else f't={net["net_excess_t"]:.2f}'
+            cards.append(f'<article class="account-card model-result" data-model-card><div class="card-heading">'
+                f'<span class="scope-label">{html.escape(x["meta"]["model"])}</span><span class="status-badge {tone}">{label}</span></div>'
+                f'<h2><a href="/models/{name}">{name}</a></h2><p class="mut">'
+                f'{html.escape(sc.get("universe") or x["m"].get("universe", ""))} · '
+                f'{html.escape(sc.get("horizon", "5 日"))}</p><div class="metrics compact-metrics">'
+                f'<div class="metric"><span>扣成本后年化净超额</span><strong>{net_txt}</strong><small>{net_t}</small></div>'
+                f'<div class="metric"><span>测试期 IC</span><strong>{x["ic"]["mean"]:+.3f}</strong>'
+                f'<small>t={x["ic"]["t"]:.2f}</small></div></div><p class="evidence-note">{note}</p>'
+                f'<div class="card-meta"><span>数据截止 {html.escape(x["meta"].get("data_end", "未知"))}</span></div>'
+                f'<a class="card-link" href="/models/{name}">查看模型与清单</a></article>')
+        table = '<div class="account-grid">' + ''.join(cards) + '</div>' if cards else (
+            '<div class="empty-state"><h3>还没有训练好的模型</h3><a class="btn" href="/">训练第一个模型</a></div>')
+        body = ('<div class="page-heading"><div><h1>使用模型</h1>'
+                f'<p class="mut">{len(cards)} 个模型 · 历史诊断与每日账户分别查看</p></div>'
+                '<a class="btn" href="/">新建训练</a></div>'
+                '<p class="notice">历史诊断和参考清单不代表可投入实盘；真实账户建议需绑定现金与持仓。</p>' + table)
         return page("使用模型", body)
 
     def _picks_or_error(run: str, date: str, capital: str):
@@ -987,7 +998,7 @@ def create_app(workdir: Path, task_dir: Path | None = None,
         if not m.get("go") or not net or net["net_excess_t"] <= 2:
             warn.append("这个模型在测试期没有通过检验（扣成本后不显著，或没赢过简单方法）。清单只用来观察，不建议照着交易。")
         if r["stale_days"] > 5 and meta.get("snapshot_id") != "snap-synthetic":
-            warn.append(f"数据最后一天是 {r['data_end']}，已经过去 {r['stale_days']} 天。要用最新清单，先更新数据（重新下载）再训练。")
+            warn.append(f"数据最后一天是 {r['data_end']}，已经过去 {r['stale_days']} 天。请先更新该模型绑定的数据源；固定模型每日推理不需要重训。")
         if r["date"] != r["data_end"]:
             warn.append(f"现在看的是历史日期 {r['date']} 的清单，不是最新的。")
         acts = {"买入": "ok", "卖出": "bad", "继续持有": ""}
@@ -1001,28 +1012,35 @@ def create_app(workdir: Path, task_dir: Path | None = None,
         n = r["table"]["action"].value_counts().to_dict()
         cap_txt = scenario.fmt_yuan(r["capital"]) if r["capital"] else "未设定"
         cap_ph = f"{r['capital'] / 1e4:g}" if r["capital"] else ""
-        body = (f'<p><a href="/models">← 全部模型</a></p><h2>{html.escape(run)}</h2>'
-                f'<p><a class="btn" href="/models/{html.escape(run)}/account">账户交易建议</a></p>'
+        body = (f'<p class="breadcrumb"><a href="/models">全部模型</a> / 模型详情</p>'
+                f'<div class="page-heading"><div><span class="scope-label">{html.escape(meta["model"])}</span><h1>{html.escape(run)}</h1></div>'
+                f'<a class="btn" href="/models/{html.escape(run)}/account">账户交易建议</a></div>'
                 f'<p class="mut">{html.escape(" · ".join(x for x in (sc.get("universe"), sc.get("horizon"), sc.get("model") or meta["model"]) if x))}'
                 f' · 训练数据到 {html.escape(meta.get("train_end", ""))}</p>'
-                + "".join(f'<div class="box bad">{html.escape(w)}</div>' for w in warn) +
-                f'<form method="get" class="box"><label class="f">清单日期 <input name="date" value="{html.escape(date)}" '
+                + ('<aside class="notice warn"><ul>' + ''.join(f'<li>{html.escape(w)}</li>' for w in warn) + '</ul></aside>' if warn else '') +
+                f'<form method="get" class="toolbar"><label class="f">清单日期 <input name="date" type="date" value="{html.escape(date or r["date"])}" '
                 f'placeholder="{r["data_end"]}（最新）" size="14"></label>'
                 f'<label class="f">资金（万元） <input name="capital" value="{html.escape(capital)}" '
                 f'placeholder="{cap_ph}" size="10"></label>'
                 '<button>更新清单</button></form>'
-                f'<div class="box"><b>{r["date"]} 收盘后的决策，{r["trade_on"]}执行</b>'
+                f'<section class="data-section"><div class="section-heading"><h2>模型参考清单</h2><span class="mut">{r["date"]} 收盘后的决策，{r["trade_on"]}执行</span></div>'
+                '<div class="metrics account-metrics">'
+                f'<div class="metric"><span>目标持仓</span><strong>{r["n_hold"]} 只</strong></div>'
+                f'<div class="metric"><span>参考资金</span><strong>{cap_txt}</strong></div>'
+                f'<div class="metric"><span>买入 / 卖出</span><strong>{n.get("买入", 0)} / {n.get("卖出", 0)}</strong></div>'
+                f'<div class="metric"><span>继续持有</span><strong>{n.get("继续持有", 0)} 只</strong></div></div>'
+                '<details><summary>选股口径与参考价</summary>'
                 f'<p>股票池今天有 {r["universe_size"]} 只可选，按模型打分取前 {r["n_hold"]} 只等权持有，'
                 f'每只约 {cap_txt if not r["per_name"] else scenario.fmt_yuan(r["per_name"])}，持有 {r["hold_days"]} 个交易日后按同样方法换仓。'
                 f'相对 {r["hold_days"]} 个交易日前的清单：买入 {n.get("买入", 0)} 只，卖出 {n.get("卖出", 0)} 只，'
                 f'继续持有 {n.get("继续持有", 0)} 只。</p>'
                 '<p class="mut">本页是模型参考清单，操作比较前后模型选股，不读取你的实际账户。'
                 '参考价是当天收盘价；股数只作估算，科创板应按 200 股起、其后 1 股递增。'
-                '实际成交价是明天开盘价，可能不同。</p></div>'
+                '实际成交价是明天开盘价，可能不同。</p></details></section>'
                 f'<p><a class="btn" href="/models/{html.escape(run)}/picks.csv?date={html.escape(date)}&capital={html.escape(capital)}">'
                 '下载持仓清单 CSV</a>　<a href="/models/' + html.escape(run) + f'/scores.csv?date={html.escape(date)}">'
                 '下载全部股票打分 CSV</a></p>'
-                '<div class="tw"><table><tr><th>排名</th><th>代码</th><th>操作</th><th>目标权重</th>'
+                '<div class="tw"><table class="holdings-table"><tr><th>排名</th><th>代码</th><th>操作</th><th>目标权重</th>'
                 f'<th>参考价</th><th>估算股数</th><th>提示</th></tr>{rows}</table></div>'
                 '<p class="mut">不构成投资建议。模型只根据历史量价规律排序，不知道公告、新闻和你的个人情况。</p>')
         return page(f"使用模型：{run}", body)
@@ -1148,57 +1166,124 @@ def serve(workdir: Path, port: int = 8765, open_browser: bool = True) -> None:
     if open_browser:
         import webbrowser
         threading.Timer(1.5, lambda: webbrowser.open(f"http://127.0.0.1:{port}/")).start()
-    print(f"qwb 工作台已启动：http://127.0.0.1:{port}  （关闭这个窗口即退出）", flush=True)
+    print(f"WiseHold 工作台已启动：http://127.0.0.1:{port}  （关闭这个窗口即退出）", flush=True)
     uvicorn.run(app, host="127.0.0.1", port=port, log_level="warning")
 
 
 LAYOUT = """<!doctype html><html lang="zh"><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1"><title>{{title}}</title>{{refresh}}
+<meta name="viewport" content="width=device-width,initial-scale=1"><title>{{title}} · WiseHold</title>{{refresh}}
+<link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
 <style>
-:root{--bg:#f6f5f1;--card:#fff;--fg:#1d1d1b;--mut:#6b6b66;--line:#e2e1dc;--acc:#2f5d8a;--accbg:#e9f0f7;
---ok:#2e6b3a;--okbg:#eaf4ec;--warn:#8a5a00;--warnbg:#fbf3e2;--bad:#9a3b1c;--badbg:#fbece6;--code:#f1f0ec}
-@media (prefers-color-scheme:dark){:root{--bg:#161615;--card:#1f1f1d;--fg:#e8e7e2;--mut:#9a9993;--line:#34342f;
---acc:#8fb3d9;--accbg:#1f2a36;--ok:#8fc79a;--okbg:#1c2a1f;--warn:#e6c07a;--warnbg:#2c2618;--bad:#e8957a;--badbg:#2e1d17;--code:#262623}}
-*{box-sizing:border-box}body{background:var(--bg);color:var(--fg);font:15px/1.6 system-ui,"Microsoft YaHei",sans-serif;margin:0;padding:0 16px}
-main{max-width:920px;margin:0 auto;padding-block:20px 60px}a{color:var(--acc)}
-h1{font-size:22px;margin:0 0 4px}h2{font-size:19px}h3{font-size:16px}h1,h2,h3{overflow-wrap:anywhere}
-.step{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:16px 18px;margin:14px 0}
-.step>h2{margin:0 0 10px;font-size:17px}.num{display:inline-block;width:26px;height:26px;border-radius:50%;
-background:var(--acc);color:var(--card);text-align:center;line-height:26px;font-size:14px;margin-right:8px}
-.card{display:block;border:1px solid var(--line);border-radius:8px;padding:10px 12px;margin:8px 0;cursor:pointer}
+@font-face{font-family:"DM Sans";src:url("/static/dm-sans.ttf") format("truetype");font-weight:100 1000;font-display:swap}
+:root{--bg:#f5f6f8;--card:#fff;--fg:#15171d;--mut:#66707c;--line:#e6e8ed;--acc:#2855ed;--acch:#1744d5;--accbg:#edf1ff;
+--ink:#171b24;--ok:#23794a;--okbg:#eaf6ef;--warn:#9a6200;--warnbg:#fdf5e4;--bad:#b23a1d;--badbg:#fdeee9;--code:#f1f3f7;
+--shadow:0 1px 2px #1b27400a,0 8px 24px #263b570a;color-scheme:light}
+@media (prefers-color-scheme:dark){:root{--bg:#10131a;--card:#171b24;--fg:#e8ebf2;--mut:#8d97a8;--line:#2a3140;
+--acc:#7d9bff;--acch:#9fb5ff;--accbg:#1c2540;--ink:#e8ebf2;--ok:#7fd0a0;--okbg:#15281e;--warn:#e8c27a;--warnbg:#2b2416;
+--bad:#f09a82;--badbg:#2e1c17;--code:#1f2430;--shadow:0 1px 2px #0004;color-scheme:dark}}
+*{box-sizing:border-box}
+body{background:var(--bg);color:var(--fg);font:15px/1.7 "DM Sans",system-ui,-apple-system,"PingFang SC","Microsoft YaHei",sans-serif;letter-spacing:0;margin:0;padding:0 16px}
+a{color:var(--acc);text-decoration:none}a:hover{color:var(--acch);text-decoration:underline}
+.top{position:sticky;top:0;z-index:10;margin:0 -16px;padding:0 16px;background:color-mix(in srgb,var(--bg) 82%,transparent);
+backdrop-filter:blur(18px) saturate(1.6);border-bottom:1px solid var(--line)}
+.top-in{max-width:1040px;margin:0 auto;display:flex;align-items:center;gap:28px;min-height:60px;flex-wrap:wrap}
+.brand{display:flex;align-items:center;gap:9px;font-weight:650;font-size:16px;color:var(--fg);white-space:nowrap}
+.brand:hover{text-decoration:none;color:var(--fg)}.brand img{width:26px;height:26px;border-radius:6px}.brand i{color:#a7aebb;font-style:normal}
+.nav{display:flex;gap:4px;flex-wrap:wrap;margin:0}.nav a{font-size:14px;color:var(--mut);padding:7px 12px;border-radius:7px;white-space:nowrap;font-weight:500}
+.nav a:hover{background:var(--card);color:var(--fg);text-decoration:none}.nav a.on{background:var(--accbg);color:var(--acc)}
+main{max-width:1040px;margin:0 auto;padding-block:26px 64px}
+.lede{color:var(--mut);font-size:13px;margin:0 0 6px}
+h1{font-size:26px;font-weight:600;margin:0 0 6px}h2{font-size:21px;font-weight:600}h3{font-size:17px;font-weight:600}
+h1,h2,h3{overflow-wrap:anywhere}
+.step{border-top:1px solid var(--line);padding:24px 0;margin:0;scroll-margin-top:140px}
+.step>h2{margin:0 0 12px;font-size:18px;display:flex;align-items:center}
+.num{display:inline-flex;align-items:center;justify-content:center;width:28px;height:28px;border-radius:8px;
+background:var(--ink);color:var(--card);font-size:14px;font-weight:600;margin-right:10px;flex:none}
+.card{display:block;border:1px solid var(--line);border-radius:8px;padding:12px 14px;margin:8px 0;cursor:pointer;transition:border-color .15s,background .15s}
+.card:hover{border-color:color-mix(in srgb,var(--acc) 40%,var(--line))}
 .card:has(input:checked){border-color:var(--acc);background:var(--accbg)}.card>span:last-child{display:block;color:var(--mut);margin-left:22px}.card .tag{display:inline-block}
-.row{display:block;padding:6px 4px;cursor:pointer}
-.q{margin:12px 0}.q>b{display:block;margin-bottom:4px}.opt{display:inline-block;margin:3px 16px 3px 0;cursor:pointer}.opt small,.card small{color:var(--mut);margin-left:6px}.off{opacity:.55;cursor:not-allowed}.tag{font-size:12px;border:1px solid var(--line);border-radius:4px;padding:0 5px;margin-left:6px;color:var(--mut)}textarea{font:inherit;width:100%;max-width:640px;margin-top:6px;border:1px solid var(--line);border-radius:6px;padding:6px;background:var(--card);color:var(--fg)}
-details{margin:10px 0}summary{cursor:pointer;color:var(--acc)}
-.sub{border:1px dashed var(--line);border-radius:8px;padding:10px 14px;margin:8px 0}
-label.f{display:inline-block;margin:6px 18px 6px 0;max-width:calc(100% - 18px)}input,select,button{font:inherit;padding:6px 9px;max-width:100%;
-border:1px solid var(--line);border-radius:6px;background:var(--card);color:var(--fg)}
-input[type=number]{width:7.5em}input[type=radio]{margin-right:6px}
-button,.btn{background:var(--acc);color:var(--card);border:0;border-radius:8px;padding:9px 18px;cursor:pointer;
-text-decoration:none;display:inline-block}button.big{font-size:17px;padding:12px 28px}
-button.secondary{background:transparent;color:var(--acc);border:1px solid var(--acc)}
-.nav{margin:0 0 6px}.nav a{font-weight:600;display:inline-block;white-space:nowrap}.mut{color:var(--mut)}.warn{color:var(--warn)}.hw{font-size:13px;color:var(--mut)}
-.box{border-radius:10px;padding:12px 16px;margin:12px 0;background:var(--card);border:1px solid var(--line)}
-.box.ok{background:var(--okbg)}td.ok{color:var(--ok)}td.bad{color:var(--bad)}.warnt{color:var(--warn);border-color:var(--warn)}.box.bad{background:var(--badbg)}
+.row{display:block;padding:7px 6px;border-radius:7px;cursor:pointer}.row:hover{background:var(--code)}
+.q{margin:14px 0}.q>b{display:block;margin-bottom:4px}.opt{display:inline-block;margin:3px 16px 3px 0;cursor:pointer}
+.opt small,.card small{color:var(--mut);margin-left:6px}.off{opacity:.5;cursor:not-allowed}
+.tag{font-size:12px;border:1px solid var(--line);border-radius:5px;padding:0 6px;margin-left:6px;color:var(--mut);background:var(--code)}
+textarea{font:inherit;width:100%;max-width:640px;margin-top:6px;border:1px solid var(--line);border-radius:8px;padding:8px;background:var(--card);color:var(--fg)}
+details{margin:10px 0}summary{cursor:pointer;color:var(--acc);font-weight:500}
+.sub{border:1px dashed var(--line);border-radius:10px;padding:12px 16px;margin:10px 0;background:color-mix(in srgb,var(--code) 50%,transparent)}
+label.f{display:inline-block;margin:6px 18px 6px 0;max-width:calc(100% - 18px)}
+input,select,button,textarea{font:inherit}
+input,select{padding:7px 10px;max-width:100%;border:1px solid var(--line);border-radius:8px;background:var(--card);color:var(--fg);transition:border-color .15s,box-shadow .15s}
+input:focus,select:focus,textarea:focus{outline:none;border-color:var(--acc);box-shadow:0 0 0 3px color-mix(in srgb,var(--acc) 18%,transparent)}
+input[type=number]{width:7.5em}input[type=radio],input[type=checkbox]{margin-right:6px;accent-color:var(--acc)}
+button,.btn{background:var(--ink);color:var(--card);border:1px solid var(--ink);border-radius:8px;padding:9px 18px;cursor:pointer;
+text-decoration:none;display:inline-block;font-weight:500;transition:background .15s,box-shadow .15s}
+button:hover,.btn:hover{background:var(--acc);border-color:var(--acc);color:#fff;text-decoration:none;box-shadow:0 6px 18px color-mix(in srgb,var(--acc) 25%,transparent)}
+button:focus-visible,.btn:focus-visible,a:focus-visible{outline:2px solid var(--acc);outline-offset:2px}
+button.big{font-size:16px;padding:13px 30px;background:var(--acc);border-color:var(--acc);color:#fff}button.big:hover{background:var(--acch)}
+button.secondary{background:transparent;color:var(--acc);border:1px solid var(--line)}button.secondary:hover{background:var(--accbg);color:var(--acc);box-shadow:none}
+.mut{color:var(--mut)}.warn{color:var(--warn)}.bad{color:var(--bad)}
+.hw{font-size:13px;color:var(--mut);background:var(--card);border:1px solid var(--line);border-radius:10px;padding:10px 14px}
+.box{border-radius:12px;padding:14px 18px;margin:14px 0;background:var(--card);border:1px solid var(--line);box-shadow:var(--shadow)}
+.box.ok{background:var(--okbg);border-color:color-mix(in srgb,var(--ok) 25%,var(--line))}
+.box.bad{background:var(--badbg);border-color:color-mix(in srgb,var(--bad) 25%,var(--line))}
+td.ok{color:var(--ok)}td.bad{color:var(--bad)}.warnt{color:var(--warn);border-color:var(--warn)}
 ul.verdict{padding-left:18px}ul.verdict li{margin:6px 0}li.ok{color:var(--ok)}li.warn{color:var(--warn)}li.bad{color:var(--bad)}
 .state{font-size:18px;font-weight:600}.state.succeeded{color:var(--ok)}.state.failed{color:var(--bad)}
-progress{width:260px;vertical-align:middle}
-.tw{overflow-x:auto}table{border-collapse:collapse;width:100%;font-size:14px}
+progress{width:260px;vertical-align:middle;accent-color:var(--acc)}
+.tw{overflow-x:auto;background:var(--card);border:1px solid var(--line);border-radius:12px;box-shadow:var(--shadow)}
+table{border-collapse:collapse;width:100%;font-size:14px;font-variant-numeric:tabular-nums}
 .evaluation-list{min-width:620px}.evaluation-list td,.evaluation-list th{white-space:nowrap}
+.holdings-table{min-width:620px}.holdings-table td,.holdings-table th{white-space:nowrap}
+th{font-weight:600;color:var(--mut);font-size:13px;background:var(--code)}
+td,th{border-bottom:1px solid var(--line);padding:9px 12px;text-align:left;vertical-align:top}tr:last-child td{border-bottom:0}
+table tr:hover td{background:color-mix(in srgb,var(--accbg) 45%,transparent)}
 .identity{display:grid;grid-template-columns:90px minmax(0,1fr);gap:6px 12px}.identity dd{margin:0;overflow-wrap:anywhere}
 .identity code{word-break:break-all}.inline{display:inline}select{min-width:0}code{overflow-wrap:anywhere}
-td,th{border-bottom:1px solid var(--line);padding:6px 6px;text-align:left;vertical-align:top}
-pre.plain{white-space:pre-wrap;word-break:break-word;background:var(--code);padding:10px;border-radius:6px;font-size:13px}
-code{background:var(--code);padding:1px 5px;border-radius:4px;font-size:13px}
-</style></head><body><main>
-<h1>qwb 本地量化工作台</h1>
-<p class="nav"><a href="/">训练模型</a>　·　<a href="/experiments">实验记录</a>　·　<a href="/models">使用模型</a>　·　<a href="/paper">模拟账户</a>　·　<a href="/audit">体检外部模型</a></p>
-<p class="mut">在自己电脑上训练选股模型。数据只在这台电脑上，不会上传。不构成投资建议。</p>
+.page-heading{display:flex;align-items:flex-start;justify-content:space-between;gap:20px;margin:20px 0}.page-heading p{margin:4px 0 0}
+.page-heading>div:first-child{min-width:0}.page-heading h1{font-size:24px}.actions{display:flex;align-items:center;flex-wrap:wrap;gap:16px;flex-shrink:0}.actions form{margin:0}
+.breadcrumb,.workspace-caption{font-size:12px;color:var(--mut)}.workspace-caption{margin:0 0 16px}.scope-label{font-size:12px;color:var(--mut)}
+.notice{font-size:13px;color:var(--mut);border-left:2px solid var(--line);padding:8px 14px;margin:16px 0 24px}.notice.warn{border-color:var(--warn);color:var(--warn)}.notice ul{margin:0;padding-left:16px}
+.account-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:20px;margin:24px 0}.account-card{min-width:0;background:var(--card);border:1px solid var(--line);border-radius:8px;padding:22px}
+.card-heading,.card-meta,.section-heading{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap}.account-card h3,.account-card h2{font-size:18px;line-height:1.5;margin:14px 0 18px;overflow-wrap:anywhere}.account-card h3 a,.account-card h2 a{color:var(--fg)}
+.status-badge{font-size:12px;display:inline-flex;align-items:center;gap:6px;white-space:nowrap}.status-badge:before{content:"";width:6px;height:6px;border-radius:50%;background:currentColor}.status-badge.pending{color:var(--warn)}.status-badge.active{color:var(--ok)}.status-badge.blocked{color:var(--bad)}
+.metrics{display:grid;gap:20px;padding:20px 0}.compact-metrics{grid-template-columns:repeat(2,minmax(0,1fr));padding:8px 0 16px}.account-metrics{grid-template-columns:repeat(4,minmax(0,1fr));border-top:1px solid var(--line);border-bottom:1px solid var(--line);margin:24px 0}
+.metric{min-width:0}.metric>span,.metric small{display:block;color:var(--mut);font-size:12px}.metric strong{display:block;font-size:24px;font-weight:550;line-height:1.4;font-variant-numeric:tabular-nums;overflow-wrap:anywhere}.metric small{min-height:18px;margin-top:3px}
+.card-meta,.chart-dates{font-size:12px;color:var(--mut)}.account-message{font-size:13px;min-height:44px;margin:12px 0}.card-link{display:block;border-top:1px solid var(--line);padding-top:14px;font-size:13px}.evidence-note{font-size:13px;color:var(--warn);margin:0 0 16px}
+.chart-plot{display:flex;gap:8px;align-items:stretch;min-width:0}.equity-chart{display:block;width:100%;height:200px;min-width:0}.equity-chart.compact{height:72px}.chart-scale{display:flex;flex-direction:column;justify-content:space-between;font-size:11px;color:var(--mut);padding:22px 0;flex:none}.chart-dates{display:flex;justify-content:space-between;margin:6px 0 14px;gap:12px}
+.chart-empty{height:200px;display:flex;align-items:center;justify-content:center;border-bottom:1px solid var(--line);font-size:13px;color:var(--mut);text-align:center}.chart-empty.compact{height:72px;margin-bottom:28px}
+.data-section{padding:10px 0 24px;min-width:0}.data-section h2{font-size:17px;margin:12px 0 18px}.data-section th,.data-section td{white-space:nowrap}.section-heading span{font-size:12px}.account-detail-grid{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.3fr);gap:28px}.empty-cell{height:80px;text-align:center;vertical-align:middle;color:var(--mut)}.empty-state{padding:60px 0;text-align:center;border-block:1px solid var(--line)}
+.operation-details{border-top:1px solid var(--line);padding-top:16px;font-size:13px}.toolbar{display:flex;align-items:flex-end;gap:12px;flex-wrap:wrap;border-block:1px solid var(--line);padding:14px 0;margin:22px 0}.toolbar label.f{margin:0}.toolbar input{display:block;margin-top:5px}
+.scenario-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:0 30px}.scenario-grid .q{min-width:0}.scenario-grid select{width:100%}.scenario-grid small{font-size:12px}.model-choices{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px}.model-choices .card{margin:8px 0;min-height:130px}
+.training-steps{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));margin:24px 0 0;border-bottom:1px solid var(--line)}.training-steps a{padding:12px 0;font-size:13px;color:var(--mut)}.training-steps b{color:var(--acc);margin-right:10px}.hw-details{font-size:12px;margin:16px 0}.hw-details .hw{background:transparent;border:0;border-radius:0;padding:10px 0}
+@media(max-width:760px){.account-detail-grid{grid-template-columns:minmax(0,1fr)}.account-metrics{grid-template-columns:repeat(2,minmax(0,1fr))}.page-heading{flex-wrap:wrap}.actions{flex-shrink:1}.account-grid{gap:14px}.account-card{padding:18px}.scenario-grid{grid-template-columns:minmax(0,1fr)}}
+@media(max-width:600px){.account-grid,.model-choices{grid-template-columns:minmax(0,1fr)}.model-choices .card{min-height:0}.page-heading h1{font-size:22px}.training-steps a{font-size:12px}.training-steps b{display:block}.metrics{gap:14px}.metric strong{font-size:22px}}
+pre.plain{white-space:pre-wrap;word-break:break-word;background:var(--code);padding:12px;border-radius:8px;font-size:13px}
+code{background:var(--code);padding:1px 6px;border-radius:5px;font-size:13px}
+svg{max-width:100%}
+.foot{max-width:1040px;margin:0 auto;padding:18px 0 28px;border-top:1px solid var(--line);color:var(--mut);font-size:12px}
+@media(max-width:640px){.top-in{gap:8px;padding-block:8px}.nav a{padding:6px 9px;font-size:13px}.step{padding:22px 0}main{padding-block:18px 48px}h1{font-size:22px}}
+@media(prefers-reduced-motion:reduce){*{transition:none!important}}
+</style></head><body>
+<header class="top"><div class="top-in">
+<a class="brand" href="/" aria-label="WiseHold 首页"><img src="/static/favicon.svg" alt=""><span>WiseHold</span></a>
+<nav class="nav" aria-label="主导航"><a href="/">训练模型</a><a href="/experiments">实验记录</a><a href="/models">使用模型</a><a href="/paper">模拟账户</a><a href="/audit">体检外部模型</a></nav>
+</div></header>
+<main>
+<p class="workspace-caption">本地工作台 / A 股</p>
 {{body}}
-</main></body></html>"""
+</main>
+<footer class="foot">本地运行 · 127.0.0.1 · 结果只说明在给定数据和假设下得到了什么，不代表未来收益。</footer>
+<script>(function(){var p=location.pathname,best=null;document.querySelectorAll(".nav a").forEach(function(a){var h=a.getAttribute("href");
+var hit=h==="/"?(p==="/"||p.indexOf("/job")===0||p.indexOf("/data")===0):p.indexOf(h)===0;
+if(hit&&(!best||h.length>best.getAttribute("href").length))best=a});
+if(best){best.classList.add("on");best.setAttribute("aria-current","page")}})();</script>
+</body></html>"""
 
 INDEX = """
+<div class="page-heading"><div><h1>训练模型</h1></div><a href="/models">已有模型</a></div>
+<nav class="training-steps" aria-label="训练步骤"><a href="#step1"><b>01</b>训练目标</a><a href="#step2"><b>02</b>选择数据</a><a href="#step3"><b>03</b>参数确认</a><a href="#step4"><b>04</b>开始训练</a></nav>
+<details class="hw-details"><summary>本机资源 · {mem} 内存 · CPU 训练</summary>
 <p class="hw">本机：{cpu}；内存 {mem}；显卡 {gpu}。<b>LightGBM 和 Ridge 只用 CPU，什么显卡（含 AMD、核显、没有显卡）都不影响。</b>树模型做的是排序和比大小，CPU 本来就擅长；只有神经网络底座（如 Kronos）才需要 NVIDIA 显卡。</p>
+</details>
 {memwarn}
 <form method="post" action="/run" id="main">
 <input type="hidden" name="token" value="{token}">
@@ -1239,17 +1324,17 @@ INDEX = """
 <label class="f">到 <input type="number" name="end_year" value="2025"> 年</label>
 <button>开始下载</button></form></div></details>
 
-<details><summary>添加数据 · 方式 C：使用电脑上已有的 qwb 数据文件夹</summary><div class="sub">
+<details><summary>添加数据 · 方式 C：使用电脑上已有的 WiseHold 数据文件夹</summary><div class="sub">
 <form method="post" action="/data/folder">
 <input type="hidden" name="token" value="{token}">
-<label class="f">文件夹路径 <input name="path" size="40" placeholder="例如 E:\\data\\qwb_data" required></label>
+<label class="f">文件夹路径 <input name="path" size="40" placeholder="例如 E:\\data\\wisehold_data" required></label>
 <button>添加</button></form></div></details>
 </section>
 
 <section class="step" id="step3"><h2><span class="num">3</span>参数（由第 1 步推出，可以不改）</h2>
 <label class="f">给这次训练起个名字 <input form="main" name="name" value="{name}" required
  pattern="[A-Za-z0-9_\\-]{{1,40}}"></label>
-<div class="box" id="derived"></div>
+<div class="derived-summary" id="derived"></div>
 <details><summary>修改参数（不填就用上面的值；改过的会写在报告首页）</summary><div class="sub">
 <p><b>持仓与成本</b></p>
 <label class="f">持股只数 <input form="main" type="number" name="n_hold" id="n_hold" min="1" max="500"></label>

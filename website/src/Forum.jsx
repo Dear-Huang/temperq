@@ -79,7 +79,7 @@ export default function Forum() {
   });
   const [reply, setReply] = useState("");
   useEffect(() => {
-    document.title = `${composing ? "发布研究" : topicId ? "研究讨论" : "研究社区"} · Quant Workbench`;
+    document.title = `${composing ? "发布研究" : topicId ? "研究讨论" : "研究社区"} · WiseHold`;
     Promise.all([
       api("/api/site"),
       api("/api/forum"),
@@ -153,7 +153,7 @@ export default function Forum() {
         <a className="brand" href="/">
           <Layers3 size={23} />
           <span>
-            quant<span className="brand-slash">/</span>workbench
+            WiseHold
           </span>
         </a>
         <nav>
@@ -189,7 +189,7 @@ export default function Forum() {
             </span>
             <div>
               <strong>研究社区</strong>
-              <small>QUANT WORKBENCH COMMUNITY</small>
+              <small>WISEHOLD COMMUNITY</small>
             </div>
           </div>
           <button className="button button-dark forum-publish" onClick={auth}>

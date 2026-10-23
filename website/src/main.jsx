@@ -47,7 +47,7 @@ const templates = [
   {
     id: "lgbm",
     title: "LightGBM · 截面排序",
-    owner: "QWB Research",
+    owner: "WiseHold Research",
     label: "参考实验",
     model: "LightGBM",
     task: "A 股 · 5 日预测",
@@ -63,7 +63,7 @@ const templates = [
   {
     id: "kronos",
     title: "Kronos · 时序微调",
-    owner: "QWB Templates",
+    owner: "WiseHold Templates",
     label: "训练模板",
     model: "Kronos",
     task: "时序基础模型",
@@ -91,13 +91,13 @@ function Logo({ light = false }) {
     <a
       className={`brand ${light ? "brand-light" : ""}`}
       href="/"
-      aria-label="Quant Workbench 首页"
+      aria-label="WiseHold 首页"
     >
       <span className="brand-mark">
         <Layers3 size={22} strokeWidth={2} />
       </span>
       <span>
-        quant<span className="brand-slash">/</span>workbench
+        WiseHold
       </span>
     </a>
   );
@@ -154,7 +154,7 @@ function Modal({ title, subtitle, children, close, wide = false }) {
         >
           <X size={21} />
         </button>
-        <div className="eyebrow">QUANT WORKBENCH</div>
+        <div className="eyebrow">WISEHOLD</div>
         <h2 id="dialog-title">{title}</h2>
         {subtitle && <p className="modal-subtitle">{subtitle}</p>}
         {children}
@@ -675,7 +675,7 @@ function App() {
                     <i />
                     <i />
                   </span>
-                  <span>qwb / research workspace</span>
+                  <span>wisehold / research workspace</span>
                   <Terminal size={14} />
                 </div>
                 <div className="terminal-body">
@@ -683,10 +683,10 @@ function App() {
                     <span>~</span>{" "}
                     {
                       [
-                        "qwb run examples/run_cn_rank_5d.yaml --check",
-                        "qwb run examples/run_cn_rank_5d.yaml",
+                        "wisehold run examples/run_cn_rank_5d.yaml --check",
+                        "wisehold run examples/run_cn_rank_5d.yaml",
                         "runs/cn_rank_5d_lgbm/report.md",
-                        "qwb build package publish",
+                        "wisehold build package publish",
                       ][step]
                     }
                   </div>
@@ -821,7 +821,7 @@ function App() {
               开始我的研究 <ArrowUpRight size={17} />
             </button>
             <div className="closing-word" aria-hidden="true">
-              workbench.
+              WiseHold.
             </div>
           </div>
         </section>
@@ -840,7 +840,7 @@ function App() {
             </div>
           </div>
           <div className="footer-bottom">
-            <span>© {new Date().getFullYear()} Quant Workbench</span>
+            <span>© {new Date().getFullYear()} WiseHold</span>
             <p>
               量化研究与技术交流平台。历史回测不代表未来表现，不构成投资建议。
             </p>
@@ -892,7 +892,7 @@ function App() {
                   </span>
                   <div>
                     <h3>打开本地工作台</h3>
-                    <p>已安装并启动 QWB · localhost:8765</p>
+                    <p>已安装并启动 WiseHold · localhost:8765</p>
                   </div>
                   <ArrowUpRight size={18} />
                 </a>
@@ -1042,7 +1042,7 @@ function App() {
                 <div>
                   <h3>准备本地环境</h3>
                   <p>
-                    在 quant-workbench 项目目录运行安装脚本。Windows 使用
+                    在 WiseHold 项目目录运行安装脚本。Windows 使用
                     install.bat；Linux 使用 sh install.sh。先安装{" "}
                     <a
                       href="https://docs.astral.sh/uv/getting-started/installation/"
@@ -1051,7 +1051,7 @@ function App() {
                     >
                       uv <ExternalLink size={11} />
                     </a>
-                    。扣成本检验需要同级目录中的 ashare-tcost。
+                    。发布包已包含扣成本检验依赖，安装脚本会自动安装。
                   </p>
                 </div>
               </div>
@@ -1081,13 +1081,13 @@ function App() {
                     通过本地界面配置任务，或使用命令行运行项目提供的训练配方。
                   </p>
                   <div className="copy-code">
-                    <code>qwb run examples/run_cn_rank_5d.yaml</code>
+                    <code>wisehold run examples/run_cn_rank_5d.yaml</code>
                     <button
                       className="icon-button"
                       title={copy ? "已复制" : "复制命令"}
                       aria-label="复制命令"
                       onClick={() =>
-                        copyText("qwb run examples/run_cn_rank_5d.yaml")
+                        copyText("wisehold run examples/run_cn_rank_5d.yaml")
                       }
                     >
                       {copy ? <Check size={15} /> : <Copy size={15} />}
@@ -1143,7 +1143,7 @@ function App() {
             <>
               <div className="detail-meta">
                 <span className="tag">参考实验</span>
-                <span>QWB Research</span>
+                <span>WiseHold Research</span>
                 <span>最终测试 2024–2025</span>
               </div>
               <div className="detail-tabs" role="tablist" aria-label="实验详情">

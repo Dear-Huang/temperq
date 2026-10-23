@@ -292,7 +292,7 @@ def create_app(db_path: Path | None = None, hf: HFClient | None = None,
 
     @app.get("/downloads/report")
     def download_report():
-        return FileResponse(reference_report(), filename="qwb-reference-report.md",
+        return FileResponse(reference_report(), filename="wisehold-reference-report.md",
                             media_type="text/markdown; charset=utf-8")
 
     @app.get("/downloads/recipe")
@@ -316,7 +316,7 @@ def create_app(db_path: Path | None = None, hf: HFClient | None = None,
         if (web_dist / "index.html").exists():
             source = (web_dist / "index.html").read_text(encoding="utf-8")
             fallback = '<input type="hidden" name="token" value="' + html.escape(csrf(req)) + '">'
-            fallback += "<noscript><h1>Quant Workbench</h1><p>请启用 JavaScript 以浏览模型广场。</p>"
+            fallback += "<noscript><h1>WiseHold</h1><p>请启用 JavaScript 以浏览模型广场。</p>"
             for m in shared_models():
                 status = "源文件已不可用" if m["status"] == "gone" else "已弃用" if m["deprecated"] else ""
                 fallback += f'<p><a href="/m/{m["id"]}">{html.escape(m["repo"])}</a> {status}</p>'
@@ -425,7 +425,7 @@ td,th{border-bottom:1px solid var(--line);padding:6px 4px;text-align:left;vertic
 input,textarea,button{font:inherit;padding:6px 8px;max-width:100%;box-sizing:border-box}
 pre{white-space:pre-wrap;word-break:break-word;margin:0}
 </style></head><body><main>
-<header><strong><a href="/">qwb 模型分享</a></strong><span>
+<header><strong><a href="/">WiseHold 模型分享</a></strong><span>
 {% if user %}{{ user }} · <a href="/logout">退出</a>{% else %}<a href="/login">用 Hugging Face 登录</a>{% endif %}
 </span></header>
 {% if dev %}<p class="warn">本地开发模式：未配置 HF OAuth，仅限 127.0.0.1 访问，不可公开部署。</p>{% endif %}
@@ -462,7 +462,7 @@ MODEL = """
 </section>{% endif %}
 <div class="cols">
 <section class="box"><h3>工具生成的标准信息</h3>
-{% if not f.qwb_version %}<p class="warn">不是 qwb 生成的卡片，以下字段未经工具产生。</p>{% endif %}
+{% if not f.qwb_version %}<p class="warn">不是 WiseHold 生成的卡片，以下字段未经工具产生。</p>{% endif %}
 <table>{% for k, v in f.items() %}<tr><th>{{ k }}</th><td>{{ v }}</td></tr>{% endfor %}</table>
 {% if missing %}<p class="mut">缺少字段：{{ missing|join(', ') }}</p>{% endif %}
 </section>

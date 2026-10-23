@@ -83,7 +83,7 @@ def test_flags_and_bad_cards(tmp_path):
     _, c = client(tmp_path, FakeHF("---\ntask: x\n---\n稳赚，加微信进付费群"))
     c.get("/login/dev")
     r = c.post("/share", data={"repo": "u/m", "token": token(c)}, follow_redirects=True)
-    assert "内容检查提示" in r.text and "不是 qwb 生成的卡片" in r.text
+    assert "内容检查提示" in r.text and "不是 WiseHold 生成的卡片" in r.text
 
     (tmp_path / "b").mkdir()
     _, c2 = client(tmp_path / "b", FakeHF("no front matter"))
