@@ -138,8 +138,17 @@ def register(app, workdir, *, page, guard, token, locate, submit):
                  '<p class="mut">评价通过仅表示可开始纸面验证，不是实盘准入或收益承诺。</p>')
         if summary.get("score"):
             body += reason_panel(summary["score"])
+        accounts = bound_accounts(meta)
+        # One primary action per page, chosen by where the user is in the flow.
+        if not summary.get("evaluation_id"):
+            primary = "bench"
+        elif not accounts and not synthetic:
+            primary = "paper"
+        else:
+            primary = "accounts" if accounts else "retrain"
+        cls = lambda key: "primary" if key == primary else "secondary"
         if summary.get("evaluation_id"):
-            body += f'<p><a class="btn" href="/evaluations/{summary["evaluation_id"]}">查看基准结果</a></p>'
+            body += f'<p><a class="btn secondary" href="/evaluations/{summary["evaluation_id"]}">查看基准结果</a></p>'
         protocols = available_protocols(meta)
         can_initialize = meta["model"] == "lightgbm" and not synthetic
         if protocols or can_initialize:
@@ -149,7 +158,7 @@ def register(app, workdir, *, page, guard, token, locate, submit):
                      ('<option value="auto">建立本模型的固定基准任务</option>' if not protocols and can_initialize else '') + ''.join(
                          f'<option value="{esc(key)}">{int(meta["card"]["target"]["horizon_days"])} 日预测 · 同数据固定基准 {i+1}</option>'
                          for i, key in enumerate(protocols)) +
-                     '</select></label><button>跑基准</button></form>')
+                     f'</select></label><button class="{cls("bench")}">跑基准</button></form>')
         else:
             body += ('<p class="warn">合成试运行不作真实基准评价。</p>' if synthetic else
                      '<p class="warn">尚无同数据、同任务的 LightGBM 基准。请先训练一个 LightGBM 作为固定参考，再评价此模型。</p>')
@@ -165,13 +174,12 @@ def register(app, workdir, *, page, guard, token, locate, submit):
                      f'<label class="f">叶子数 <input type="number" name="num_leaves" min="2" max="1024" value="{meta["cfg"]["lgbm"]["num_leaves"]}" required></label></details>')
         elif meta["model"] == "ridge":
             body += (f'<label class="f">正则强度 <input type="number" name="alpha" min="0.00001" step="any" value="{meta["cfg"].get("ridge_alpha", 1)}" required></label>')
-        body += '<p class="mut">沿用原数据、特征和评价区间，完整重训为新版本；保留旧模型，当前不支持断点续训或增量微调。</p><button>继续训练 · 创建新版本</button></form></section>'
-        accounts = bound_accounts(meta)
+        body += f'<p class="mut">沿用原数据、特征和评价区间，完整重训为新版本；保留旧模型，当前不支持断点续训或增量微调。</p><button class="{cls("retrain")}">继续训练 · 创建新版本</button></form></section>'
         body += '<section class="data-section"><h2>纸面交易</h2>'
         if accounts:
-            body += '<div class="actions">' + ''.join(f'<a class="btn" href="/paper/{esc(name)}">{esc(name)} · 查看运行结果</a>' for name in accounts) + '</div>'
+            body += '<div class="actions">' + ''.join(f'<a class="btn {cls("accounts") if i == 0 else "secondary"}" href="/paper/{esc(name)}">{esc(name)} · 查看运行结果</a>' for i, name in enumerate(accounts)) + '</div>'
         if not synthetic:
-            body += f'<p><a class="btn" href="/workflow/{esc(run)}/paper">创建纸面账户</a></p>'
+            body += f'<p><a class="btn {cls("paper")}" href="/workflow/{esc(run)}/paper">创建纸面账户</a></p>'
         body += ('</section><details><summary>报告与模型管理</summary>'
                  f'<p><a href="/models/{esc(run)}">原始信号清单</a> · <a href="/experiments">实验记录与版本比较</a></p>'
                  f'<form method="post" action="/workflow/{esc(run)}/visibility">'
@@ -244,7 +252,8 @@ def register(app, workdir, *, page, guard, token, locate, submit):
                 protocol = workdir / "bench" / "protocols" / f"model-{source.name}.yaml"
             jid = submit("evaluate", {"action": "bench", "source": str(source), "protocol": str(protocol),
                                       "create_protocol": auto,
-                                      "ui": {"name": run, "what": "bench"}})
+                                      "ui": {"name": experiments.read(source / "run.json").get("name", run),
+                                             "what": "bench", "run_id": source.name}})
             return RedirectResponse(f"/job/{jid}", 303)
         except (ValueError, OSError, KeyError) as exc:
             return page("基准未开始", f'<p class="bad">{esc(exc)}</p><a href="/workflow/{esc(run)}">返回模型</a>')
@@ -265,7 +274,7 @@ def register(app, workdir, *, page, guard, token, locate, submit):
                     '<p class="mut">使用模型对应的完整行情和交易日历；CSV 数据需持续更新。</p>'
                     '<label class="row"><input type="checkbox" name="observe_only" value="yes" required>仅作纸面观察，理解证据不足不代表模型已有效</label>'
                     '<label class="row"><input type="checkbox" name="automatic" value="yes" checked>每日 17:30 后自动记账（工作台须保持运行）</label>'
-                    '<p><button>开始纸面交易</button></p></form>')
+                    '<p><button class="primary">开始纸面交易</button></p></form>')
 
     @app.post("/workflow/{run}/paper")
     async def create_paper(req: Request, run: str):
@@ -323,7 +332,7 @@ def register(app, workdir, *, page, guard, token, locate, submit):
                     '<label class="f">计划执行日 <input name="execution_day" type="date" required></label>'
                     '<label class="f">持仓 CSV <input name="file" type="file" accept=".csv"></label><p><a href="/account-template.csv">下载持仓模板</a> · 空仓可不上传</p>'
                     '<label class="row"><input type="checkbox" name="supported_only" value="yes" required>已确认无待处理公司行动、北交所持仓或特殊订单</label>'
-                    '<p><button>模拟模型建议</button></p></form>')
+                    '<p><button class="primary">模拟模型建议</button></p></form>')
 
     @app.post("/holdings/{name}")
     async def holdings_preview(req: Request, name: str):

@@ -230,7 +230,8 @@ def register(app, workdir: Path, *, page, guard, submit, token: str, markdown):
         except (OSError, ValueError, KeyError) as exc:
             raise HTTPException(400, str(exc)) from None
         jid = submit("evaluate", {"action": "bench", "source": str(root), "protocol": str(selected[0]),
-                                  "ui": {"name": run_id[:12], "what": "bench"}})
+                                  "ui": {"name": experiments.read(root / "run.json").get("name", run_id[:12]),
+                                         "what": "bench", "run_id": run_id}})
         return RedirectResponse(f"/job/{jid}", 303)
 
     @app.get("/evaluations/{evaluation_id}")

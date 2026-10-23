@@ -103,7 +103,7 @@ def register(app, workdir, *, page, guard, token):
                     '<label class="f">数据名称 <input name="name" required pattern="[A-Za-z0-9_-]{1,40}"></label>'
                     '<label class="f">行情 CSV <input name="bars" type="file" accept=".csv" required></label>'
                     '<label class="f">交易日历 CSV <input name="calendar" type="file" accept=".csv" required></label>'
-                    '<button>保存数据更新</button></form>')
+                    '<button class="primary">保存数据更新</button></form>')
 
     @app.post("/paper/data")
     async def update_data(req: Request):
@@ -174,7 +174,7 @@ def register(app, workdir, *, page, guard, token):
                       f'<label class="row"><input type="checkbox" name="enabled" value="yes" {"checked" if automatic["enabled"] else ""}>每日自动记账</label>'
                       '<button class="secondary">保存</button></form>'
                       '<p class="mut">每天 17:30 后检查一次，工作台须保持运行；关闭或注销期间不记账。已有 API 每日任务的账户先更新行情，其他账户需持续导入新数据。</p>'
-                      f'<p>{esc(automatic.get("attempted_at", "尚未自动运行"))} · {esc(automatic.get("message", ""))}</p>')
+                      f'<p>{esc(" · ".join(x for x in (automatic.get("attempted_at", "尚未自动运行"), automatic.get("message", "")) if x))}</p>')
         source_path = paper.location(workdir, name) / "workflow.json"
         previous = (f'<a href="/workflow/{esc(experiments.read(source_path)["run"])}">返回模型评价</a>'
                     if source_path.exists() else '<a href="/models">返回模型评价</a>')
@@ -194,7 +194,7 @@ def register(app, workdir, *, page, guard, token):
                     f'<div class="page-heading"><div><span class="scope-label">{scope}</span><h1>{esc(name)}</h1></div>'
                     f'<div class="actions"><a href="/paper/{esc(name)}/history.csv">下载账户历史</a>'
                     f'<form method="post" action="/paper/{esc(name)}/tick">'
-                    f'<input type="hidden" name="token" value="{token}"><button>更新记账</button></form></div></div>'
+                    f'<input type="hidden" name="token" value="{token}"><button class="primary">更新记账</button></form></div></div>'
                     f'<p><span class="status-badge {tone}">{esc(state)}</span> {esc(status["message"])}</p>'
                     '<p class="notice">日线开盘价模拟，只扣佣金和印花税，未计价差与冲击；历史补记单独标识。</p>'
                     f'{summary}<section class="data-section"><div class="section-heading"><h2>账户净值</h2>'

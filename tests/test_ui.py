@@ -110,7 +110,7 @@ def test_csv_upload_then_train(tmp_path):
     r = c.post("/data/csv", data={"token": app.state.token, "name": "mine"},
                files={"file": ("mine.csv", io.BytesIO(raw), "text/csv")})
     assert "导入成功" in r.text and "40 只股票" in r.text
-    assert "mine：" in c.get("/").text
+    assert "数据名 mine" in c.get("/").text
     bad = c.post("/data/csv", data={"token": app.state.token, "name": "bad"},
                  files={"file": ("bad.csv", io.BytesIO(b"a,b\n1,2\n"), "text/csv")})
     assert "缺少必填列" in bad.text
@@ -161,7 +161,7 @@ def test_combined_dataset_flow(tmp_path):
     assert r.status_code == 303
     page = c.get("/data/mine_plus").text
     assert "flow" in page and "下一交易日决策时使用" in page
-    assert "另加 1 个数据来源" in c.get("/").text
+    assert "另加 1 个来源" in c.get("/").text
     bad = c.post("/data/mine_plus/source", data={"token": t, "kind": "factor", "rule": "announce"},
                  files={"file": ("g.csv", io.BytesIO(f.to_csv(index=False).encode()), "text/csv")})
     assert "ann_date" in bad.text

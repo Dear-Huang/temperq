@@ -75,7 +75,7 @@ def render(value):
             '</h3><ul>' + ''.join('<li>' + html.escape(message) + '</li>' for message in value["messages"]) + '</ul></div>')
 
 
-REQUIREMENTS = """<details open class="data-section"><summary>先看：需要准备什么数据？</summary>
+REQUIREMENTS = """<details class="data-section"><summary>需要准备什么数据？建议至少 3 年、720 个交易日（点开看详细要求）</summary>
 <p><b>做 A 股日频排序，建议至少约 3 整年、720 个交易日，30 只以上同时覆盖的股票；推荐 5–8 年及较完整的历史股票池。</b>
 可以从数百只股票开始。独立基准要求每个有效检验日至少 20 只合格股票，筛选后数量会减少；股票行数不能替代时间长度。</p>
 <p>按时间先后训练和检验，建议保留最近 1–2 年。当前 CSV 导入硬要求是至少跨 3 个年份，这只是格式入口，不是有效性门槛。

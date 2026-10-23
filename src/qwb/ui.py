@@ -138,13 +138,13 @@ def datasets(workdir: Path) -> dict[str, dict]:
         out[k] = {"path": p, "snap": s, "has_index": dataset.has_index(p), "sources": n_src,
                   "combined": s.get("source") == "combined",
                   "label":
-                  f"{k}：{s.get('start', '?')} 至 {s.get('end', '?')}，"
-                  f"{s.get('trading_days', '?')} 个交易日"
-                  + (f"，{s['codes']} 只股票" if s.get("codes") is not None else "")
-                  + ("，含 ST 标记" if s.get("has_st", True) else "，无 ST 标记")
-                  + ("，含指数成分" if dataset.has_index(p) else "")
-                  + (f"，另加 {n_src} 个数据来源" if n_src else "")
-                  + f"（来源 {src.split(':')[0]}）"}
+                  f"A 股日线 {str(s.get('start', '?'))[:4]}–{str(s.get('end', '?'))[:4]}"
+                  + (f" · {s['codes']} 只股票" if s.get("codes") is not None else "")
+                  + f" · {s.get('trading_days', '?')} 个交易日"
+                  + ("" if s.get("has_st", True) else " · 无 ST 标记")
+                  + (" · 含指数成分" if dataset.has_index(p) else "")
+                  + (f" · 另加 {n_src} 个来源" if n_src else "")
+                  + f"（{s.get('start', '?')} 至 {s.get('end', '?')}，数据名 {k}，来源 {src.split(':')[0]}）"}
     return out
 
 
@@ -1191,8 +1191,15 @@ def _job_rows(store: Store) -> str:
         ui = spec.get("config", {}).get("ui")
         if not ui:
             continue
-        kind = {"train": "训练", "audit": "体检外部模型", "bench": "Bench", "compare": "版本比较", "protocol": "冻结协议"}.get(ui.get("what"), "下载数据")
-        rows.append(f'<tr><td><a href="/job/{j["job_id"]}">{html.escape(ui["name"])}</a></td>'
+        kind = {"train": "训练", "audit": "体检外部模型", "bench": "基准评价", "compare": "版本比较", "protocol": "冻结协议"}.get(ui.get("what"), "下载数据")
+        name = ui["name"]
+        if ui.get("what") == "bench" and re.fullmatch(r"[0-9a-f]{12,32}", name or ""):
+            # Older records stored the run id; show the model name it belongs to.
+            try:
+                name = experiments.read(Path(spec["config"]["source"]) / "run.json").get("name", name)
+            except (OSError, ValueError, KeyError):
+                pass
+        rows.append(f'<tr><td><a href="/job/{j["job_id"]}">{html.escape(name)}</a></td>'
                     f'<td>{kind}</td><td>{label.get(j["state"], j["state"])}</td>'
                     f'<td>{_local_time(j["updated"])}</td></tr>')
         if len(rows) >= 20:
@@ -1279,7 +1286,8 @@ text-decoration:none;display:inline-block;font-weight:500;transition:background 
 button:hover,.btn:hover{background:var(--acc);border-color:var(--acc);color:#fff;text-decoration:none;box-shadow:0 6px 18px color-mix(in srgb,var(--acc) 25%,transparent)}
 button:focus-visible,.btn:focus-visible,a:focus-visible{outline:2px solid var(--acc);outline-offset:2px}
 button.big{font-size:16px;padding:13px 30px;background:var(--acc);border-color:var(--acc);color:#fff}button.big:hover{background:var(--acch)}
-button.secondary{background:transparent;color:var(--acc);border:1px solid var(--line)}button.secondary:hover{background:var(--accbg);color:var(--acc);box-shadow:none}
+button.primary,.btn.primary{background:var(--acc);border-color:var(--acc);color:#fff}button.primary:hover,.btn.primary:hover{background:var(--acch);border-color:var(--acch)}
+button.secondary,.btn.secondary{background:var(--card);color:var(--fg);border:1px solid var(--line);box-shadow:none}button.secondary:hover,.btn.secondary:hover{background:var(--accbg);color:var(--acc);border-color:color-mix(in srgb,var(--acc) 35%,var(--line));box-shadow:none}
 .mut{color:var(--mut)}.warn{color:var(--warn)}.bad{color:var(--bad)}
 .hw{font-size:13px;color:var(--mut);background:var(--card);border:1px solid var(--line);border-radius:10px;padding:10px 14px}
 .box{border-radius:12px;padding:14px 18px;margin:14px 0;background:var(--card);border:1px solid var(--line);box-shadow:var(--shadow)}
@@ -1309,7 +1317,7 @@ table tr:hover td{background:color-mix(in srgb,var(--accbg) 45%,transparent)}
 .metric{min-width:0}.metric>span,.metric small{display:block;color:var(--mut);font-size:12px}.metric strong{display:block;font-size:24px;font-weight:550;line-height:1.4;font-variant-numeric:tabular-nums;overflow-wrap:anywhere}.metric small{min-height:18px;margin-top:3px}
 .card-meta,.chart-dates{font-size:12px;color:var(--mut)}.account-message{font-size:13px;min-height:44px;margin:12px 0}.card-link{display:block;border-top:1px solid var(--line);padding-top:14px;font-size:13px}.evidence-note{font-size:13px;color:var(--warn);margin:0 0 16px}
 .chart-plot{display:flex;gap:8px;align-items:stretch;min-width:0}.equity-chart{display:block;width:100%;height:200px;min-width:0}.equity-chart.compact{height:72px}.chart-scale{display:flex;flex-direction:column;justify-content:space-between;font-size:11px;color:var(--mut);padding:22px 0;flex:none}.chart-dates{display:flex;justify-content:space-between;margin:6px 0 14px;gap:12px}
-.chart-empty{height:200px;display:flex;align-items:center;justify-content:center;border-bottom:1px solid var(--line);font-size:13px;color:var(--mut);text-align:center}.chart-empty.compact{height:72px;margin-bottom:28px}
+.chart-empty{height:96px;display:flex;align-items:center;justify-content:center;border-bottom:1px solid var(--line);font-size:13px;color:var(--mut);text-align:center}.chart-empty.compact{height:72px;margin-bottom:28px}
 .data-section{padding:10px 0 24px;min-width:0}.data-section h2{font-size:17px;margin:12px 0 18px}.data-section th,.data-section td{white-space:nowrap}.section-heading span{font-size:12px}.account-detail-grid{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.3fr);gap:28px}.empty-cell{height:80px;text-align:center;vertical-align:middle;color:var(--mut)}.empty-state{padding:60px 0;text-align:center;border-block:1px solid var(--line)}
 .operation-details{border-top:1px solid var(--line);padding-top:16px;font-size:13px}.toolbar{display:flex;align-items:flex-end;gap:12px;flex-wrap:wrap;border-block:1px solid var(--line);padding:14px 0;margin:22px 0}.toolbar label.f{margin:0}.toolbar input{display:block;margin-top:5px}
 .scenario-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:0 30px}.scenario-grid .q{min-width:0}.scenario-grid select{width:100%}.scenario-grid small{font-size:12px}.model-choices{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px}.model-choices .card{margin:8px 0;min-height:130px}
