@@ -6,7 +6,7 @@ executor. Corporate actions require a later lifecycle-data adapter.
 """
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass, replace
+from dataclasses import asdict, dataclass, field, replace
 import json
 from pathlib import Path
 import time
@@ -39,26 +39,31 @@ EXPOSURE_MATCH_STEPS = 12
 
 @dataclass(frozen=True)
 class GovernanceConfig:
-    n_hold: int = 10
-    hold_until_rank: int = 15
-    max_weight: float = .1
-    exposure_cap: float = 1.0
-    cash_floor: float = 0.0
-    target_volatility: float = .15
-    slippage_bp: float = 0.0
+    n_hold: int = field(default=10, metadata={"minimum":1,"maximum":500})
+    hold_until_rank: int = field(default=15, metadata={"minimum":1})
+    max_weight: float = field(default=.1, metadata={"exclusiveMinimum":0,"maximum":1})
+    exposure_cap: float = field(default=1., metadata={"minimum":0,"maximum":1})
+    cash_floor: float = field(default=0., metadata={"minimum":0,"maximum":1})
+    target_volatility: float = field(default=.15, metadata={"exclusiveMinimum":0,"maximum":2})
+    slippage_bp: float = field(default=0., metadata={"minimum":0,"maximum":1000})
+    adjustment_speed: float = field(default=1., metadata={"exclusiveMinimum":0,"maximum":1})
+    commission_bp: float = field(default=3., metadata={"minimum":0,"maximum":1000})
+    minimum_commission: float = field(default=5., metadata={"minimum":0})
 
     def __post_init__(self):
         if type(self.n_hold) is not int or not 1 <= self.n_hold <= 500:
             raise ValueError("持仓数需为 1–500 的整数")
         if type(self.hold_until_rank) is not int or self.hold_until_rank < self.n_hold:
             raise ValueError("继续持有的排名阈值不能小于持仓数")
-        for key in ("max_weight", "exposure_cap", "cash_floor", "target_volatility", "slippage_bp"):
+        for key in ("max_weight", "exposure_cap", "cash_floor", "target_volatility", "slippage_bp",
+                    "adjustment_speed", "commission_bp", "minimum_commission"):
             value = getattr(self, key)
             if isinstance(value, bool) or not isinstance(value, (float, int)) or not np.isfinite(value):
                 raise ValueError(f"{key} 必须是有限数字")
         if not (0 < self.max_weight <= 1 and 0 <= self.exposure_cap <= 1
                 and 0 <= self.cash_floor <= 1 and 0 < self.target_volatility <= 2
-                and 0 <= self.slippage_bp <= 1000):
+                and 0 <= self.slippage_bp <= 1000 and 0 < self.adjustment_speed <= 1
+                and 0 <= self.commission_bp <= 1000 and self.minimum_commission >= 0):
             raise ValueError("仓位、现金、风险或费用参数越界")
 
 
@@ -176,7 +181,8 @@ class RiskHead:
 
 
 def replay(panel, signals, cfg, *, mode, start, end, initial_cash, snapshot_id, samples,
-           check=lambda: None, log=lambda message: None, constant_exposure=None):
+           check=lambda: None, log=lambda message: None, constant_exposure=None,
+           initial_holdings=None, snapshot_ids=None, allow_single=False, trading_calendar=None):
     if mode not in {"fixed", "ewma", "ml"}:
         raise ValueError("unknown risk control")
     if constant_exposure is not None and (mode != "fixed" or isinstance(constant_exposure, bool)
@@ -186,22 +192,31 @@ def replay(panel, signals, cfg, *, mode, start, end, initial_cash, snapshot_id, 
     if pd.Timestamp(start) < dates[0] or pd.Timestamp(end) > dates[-1] or pd.Timestamp(start) > pd.Timestamp(end):
         raise ValueError("回放起止日期必须在行情覆盖范围内且顺序正确")
     selected_days = dates[(dates >= pd.Timestamp(start)) & (dates <= pd.Timestamp(end))]
-    if len(selected_days) < 2 or selected_days[0] not in signals.index:
+    if len(selected_days) < (1 if allow_single else 2) or selected_days[0] not in signals.index:
         raise ValueError("回放至少需要两个交易日，首日必须有信号")
-    if not np.isfinite(initial_cash) or initial_cash <= 0:
-        raise ValueError("初始资金需为正数")
+    if not np.isfinite(initial_cash) or initial_cash < 0 or (initial_cash==0 and not initial_holdings):
+        raise ValueError("初始现金需非负，现金与持仓不能同时为空")
     identity = experiments.object_digest({"schema": SCHEMA, "config": asdict(cfg), "mode": mode,
                                          "constant_exposure": constant_exposure})
-    fees = Fees(slippage_bp=cfg.slippage_bp)
+    fees = Fees(cfg.commission_bp, cfg.minimum_commission, cfg.slippage_bp)
     risk, head = RiskData(panel), RiskHead(samples)
-    state = AccountState(str(selected_days[0].tz_localize("Asia/Shanghai") + pd.Timedelta(hours=15, minutes=30)),
-                         snapshot_id, float(initial_cash))
+    snapshot_ids = snapshot_ids or {}
+    first = selected_days[0]
+    calendar = dates if trading_calendar is None else trading_calendar
+    first_next = calendar[calendar > first]
+    first_next = first_next[0] if len(first_next) else first + pd.Timedelta(days=1)
+    state = strategy.account(initial_cash, initial_holdings or [], panel["close"].loc[first].to_dict(),
+        observed_at=first.tz_localize("Asia/Shanghai") + pd.Timedelta(hours=15, minutes=30),
+        snapshot_id=snapshot_ids.get(str(first.date()), snapshot_id),
+        locked_until=(first_next + pd.Timedelta(hours=9, minutes=30)).tz_localize("Asia/Shanghai"))
+    initial_equity = state.equity
     pending, decisions, paths, fills, positions = None, [], [], [], []
     for i, day in enumerate(selected_days):
         check()
         t = dates.get_loc(day)
         at = lambda h, m=0: (day + pd.Timedelta(hours=h, minutes=m)).tz_localize("Asia/Shanghai")
-        nxt_day = dates[t+1] if t+1 < len(dates) else day + pd.Timedelta(days=1)
+        next_days = calendar[calendar > day]
+        nxt_day = next_days[0] if len(next_days) else day + pd.Timedelta(days=1)
         nxt = (nxt_day + pd.Timedelta(hours=9, minutes=30)).tz_localize("Asia/Shanghai")
         before, audit = state.equity, None
         if i:
@@ -229,10 +244,11 @@ def replay(panel, signals, cfg, *, mode, start, end, initial_cash, snapshot_id, 
                 if audit["notices"]:
                     raise ValueError(f"{day:%Y-%m-%d} 行情或估值缺失，停止回放：{audit['notices']}")
                 fills += [{"date": str(day.date()), **f} for f in audit["fills"]]
-            state = replace(state, observed_at=str(at(15, 30)))
+            state = replace(state, observed_at=str(at(15, 30)),
+                            data_snapshot_id=snapshot_ids.get(str(day.date()), snapshot_id))
         pending = None
         # All arms anchor their five-session cycle at exactly the same start.
-        if i % 5 == 0 and i < len(selected_days)-1:
+        if i % 5 == 0:
             if day not in signals.index:
                 raise ValueError(f"{day:%Y-%m-%d} 调仓日缺少信号，不能跳过")
             basket, reasons = choose(signals.loc[day], {p.asset_id for p in state.positions}, cfg)
@@ -248,6 +264,16 @@ def replay(panel, signals, cfg, *, mode, start, end, initial_cash, snapshot_id, 
             exposure = min(cap, requested_exposure)
             weight = min(exposure / cfg.n_hold, cfg.max_weight)
             pending = {code: weight for code in basket}
+            immediate_weights = dict(pending)
+            drift_weights = {p.asset_id: p.quantity*p.mark/state.equity for p in state.positions}
+            if cfg.adjustment_speed < 1:
+                # Selection exits and hard limits take precedence over smoothing.
+                pending = {code: min(cfg.max_weight, (1-cfg.adjustment_speed)*drift_weights.get(code, 0.)
+                                    + cfg.adjustment_speed*w) for code, w in pending.items()}
+                total = sum(pending.values())
+                if total > cap and total:
+                    pending = {code: w*cap/total for code, w in pending.items()}
+                reasons.append({"reason": "PARTIAL_ADJUSTMENT", "speed": cfg.adjustment_speed})
             if requested_exposure > cap+1e-10:
                 reasons.append({"reason": "REDUCED_MANDATE"})
             if weight < exposure / cfg.n_hold:
@@ -266,6 +292,8 @@ def replay(panel, signals, cfg, *, mode, start, end, initial_cash, snapshot_id, 
             qlike = None if score_variance is None or label is None else float(label[0]/score_variance-np.log(label[0]/score_variance)-1)
             decisions.append({"date": str(day.date()), "execution_date": str(nxt_day.date()),
                 "weights": pending, "cash_target": 1-sum(pending.values()), "risk_reason": risk_reason,
+                "immediate_weights": immediate_weights, "drift_weights": drift_weights,
+                "adjustment_speed": cfg.adjustment_speed,
                 "unconstrained_exposure": float(requested_exposure), "authorized_exposure": float(exposure),
                 "uncapped_weight": float(exposure/cfg.n_hold), "target_exposure": float(sum(pending.values())),
                 "forecast_variance": variance, "risk_fit_day": head.model["fit_day"] if mode == "ml" and head.model else None,
@@ -275,7 +303,10 @@ def replay(panel, signals, cfg, *, mode, start, end, initial_cash, snapshot_id, 
                 "reasons": reasons})
         total_cost = audit["total_cost"] if audit else 0.0
         traded = sum(f["notional"] for f in audit["fills"]) if audit else 0.0
-        violations = audit["constraint_violations"] if audit else []
+        violations = list(audit["constraint_violations"]) if audit else []
+        actual_exposure=1-state.cash/state.equity
+        if actual_exposure>cfg.exposure_cap+1e-10:
+            violations.append({"constraint":"exposure_cap","actual":actual_exposure,"limit":cfg.exposure_cap})
         paths.append({"date": str(day.date()), "equity": state.equity, "cash": state.cash,
             "exposure": 1-state.cash/state.equity, "net_return": state.equity/before-1,
             "total_cost": total_cost, "gross_traded_fraction": traded/before,
@@ -285,7 +316,7 @@ def replay(panel, signals, cfg, *, mode, start, end, initial_cash, snapshot_id, 
         if i % 50 == 0:
             log(f"{mode} {i+1}/{len(selected_days)} {day:%Y-%m-%d}")
     return {"path": paths, "decisions": decisions, "fills": fills, "positions": positions,
-            "risk_models": head.checkpoints, "metrics": summarize(paths, decisions, initial_cash, cfg)}
+            "risk_models": head.checkpoints, "metrics": summarize(paths, decisions, initial_equity, cfg)}
 
 
 def exposure_matched_control(panel, signals, cfg, reference, fixed, *, start, end,
@@ -340,11 +371,11 @@ def summarize(path, decisions, cash, cfg):
     returns = np.array([row["net_return"] for row in path[1:]])
     peak = np.maximum.accumulate(np.r_[cash, equity])[1:]
     qlike = [d["evaluation_only_qlike"] for d in decisions if d["evaluation_only_qlike"] is not None]
-    annual_risk = float(np.sqrt(np.mean(returns**2)*252))
+    annual_risk = float(np.sqrt(np.mean(returns**2)*252)) if len(returns) else 0.0
     return {"sessions": len(returns), "total_return": float(equity[-1]/cash-1),
         "max_drawdown": float(np.min(equity/peak-1)), "annualized_rms_return": annual_risk,
         "risk_target_error": abs(annual_risk-cfg.target_volatility),
-        "mean_exposure": float(np.mean([r["exposure"] for r in path[1:]])),
+        "mean_exposure": float(np.mean([r["exposure"] for r in path[1:]])) if len(path)>1 else path[0]["exposure"],
         "total_cost": sum(r["total_cost"] for r in path),
         "gross_traded_fraction": sum(r["gross_traded_fraction"] for r in path),
         "actual_constraint_violations": sum(r["actual_constraint_violations"] for r in path),
@@ -356,7 +387,7 @@ def compare(panel, signals, cfg, *, start, end, initial_cash=100000, snapshot_id
             check=lambda: None, log=lambda message: None):
     samples = risk_samples(RiskData(panel), signals, cfg.n_hold, check)
     arms = {}
-    baseline = replace(cfg, hold_until_rank=cfg.n_hold, max_weight=1.)
+    baseline = replace(cfg, hold_until_rank=cfg.n_hold, max_weight=1., adjustment_speed=1.)
     for name, mode, rules in [("rules_baseline", "fixed", baseline), ("fixed", "fixed", cfg),
                               ("ewma", "ewma", cfg), ("ml", "ml", cfg)]:
         log(f"运行 {name}")
@@ -393,7 +424,8 @@ def run(predictions, data_dir, output, cfg, *, start, end, initial_cash=100000,
             raise ValueError("预测的数据快照与行情不一致；请在同一冻结快照上导出预测")
         record.update(signal_hash=experiments.digest(predictions), snapshot_id=snapshot_id,
             environment={"numpy": np.__version__, "pandas": pd.__version__},
-            execution_policy={"protocol": strategy.protocol()[0], "fees": asdict(Fees(slippage_bp=cfg.slippage_bp)),
+            execution_policy={"protocol": strategy.protocol()[0],
+                              "fees": asdict(Fees(cfg.commission_bp, cfg.minimum_commission, cfg.slippage_bp)),
                               "initial_account": "cash_only", "cadence_sessions": 5,
                               "cadence_anchor": "first_observed_session_within_requested_interval",
                               "cadence_anchor_resets_when_replay_start_changes": True},

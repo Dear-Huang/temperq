@@ -17,6 +17,7 @@ LABELS = {"rules_baseline": "规则基线（无排名缓冲、无单票截断）
           "ewma": "你的规则 · EWMA 风险控制", "ml": "你的规则 · ML 风险控制",
           "ml_matched_fixed": "同平均仓位 · 固定仓位（事后解释）"}
 REASONS = {"BUY_TOP_N": "进入买入排名", "HOLD_IN_BAND": "排名仍在继续持有范围",
+           "PARTIAL_ADJUSTMENT": "分步靠近目标，硬限制优先",
            "REDUCED_MANDATE": "受总仓位上限或最低现金约束",
            "SELL_OUT_OF_BAND": "离开继续持有范围或名额不足", "CAPPED_MAX_WEIGHT": "单票上限截断，余款留现金",
            "FIXED_EXPOSURE": "按固定仓位上限", "EWMA_RISK": "按近期风险缩放仓位",

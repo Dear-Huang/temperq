@@ -270,7 +270,14 @@ def output_lock(target: Path):
     """OS releases the lock on process exit; the empty lock file may remain."""
     target.parent.mkdir(parents=True, exist_ok=True)
     path = target.parent / f".{target.name}.lock"
-    with path.open("a+b") as stream:
+    for attempt in range(9):
+        try:
+            stream=path.open("a+b")
+            break
+        except PermissionError:
+            if attempt==8:raise
+            time.sleep(min(.1*2**attempt,1.))
+    with stream:
         if stream.tell() == 0:
             stream.write(b"0")
             stream.flush()

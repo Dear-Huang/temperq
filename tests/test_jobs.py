@@ -104,3 +104,36 @@ def test_recover_stale_running(tmp_path):
 def test_bad_kind():
     with pytest.raises(ValueError):
         JobSpec("deploy", {})
+
+
+def test_status_update_survives_longer_transient_windows_reader(tmp_path,monkeypatch):
+    from pathlib import Path
+    store=Store(tmp_path);jid=store.submit(JobSpec("fetch",{}))
+    replace=Path.replace;attempts=[]
+    monkeypatch.setattr("qwb.experiments.time.sleep",lambda _:None)
+    def transient(source,target):
+        if Path(target).name=="status.json":
+            attempts.append(1)
+            if len(attempts)<7:raise PermissionError("antivirus reader")
+        return replace(source,target)
+    monkeypatch.setattr(Path,"replace",transient)
+    assert store.run(jid,lambda *_:None)=="succeeded"
+    assert store.status(jid)["state"]=="succeeded"
+    assert not list((tmp_path/jid).glob("*.tmp"))
+
+
+def test_lock_open_retries_without_stealing_an_existing_lock(tmp_path,monkeypatch):
+    from pathlib import Path
+    from qwb import experiments
+    original=Path.open;attempts=[]
+    monkeypatch.setattr("qwb.experiments.time.sleep",lambda _:None)
+    def transient(path,*args,**kwargs):
+        if path.name==".resource.lock":
+            attempts.append(1)
+            if len(attempts)<7:raise PermissionError("temporary scanner handle")
+        return original(path,*args,**kwargs)
+    monkeypatch.setattr(Path,"open",transient)
+    with experiments.output_lock(tmp_path/"resource"):
+        with pytest.raises(ValueError,match="another run"):
+            with experiments.output_lock(tmp_path/"resource"):pass
+    with experiments.output_lock(tmp_path/"resource"):pass

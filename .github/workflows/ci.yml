@@ -19,6 +19,7 @@ jobs:
       - run: python -m pytest -q third_party/ashare-tcost/tests
       - run: python scripts/check_repository.py
       - run: python -m qwb.cli run examples/run_smoke.yaml
+      - run: python scripts/run_strategy_demo.py artifacts/strategy-demo
   website:
     runs-on: ubuntu-latest
     steps:

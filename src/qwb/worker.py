@@ -15,7 +15,7 @@ from . import experiments
 from .jobs import Store
 
 
-ACTIONS = {"train", "protocol", "bench", "compare", "free_data", "governance"}
+ACTIONS = {"train", "protocol", "bench", "compare", "free_data", "governance", "strategy_evaluate", "strategy_tick"}
 
 
 def execute(ctx, config: dict, workdir: Path, *, echo=False) -> None:
@@ -26,7 +26,15 @@ def execute(ctx, config: dict, workdir: Path, *, echo=False) -> None:
         if echo:
             print(message, flush=True)
         ctx.check_cancel()
-    if action == "governance":
+    if action in {"strategy_evaluate", "strategy_tick"}:
+        from . import strategy_workspace as workspace
+        if action == "strategy_evaluate":
+            out=workspace.evaluate(workdir,config["sid"],config["vid"],start=config["start"],
+                end=config["end"],check=ctx.check_cancel,log=log)
+        else:
+            workspace.tick(workdir,config["sid"],config["vid"],check=ctx.check_cancel)
+            out=workspace.location(workdir,config["sid"])/"versions"/config["vid"]
+    elif action == "governance":
         from . import governance
         out = Path(config["output"])
         if out.exists():

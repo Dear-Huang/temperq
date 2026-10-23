@@ -178,18 +178,11 @@ class Store:
     def _set(self, job_id: str, state: str, error: str | None = None) -> None:
         assert state in STATES
         p = self.root / job_id / "status.json"
-        tmp = p.with_name(f"status.{os.getpid()}.tmp")
-        tmp.write_text(json.dumps({"state": state, "updated": _now(), "error": error,
-                                   "pid": os.getpid() if state == "running" else None}),
-                       encoding="utf-8")
-        for attempt in range(5):     # a reader may hold status.json open briefly
-            try:
-                tmp.replace(p)
-                break
-            except PermissionError:
-                if attempt == 4:
-                    raise
-                time.sleep(0.2 * (attempt + 1))
+        from .experiments import write
+        # The shared atomic writer tolerates antivirus/reader locks on Windows,
+        # uses unique temporary names, and cleans them after a failed replace.
+        write(p,{"state":state,"updated":_now(),"error":error,
+                 "pid":os.getpid() if state=="running" else None})
         self._event(job_id, {"type": "state", "state": state})
 
     def _event(self, job_id: str, ev: dict) -> None:

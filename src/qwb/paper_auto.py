@@ -66,6 +66,8 @@ def lifespan(workdir):
                     except (OSError, ValueError, KeyError):
                         # A different workbench may hold the per-account OS lock.
                         continue
+                from . import strategy_workspace
+                strategy_workspace.auto_check(workdir)
                 stopped.wait(30)
 
         thread = threading.Thread(target=work, daemon=True, name="temperq-paper")

@@ -462,7 +462,7 @@ def create_app(workdir: Path, task_dir: Path | None = None,
 
     def submit(kind: str, cfg: dict, fn=None) -> str:
         jid = store.submit(JobSpec(kind, cfg))
-        if cfg.get("action") in {"train", "protocol", "bench", "compare", "free_data", "governance"}:
+        if cfg.get("action") in {"train", "protocol", "bench", "compare", "free_data", "governance", "strategy_evaluate", "strategy_tick"}:
             from . import worker
             if runner is default_runner:
                 try:
@@ -809,7 +809,7 @@ def create_app(workdir: Path, task_dir: Path | None = None,
         head = {"queued": "排队中", "running": "正在运行…", "succeeded": "完成",
                 "failed": "失败", "cancelled": "已取消"}[st["state"]]
         parts = [f'<p><a href="/">← 返回首页</a></p>',
-                 f'<h2>{ {"train": "训练", "audit": "体检", "bench": "Bench", "compare": "版本比较", "protocol": "冻结协议", "governance": "治理实验"}.get(what, "下载数据")}：{html.escape(name)}</h2>',
+                 f'<h2>{ {"train": "训练", "audit": "体检", "bench": "Bench", "compare": "版本比较", "protocol": "冻结协议", "governance": "治理实验", "strategy": "策略"}.get(what, "下载数据")}：{html.escape(name)}</h2>',
                  f'<p class="state {st["state"]}">{head}</p>']
         if prog:
             p = prog[-1]
@@ -834,6 +834,8 @@ def create_app(workdir: Path, task_dir: Path | None = None,
             parts.append(f'<form method="post" action="/job/{jid}/cancel"><input type="hidden" '
                          f'name="token" value="{token}"><button class="secondary">取消</button></form>')
         out_file = store.root / jid / "artifacts" / "output.txt"
+        if what == "strategy":
+            parts.append(f'<p><a class="btn" href="/strategies/{html.escape(ui["sid"])}/{html.escape(ui["vid"])}">返回策略与检验结果</a></p>')
         if what == "governance" and st["state"] == "succeeded" and out_file.exists():
             attempt = Path(out_file.read_text(encoding="utf-8")).name
             parts.append(f'<p><a class="btn" href="/governance/{html.escape(attempt)}">查看治理对照与决策回放</a></p>')
@@ -851,6 +853,7 @@ def create_app(workdir: Path, task_dir: Path | None = None,
             parts.append(f'<details open><summary>完整报告</summary>'
                          f'{md_to_html((out_dir / "report.md").read_text(encoding="utf-8"))}</details>')
             if (out_dir / "final_model" / "meta.json").is_file():
+                parts.append(f'<p><a class="btn" href="/strategies/new?source={html.escape(out_dir.name)}">用这个模型建立策略 →</a></p>')
                 parts.append(f'<p><a class="btn" href="/workflow/{html.escape(out_dir.name)}">'
                              '下一步：评价模型 / 继续训练 →</a></p>')
             if (out_dir / "run.json").is_file():
@@ -1196,6 +1199,8 @@ def create_app(workdir: Path, task_dir: Path | None = None,
                            submit=submit, datasets=datasets)
     from . import workflow_ui
     workflow_ui.register(app, workdir, page=page, guard=guard, token=token, locate=_run_dir, submit=submit)
+    from . import strategy_workspace_ui
+    strategy_workspace_ui.register(app,workdir,page=page,guard=guard,token=token,locate=_run_dir,submit=submit,datasets=datasets)
     app.state.token = token
     app.state.store = store
     return app
@@ -1262,7 +1267,7 @@ def serve(workdir: Path, port: int = 8765, open_browser: bool = True) -> None:
     app = create_app(workdir, port=port)
     if open_browser:
         import webbrowser
-        threading.Timer(1.5, lambda: webbrowser.open(f"http://127.0.0.1:{port}/")).start()
+        threading.Timer(1.5, lambda: webbrowser.open(f"http://127.0.0.1:{port}/strategies")).start()
     print(f"TemperQ 工作台已启动：http://127.0.0.1:{port}  （关闭这个窗口即退出）", flush=True)
     uvicorn.run(app, host="127.0.0.1", port=port, log_level="warning")
 
@@ -1288,6 +1293,7 @@ backdrop-filter:blur(18px) saturate(1.6);border-bottom:1px solid var(--line)}
 .brand:hover{text-decoration:none;color:var(--fg)}.brand img{width:26px;height:26px;border-radius:6px}.brand i{color:#a7aebb;font-style:normal}
 .nav{display:flex;gap:4px;flex-wrap:wrap;margin:0}.nav a{font-size:14px;color:var(--mut);padding:7px 12px;border-radius:7px;white-space:nowrap;font-weight:500}
 .nav a:hover{background:var(--card);color:var(--fg);text-decoration:none}.nav a.on{background:var(--accbg);color:var(--acc)}
+.nav details{position:relative;margin:0}.nav summary{font-size:14px;padding:7px 12px;color:var(--mut);font-weight:500;border-radius:7px}.nav details:has(a.on) summary{color:var(--acc);background:var(--accbg)}.nav details .tool-links{position:absolute;right:0;top:100%;min-width:180px;display:grid;background:var(--card);padding:8px;border:1px solid var(--line);border-radius:8px;box-shadow:var(--shadow)}
 main{max-width:1040px;margin:0 auto;padding-block:26px 64px}
 .lede{color:var(--mut);font-size:13px;margin:0 0 6px}
 h1{font-size:26px;font-weight:600;margin:0 0 6px}h2{font-size:21px;font-weight:600}h3{font-size:17px;font-weight:600}
@@ -1363,7 +1369,7 @@ svg{max-width:100%}
 </style></head><body>
 <header class="top"><div class="top-in">
 <a class="brand" href="/" aria-label="TemperQ 首页"><img src="/static/favicon.svg" alt=""><span>TemperQ</span></a>
-<nav class="nav" aria-label="主导航"><a href="/">1 训练</a><a href="/models">2 评价</a><a href="/paper">3 纸面交易</a><a href="/holdings">4 模拟持仓</a><a href="/governance">治理实验</a></nav>
+<nav class="nav" aria-label="主导航"><a href="/strategies">我的策略</a><a href="/">训练模型</a><details><summary>更多工具</summary><div class="tool-links"><a href="/models">模型评价</a><a href="/paper">原纸面账户</a><a href="/holdings">模拟持仓</a><a href="/governance">治理实验</a></div></details></nav>
 </div></header>
 <main>
 <p class="workspace-caption">本地工作台 / A 股 <span style="float:right"><a href="/experiments">实验记录</a> · <a href="/audit">体检外部模型</a></span></p>
