@@ -1,0 +1,123 @@
+schema_version: 3
+scorer_version: 0.3.0
+stage: development
+task:
+  name: cn_rank_5d
+  market: cn_a
+  template: daily
+  target:
+    type: return_rank
+    horizon_days: 5
+  timing:
+    signal_available:
+      day: 0
+      time: '15:00'
+    decision:
+      day: 0
+      time: '15:30'
+    execution:
+      day: 1
+      time: 09:30
+      price: open
+  label:
+    start:
+      day: 1
+      time: 09:30
+      price: open
+    end:
+      day: 6
+      time: 09:30
+      price: open
+  output: score
+  metrics:
+  - rank_ic
+  acceptance:
+    confirmatory:
+      metric: rank_ic_mean
+      final_test_years:
+      - 2024
+      - 2025
+    go: rank_ic_mean > 0 with NW t > 2 on the final test years, and above every baseline
+    no_go: NW t < 2 or not above the best simple baseline
+timezone: Asia/Shanghai
+data:
+  dir: E:\data\qwb_data
+  snapshot_id: snap-49d3a62851188ff8
+  files:
+    snapshot.json: sha256:8654ac41cd22fa16b6474dbb14bb520280e070b5bcdeeabc6e9024085e57d2db
+    bars/2018.parquet: sha256:f6671b02404717f24e0711c07da6d5f6abb08b6d21758b6fd59fffaf3896b6ad
+    bars/2019.parquet: sha256:6e03b600907aeafed8baecc75c74d099846272e35ef775985b697e33430b1d7f
+    bars/2020.parquet: sha256:165e615a6f2be97ae9af55baea995141acb99769b9cbb2cbda0abd12c179e6b4
+    bars/2021.parquet: sha256:b7a56f4a41c3f0a7cca97e3bf0ffbd1ebb5ce056ccccb6689cec7dfe631aa621
+    bars/2022.parquet: sha256:7e529af3120fdb9f26b35d1747556bb25bae9bf1da730f92ebfc3c53bc969788
+    bars/2023.parquet: sha256:de82d09911b38d16ea30b574b524bbf622a3d173cab7ed04be6efe5e6f00893f
+    bars/2024.parquet: sha256:35ed2d52485825d9856658ac5b25c8fce91d3594a74d6882af63bcab68b1943d
+    bars/2025.parquet: sha256:3a65143d2c3272a5b1598691a38fbb44d618876d00978c513c21554d54fec7e1
+    st_status.parquet: sha256:6477a736bd849fb48cf8baa68f1d0337f7cbc060262f5e8678962ac3b113a28e
+  content_hash: sha256:ced437aea6bce7ab2c47dce6affa29a3233633243341bc99aa1134a81874fcf3
+evaluation_years:
+- 2024
+- 2025
+universe:
+  universe: all_ex_st
+  min_age_days: 60
+  min_amount_quantile: 0.05
+statistics:
+  block_days: 20
+  resamples: 10000
+  seed: 0
+  min_days: 60
+coverage:
+  min_daily: 1.0
+  min_total: 1.0
+  min_names: 20
+signal_threshold: 0.0
+references:
+- reversal_5d
+- momentum_20d
+- low_vol_20d
+- lgbm_anchor_v1
+anchor:
+  run_dir: D:\huang\quant-workbench\runs\cn_rank_5d_lgbm
+  files:
+    predictions.parquet: sha256:0527d373cf9ad96fe899a8367c7dfa70e12e4fa89610135b17ee6b9d9921b038
+    task.yaml: sha256:5367d24f78c861d12670424f131679f9ee4841ea2e37933f68ff87a06e528580
+    config.resolved.yaml: sha256:83307df8f37a3d1d5b0ec229f90c9117ef5d8ed56f22058dd82f911548e7c0a9
+    folds.json: sha256:f6e8f5ec8d64ad5f4f86fdca3ddacf48cc8984239e9491153d089b6fe8e462f2
+    metrics.json: sha256:c4e28d6f8f8f16853efbd8c925766767ac5be25188e1fabd4aace8aa84adaffb
+sample_status: historical_oos_declared
+evidence_source: local_declared
+account:
+  model: weight_research_v1
+  initial_cash: 1000000.0
+  top_share: 0.1
+  commission_bp: 3.0
+  spread_model: struct_previous_month_v1
+  history_eligibility: all_three_rule_scores_finite_at_decision
+  extra_slippage_bp:
+  - 0.0
+  - 10.0
+  - 25.0
+  execution: next_open_daily_bar_proxy
+  mark_missing: carry_last_adjusted_mark_flagged
+  corporate_actions: fractional_adjusted_units_total_return_proxy
+  terminal: mark_to_close_no_forced_liquidation
+  annual_days: 252
+  min_net_excess_ann_bp: 0.0
+assessment:
+  min_anchor_gain_ic: 0.0
+  comparison_family_size: 4
+  sensitivity_blocks:
+  - 10
+  - 20
+  - 40
+  top_share: 0.1
+  cost_hurdles_bp:
+  - 10
+  - 30
+  - 60
+  liquidity_window: 20
+  regime_window: 20
+lifecycle:
+  path: E:/data/qwb_lifecycle/lifecycle.parquet
+  sha256: sha256:bf29d9a729adccdc1ae40dd2da15226cd0e9304459b5e9bb2841e8567d8c7202

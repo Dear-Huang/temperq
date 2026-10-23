@@ -39,14 +39,15 @@ def check(cfg: dict, card: dict, years_of_data: int | None = None) -> list[dict]
     u = cfg.get("universe", "all")
 
     # --- enforced by the code -------------------------------------------------------
-    out.append(_item("locked", f"训练与测试之间隔离 {h} 个交易日",
-                     "标签要到持有期结束才知道；不隔离，训练集里就混进了测试期的信息。", "lopez"))
-    out.append(_item("locked", "最终测试期只用来打分，不用来调参；每次评估都记入台账",
-                     "反复在同一段测试期上挑最好的配置，结果会越来越好看但越来越不可信。", "pbo"))
-    out.append(_item("locked", "第二天开盘成交，涨停买不进、跌停卖不出、停牌不能交易",
-                     "用当天收盘价成交的回测，实盘做不到。", "real"))
-    out.append(_item("locked", "交易成本按股票各自的价差估计，不用统一费率",
-                     "低价股一个价位就占很大比例，统一费率会低估它们的成本。", "tick"))
+    out.append(_item("locked", "逐折按标签成熟时间过滤训练样本",
+                     "训练只使用拟合截止时点已知的标签，具体清除日期与样本见 folds.json。", "lopez"))
+    out.append(_item("locked", "内置训练与选轮数不使用当前折测试标签；真实数据测试查看写入本地台账",
+                     "台账不能阻止外部调参或删除记录；反复查看后仍属于开发证据。", "pbo"))
+    out.append(_item("warn", "训练报告的简化费用诊断不能替代独立账户",
+                     "完整现金、持仓保留、逐笔拒单和状态缺口以 QW-Bench 为准；两种口径不能混用。", "real",
+                     "在同一冻结协议下运行 Bench，检查账户资格与费用压力"))
+    out.append(_item("locked", "默认费用诊断使用个股 STRUCT 价差估计",
+                     "它仍是模型估计，不包含真实冲击、队列或容量；固定费率对照仅用于口径敏感性。", "tick"))
     if u in UNIVERSE_SIZE and u != "st":
         out.append(_item("locked", "指数成分按每个历史时点当时的名单",
                          "用今天的成分股回看过去，会漏掉后来被调出的股票（幸存者偏差）。", "lopez"))
@@ -81,6 +82,13 @@ def check(cfg: dict, card: dict, years_of_data: int | None = None) -> list[dict]
             out.append(_item("warn", f"只训练 {len(seeds)} 次（种子）",
                              "看不到随机种子带来的差异有多大，没法判断模型之间的差别是不是噪声。", "seed",
                              "至少 3 次"))
+        if cfg.get("selection"):
+            out.append(_item("locked", "使用清除重叠标签的历史尾部验证选择轮数，再在全部成熟历史上重拟合",
+                             "验证窗长度与早停耐心也属于模型选择，应预先固定；单个验证窗仍可能过拟合。", "lgb"))
+        else:
+            out.append(_item("warn", "LightGBM 使用固定训练轮数",
+                             "固定轮数适合受控对照；不要通过反复查看测试期来挑轮数。", "lgb",
+                             "可在 YAML 使用 model.selection，或在外部研究环境固定训练方案后提交预测"))
         lg = cfg.get("lgbm", {})
         if lg.get("num_leaves", 63) > 255 or lg.get("min_data_in_leaf", 1000) < 100:
             out.append(_item("warn", "树太复杂（叶子数多或每片叶子样本少）",

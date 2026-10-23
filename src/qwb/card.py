@@ -21,8 +21,11 @@ SITE_FIELDS = {
     "data_license": str, "custom_code": bool, "includes_data": bool,
     "reproducibility": dict, "deviations_from_default": list, "pretrain_contamination": str,
     "license": str, "tags": list,
+    "run_id": str, "model_version": str, "prediction_version": str, "evaluation_id": str, "protocol_id": str,
+    "evidence_source": str,
 }
 MAX_STR = 300
+OPTIONAL_SITE_FIELDS = {"run_id", "model_version", "prediction_version", "evaluation_id", "protocol_id", "evidence_source"}
 MAX_LIST = 50
 # phrases the site's content check flags (SPEC §15); not a judgement of model quality
 FLAG_PATTERNS = [r"保证收益", r"稳赚", r"年化\s*\d{2,}\s*%", r"荐股", r"加\s*(微信|v信|vx|qq)",
@@ -46,6 +49,7 @@ def render(manifest: dict, task: dict, metrics: dict, repro: dict, extra_md: str
                             "checked_on": "author machine"},
         "deviations_from_default": manifest.get("deviations_from_default", []),
     }
+    fm.update({key: metrics[key] for key in OPTIONAL_SITE_FIELDS if metrics.get(key) is not None})
     ic = metrics["ic"]
     rows = "\n".join(
         f"| {k} | {v['final_test']['mean']:+.4f} | {v['final_test']['t']:.2f} |"
@@ -110,7 +114,8 @@ def parse(readme: str) -> dict:
     fields, missing = {}, []
     for k, typ in SITE_FIELDS.items():
         if k not in data:
-            missing.append(k)
+            if k not in OPTIONAL_SITE_FIELDS:
+                missing.append(k)
             continue
         v = _clean(data[k], typ)
         if v is not None:

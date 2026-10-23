@@ -1,0 +1,11 @@
+{
+    email {$ACME_EMAIL}
+}
+
+{$QWB_DOMAIN} {
+    encode zstd gzip
+    request_body {
+        max_size 1MB
+    }
+    reverse_proxy site:8800
+}

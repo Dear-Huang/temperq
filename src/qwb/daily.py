@@ -128,13 +128,15 @@ def raw_features(P: dict) -> dict:
 
 def features(P: dict) -> dict:
     """Per-date percentile ranks of the raw features (no fitted parameters)."""
-    return {k: v.rank(axis=1, pct=True).astype("float32") for k, v in raw_features(P).items()}
+    return {k: v.where(np.isfinite(v)).rank(axis=1, pct=True).astype("float32")
+            for k, v in raw_features(P).items()}
 
 
 def labels(P: dict, card: dict) -> pd.DataFrame:
     """Adjusted return from label.start to label.end (trading-day offsets)."""
     def px(tp):
-        return P[tp.get("price", "open")] * P["adj_factor"]
+        raw, factor = P[tp.get("price", "open")], P["adj_factor"]
+        return (raw * factor).where(np.isfinite(raw) & (raw > 0) & np.isfinite(factor) & (factor > 0))
     s, e = card["label"]["start"], card["label"]["end"]
     return px(e).shift(-int(e["day"])) / px(s).shift(-int(s["day"])) - 1
 
@@ -166,7 +168,7 @@ def members_wide(members: pd.DataFrame, dates: pd.DatetimeIndex, codes: pd.Index
 def universe(P: dict, cfg: dict, st: pd.DataFrame | None = None,
              members: pd.DataFrame | None = None) -> pd.DataFrame:
     """Stocks eligible on each day. Every filter uses data known at that day only."""
-    traded = P["close"].notna()
+    traded = np.isfinite(P["close"]) & (P["close"] > 0) & np.isfinite(P["adj_factor"]) & (P["adj_factor"] > 0)
     ok = traded & (traded.cumsum() >= cfg["min_age_days"])
     amt = P["amount"].where(ok)
     ok &= amt.ge(amt.quantile(cfg["min_amount_quantile"], axis=1), axis=0)
@@ -198,7 +200,18 @@ def universe(P: dict, cfg: dict, st: pd.DataFrame | None = None,
 
 def feature_names(F: dict) -> list[str]:
     """Built-in features first, then user-added ones, in a fixed order."""
-    return FEATURES + sorted(k for k in F if k.startswith("x_"))
+    return [k for k in FEATURES if k in F] + sorted(k for k in F if k.startswith("x_"))
+
+
+def selected_features(P: dict, cfg: dict) -> dict:
+    result = features(P)
+    requested = cfg.get("features")
+    if requested is not None:
+        missing = set(requested) - set(result)
+        if missing:
+            raise ValueError(f"requested features are absent from this dataset: {sorted(missing)}")
+        result = {k: v for k, v in result.items() if k in requested}
+    return result
 
 
 def _stack(F: dict, mask: np.ndarray) -> np.ndarray:
@@ -226,6 +239,57 @@ def ridge_predict(coef: np.ndarray, X: np.ndarray) -> np.ndarray:
     return coef[0] + Xc @ coef[1:]
 
 
+def _fit_lgbm(X, target, names, cfg, seed, selection=None):
+    import lightgbm as lgb
+    from . import metrics
+
+    params = dict(cfg["lgbm"], seed=seed, bagging_seed=seed, feature_fraction_seed=seed)
+    rounds, record = cfg["num_boost_round"], None
+    if selection is not None:
+        Xi, ti, Xv, tv, positions, shape, metadata = selection
+        vi, vj = positions
+        labels = np.full(shape, np.nan)
+        labels[vi, vj] = tv
+
+        def rank_ic(predictions, _dataset):
+            scores = np.full(shape, np.nan)
+            scores[vi, vj] = predictions
+            daily_ic = metrics.rank_ic(scores, labels)
+            finite = daily_ic[np.isfinite(daily_ic)]
+            return "daily_rank_ic", float(finite.mean()) if len(finite) == shape[0] else -1.0, True
+
+        selecting = lgb.train(dict(params, metric="None"),
+            lgb.Dataset(Xi, ti, feature_name=names), num_boost_round=rounds,
+            valid_sets=[lgb.Dataset(Xv, tv, feature_name=names)], feval=rank_ic,
+            callbacks=[lgb.early_stopping(cfg["selection"]["patience"], verbose=False)])
+        rounds = selecting.best_iteration
+        best_predictions = selecting.predict(Xv, num_threads=cfg["lgbm"]["num_threads"])
+        dense = np.full(shape, np.nan)
+        dense[vi, vj] = best_predictions
+        score = metrics.rank_ic(dense, labels)
+        if not np.isfinite(score).all():
+            raise ValueError("selected model has undefined validation Rank IC on some dates; no silent fallback")
+        record = dict(metadata, seed=seed, best_iteration=int(rounds),
+                      mean_rank_ic=float(score.mean()), maximum_rounds=cfg["num_boost_round"])
+    booster = lgb.train(params, lgb.Dataset(X, target, feature_name=names, free_raw_data=True),
+                        num_boost_round=rounds)
+    return booster, record
+
+
+def _selection_data(F, target, mask, dates, label_end, card, cfg, tz):
+    settings = cfg.get("selection")
+    if not settings:
+        return None
+    train, valid, record = foldlib.purged_tail_split(
+        dates, label_end, mask, validation_days=settings["validation_days"],
+        min_train_days=settings["min_train_days"],
+        decision_time=card["timing"]["decision"]["time"], tz=tz)
+    rows = np.flatnonzero(valid.any(axis=1))
+    local = valid[rows]
+    return (_stack(F, train), target.values[train], _stack(F, valid), target.values[valid],
+            np.nonzero(local), local.shape, record)
+
+
 def run(P: dict, card: dict, cfg: dict, snapshot_id: str, tz: str, st=None,
         model_dir: Path | None = None, log=print, members=None) -> dict:
     """Walk-forward yearly refits. Returns predictions, metrics inputs, manifests."""
@@ -236,7 +300,7 @@ def run(P: dict, card: dict, cfg: dict, snapshot_id: str, tz: str, st=None,
         import lightgbm as lgb
 
     dates = P["close"].index
-    F = features(P)
+    F = selected_features(P, cfg)
     y = labels(P, card)
     U = universe(P, cfg, st, members)
     target = _label_target(y.where(U), cfg["label_transform"])
@@ -251,10 +315,12 @@ def run(P: dict, card: dict, cfg: dict, snapshot_id: str, tz: str, st=None,
     for i, yr in enumerate(years):
         train_days = dates[dates.year < yr]
         test_days = dates[dates.year == yr]
+        if not len(train_days):
+            raise ValueError(f"fold {i} ({yr}) has no historical training dates")
         cutoff = (train_days[-1] + pd.Timedelta(hours=hh, minutes=mm)).tz_localize(tz)
         dmask, man = foldlib.build_fold(i, pd.Series(dates, index=dates), lend,
                                         (dates[0], train_days[-1]), cutoff, snapshot_id,
-                                        f"lgbm-fold{i}")
+                                        f"{model}-fold{i}")
         tm = U.values & dmask.values[:, None] & target.notna().values
         X, t = _stack(F, tm), target.values[tm]
         man.n_train = int(tm.sum())          # sample rows, not dates
@@ -277,11 +343,13 @@ def run(P: dict, card: dict, cfg: dict, snapshot_id: str, tz: str, st=None,
                                          "alpha": cfg["ridge_alpha"]}), encoding="utf-8")
                 models.append(p.name)
             continue
+        selection = _selection_data(F, target, tm, dates, lend, card, cfg, tz)
+        if selection is not None:
+            manifests[-1]["selection"] = []
         for s in cfg["seeds"]:
-            params = dict(cfg["lgbm"], seed=s, bagging_seed=s, feature_fraction_seed=s)
-            booster = lgb.train(params, lgb.Dataset(X, t, feature_name=feature_names(F),
-                                                    free_raw_data=True),
-                                num_boost_round=cfg["num_boost_round"])
+            booster, chosen = _fit_lgbm(X, t, feature_names(F), cfg, s, selection)
+            if chosen is not None:
+                manifests[-1]["selection"].append(chosen)
             pred[s][te] = booster.predict(Xte, num_threads=cfg["lgbm"]["num_threads"])
             if model_dir is not None:
                 p = model_dir / f"lgbm_fold{i}_seed{s}.txt"
@@ -314,23 +382,26 @@ def fit_final(P: dict, card: dict, cfg: dict, snapshot_id: str, tz: str, out_dir
     names = feature_names(F)
     out_dir.mkdir(parents=True, exist_ok=True)
     files = []
+    choices = []
+    if len(t) == 0:
+        raise ValueError("final refit has no matured training samples")
     if model == "ridge":
         coef = ridge_fit(X, t, cfg["ridge_alpha"])
         (out_dir / "ridge.json").write_text(json.dumps({"features": names, "coef": coef.tolist()}),
                                             encoding="utf-8")
         files.append("ridge.json")
     else:
-        import lightgbm as lgb
+        selection = _selection_data(F, target, tm, dates, lend, card, cfg, tz)
         for s in cfg["seeds"]:
-            params = dict(cfg["lgbm"], seed=s, bagging_seed=s, feature_fraction_seed=s)
-            b = lgb.train(params, lgb.Dataset(X, t, feature_name=names, free_raw_data=True),
-                          num_boost_round=cfg["num_boost_round"])
+            b, chosen = _fit_lgbm(X, t, names, cfg, s, selection)
+            if chosen is not None:
+                choices.append(chosen)
             b.save_model(str(out_dir / f"lgbm_seed{s}.txt"))
             files.append(f"lgbm_seed{s}.txt")
     m = man.to_dict()
     log(f"final model: {len(t)} training rows up to {m['train_end']}")
     return {"model": model, "files": files, "features": names, "train_end": m["train_end"],
-            "n_train": int(len(t)), "max_label_end": m["max_label_end"]}
+            "n_train": int(len(t)), "max_label_end": m["max_label_end"], "selection": choices}
 
 
 def predict_rows(model_dir: Path, meta: dict, X: np.ndarray) -> np.ndarray:

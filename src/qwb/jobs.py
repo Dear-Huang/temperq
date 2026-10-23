@@ -138,26 +138,31 @@ class Store:
     # ---- execution ------------------------------------------------------
     def run(self, job_id: str, fn: Callable[[Context, dict], None]) -> str:
         """Run a queued job in this process. Returns the final state."""
+        from .experiments import output_lock
+        with output_lock(self.root / job_id / "execution"):
+            return self._run(job_id, fn)
+
+    def _run(self, job_id: str, fn: Callable[[Context, dict], None]) -> str:
         if self.status(job_id)["state"] != "queued":
             raise ValueError("job is not queued")
         spec = self.spec(job_id)
-        lock = self.root / ".gpu.lock" if spec["resources"] == "gpu" else None
+        from .experiments import output_lock
+        lock = output_lock(self.root / "gpu-resource") if spec["resources"] == "gpu" else None
         if lock is not None:
             try:
-                fd = os.open(lock, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
-                os.write(fd, job_id.encode())
-                os.close(fd)
-            except FileExistsError:
+                lock.__enter__()
+            except ValueError:
                 self._event(job_id, {"type": "log", "msg": "gpu busy, left queued"})
                 return "queued"
         self._set(job_id, "running")
-        from .env import metadata
-        self._event(job_id, {"type": "env", **metadata()})
         ctx = Context(self, job_id)
         try:
+            from .env import metadata
+            self._event(job_id, {"type": "env", **metadata()})
+            ctx.check_cancel()
             fn(ctx, spec["config"])
             state, err = "succeeded", None
-        except Cancelled:
+        except (Cancelled, KeyboardInterrupt):
             state, err = "cancelled", None
         except Exception as e:  # recorded, not swallowed: state=failed with traceback
             state, err = "failed", f"{type(e).__name__}: {e}"
@@ -165,7 +170,7 @@ class Store:
                                  "traceback": traceback.format_exc()})
         finally:
             if lock is not None:
-                lock.unlink(missing_ok=True)
+                lock.__exit__(None, None, None)
         self._set(job_id, state, err)
         return state
 
@@ -174,7 +179,8 @@ class Store:
         assert state in STATES
         p = self.root / job_id / "status.json"
         tmp = p.with_name(f"status.{os.getpid()}.tmp")
-        tmp.write_text(json.dumps({"state": state, "updated": _now(), "error": error}),
+        tmp.write_text(json.dumps({"state": state, "updated": _now(), "error": error,
+                                   "pid": os.getpid() if state == "running" else None}),
                        encoding="utf-8")
         for attempt in range(5):     # a reader may hold status.json open briefly
             try:
@@ -202,5 +208,14 @@ class Store:
 
     def recover(self, job_id: str) -> None:
         """Mark a job left in `running` by a dead process as failed, so it can be retried."""
-        if self.status(job_id)["state"] == "running":
-            self._set(job_id, "failed", "process exited while running (recovered)")
+        from .experiments import list_runs, output_lock, read, write, now
+        with output_lock(self.root / job_id / "execution"):
+            if self.status(job_id)["state"] == "running":
+                self._set(job_id, "failed", "process exited while running (recovered)")
+                workdir = self.root.parent.parent
+                for row in list_runs(workdir):
+                    if row.get("job_id") == job_id and row["state"] == "running":
+                        path = Path(row["path"]) / "run.json"
+                        record = read(path)
+                        record.update(state="failed", finished_at=now(), error="worker exited while running (recovered)")
+                        write(path, record)

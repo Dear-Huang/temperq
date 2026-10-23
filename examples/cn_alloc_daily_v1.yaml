@@ -1,0 +1,20 @@
+# Portfolio task contract; the legacy `qwb run` runner intentionally rejects it.
+name: cn_alloc_daily_v1
+market: cn_a
+template: daily
+target:
+  type: return
+  horizon_days: 0
+timing:
+  signal_available: {day: 0, time: "15:00"}
+  decision: {day: 0, time: "15:30"}
+  execution: {day: 1, time: "09:30", price: open}
+label:
+  start: {day: 1, time: "09:30", price: open}
+  end: {day: 1, time: "15:00", price: close}
+output: target_weight
+metrics: [net_log_growth, volatility, max_drawdown, turnover]
+acceptance:
+  stage: development
+  investment_efficacy: not_established
+  note: Continuous account utility also includes old holdings' overnight PnL and execution fees.

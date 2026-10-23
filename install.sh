@@ -1,17 +1,20 @@
 #!/usr/bin/env sh
 # qwb 安装脚本（Linux）。用法：  sh install.sh
 #   --with-gpu   额外安装 GPU 版 PyTorch（只有 Kronos 底座需要；默认的 LightGBM 训练不用）
+#   --with-site  安装网站服务依赖；--dev 安装网站和测试依赖
 #   --mirror     直接使用国内镜像（默认会自动判断）
 #   --dry-run    只显示要执行的命令
 set -eu
 cd "$(dirname "$0")"
 export UV_LINK_MODE=copy UV_HTTP_TIMEOUT=120
 
-DRY=0; GPU=0; MIRROR=0
+DRY=0; GPU=0; MIRROR=0; SITE=0; DEV=0
 for a in "$@"; do
   case "$a" in
     --dry-run) DRY=1 ;;
     --with-gpu) GPU=1 ;;
+    --with-site) SITE=1 ;;
+    --dev) DEV=1 ;;
     --mirror) MIRROR=1 ;;
     *) echo "未知参数：$a" >&2; exit 2 ;;
   esac
@@ -64,12 +67,16 @@ PY=.venv/bin/python
 say "[1/4] 准备 Python 3.11（只装在这个文件夹里）"
 step "$UV" venv .venv --python 3.11 --managed-python --clear
 say "[2/4] 安装依赖（版本固定在 requirements.lock）"
-step "$UV" pip install --python "$PY" -r requirements.lock
+LOCK=requirements.lock
+[ "$SITE" -eq 0 ] || LOCK=requirements-site.lock
+[ "$DEV" -eq 0 ] || LOCK=requirements-dev.lock
+step "$UV" pip install --python "$PY" -r "$LOCK"
 step "$UV" pip install --python "$PY" --no-deps -e .
-if [ -f ../ashare-tcost/pyproject.toml ]; then
-  step "$UV" pip install --python "$PY" --no-deps -e ../ashare-tcost
+if [ -f third_party/ashare-tcost/pyproject.toml ]; then
+  step "$UV" pip install --python "$PY" --no-deps -e third_party/ashare-tcost
 else
-  echo "提示：没找到 ../ashare-tcost，报告里将没有扣成本检验"
+  echo "缺少 third_party/ashare-tcost，请获取完整的 quant-workbench 源码或发布包" >&2
+  exit 1
 fi
 if [ "$GPU" -eq 1 ]; then
   TAG=cpu
@@ -86,9 +93,9 @@ fi
 
 # 4. 自检
 say "[3/4] 检查"
-"$PY" -X utf8 -c "import lightgbm, qwb; print('lightgbm', lightgbm.__version__)" || {
+"$PY" -X utf8 -c "import lightgbm, qwb, ashare_tcost; print('lightgbm', lightgbm.__version__)" || {
   echo "LightGBM 无法加载。Debian/Ubuntu 请运行：sudo apt install libgomp1；CentOS/RHEL：sudo yum install libgomp" >&2; exit 1; }
 say "[4/4] 试运行一次（合成数据，几秒钟）"
-"$PY" -X utf8 -m qwb.cli run examples/run_smoke.yaml | tail -1
+"$PY" -X utf8 -m qwb.cli run examples/run_smoke.yaml
 echo
 printf '\033[32m%s\033[0m\n' "安装完成。启动：sh start.sh   然后用浏览器打开 http://127.0.0.1:8765"

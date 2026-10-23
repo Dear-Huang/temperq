@@ -1,0 +1,14 @@
+name: cn_predict_intraday_v1
+market: cn_a
+template: daily
+target: {type: return, horizon_days: 0}
+timing:
+  signal_available: {day: 0, time: "15:00"}
+  decision: {day: 0, time: "15:30"}
+  execution: {day: 1, time: "09:30", price: open}
+label:
+  start: {day: 1, time: "09:30", price: open}
+  end: {day: 1, time: "15:00", price: close}
+output: score
+metrics: [rank_ic, mse, prediction_coverage]
+acceptance: {stage: development, investment_efficacy: not_established}

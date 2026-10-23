@@ -1,0 +1,30 @@
+spec_version: e2e_prediction_v1
+name: raw-gru-intraday
+task: cn_predict_intraday_v1.yaml
+data:
+  source: pit_bundle
+  dir: ../artifacts/sequence-fixture
+observations: {lookback: 60, min_history: 20}
+model:
+  name: sequence_gru_v1
+  hidden_size: 32
+  epochs: 20
+  batch_size: 256
+  learning_rate: 0.001
+  patience: 5
+  freeze_encoder: false
+folds:
+  first_test: "2023-04-24"
+  last_test: "2023-06-01"
+  frequency: M
+  validation_days: 10
+  min_train_days: 40
+  train_days: null
+  embargo: 0s
+train:
+  seeds: [0, 1, 2]
+  max_samples: 50000
+  max_seconds: 300
+  cpu_threads: 1
+evaluation_asof: "2023-06-02T16:00:00+08:00"
+output: runs/raw-gru-intraday

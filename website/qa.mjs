@@ -63,7 +63,9 @@ await page.waitForTimeout(650);
 const frame2 = await page.locator("canvas").screenshot();
 if (frame1.equals(frame2)) throw Error("Scene does not animate");
 await page.getByRole("button", { name: "暂停动态场景" }).click();
-await page.locator("canvas").screenshot({ path: "public/hero-poster.png" });
+await page.locator("canvas").screenshot({
+  path: process.env.QWB_UPDATE_POSTER === "1" ? "public/hero-poster.png" : "test-results/hero-poster.png",
+});
 await page.locator('.model-grid').scrollIntoViewIfNeeded();
 await page.waitForTimeout(700);
 await page.evaluate(() => window.scrollTo({top:0,behavior:'instant'}));

@@ -1,0 +1,44 @@
+name: quant-workbench
+services:
+  site:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    restart: unless-stopped
+    environment:
+      HF_OAUTH_CLIENT_ID: ${HF_OAUTH_CLIENT_ID:?Set HF_OAUTH_CLIENT_ID}
+      HF_OAUTH_CLIENT_SECRET: ${HF_OAUTH_CLIENT_SECRET:?Set HF_OAUTH_CLIENT_SECRET}
+      HF_OAUTH_REDIRECT_URI: https://${QWB_DOMAIN:?Set QWB_DOMAIN}/oauth/callback
+      QWB_SITE_SECRET: ${QWB_SITE_SECRET:?Set QWB_SITE_SECRET}
+      QWB_SITE_DB: /var/lib/qwb/site.db
+      QWB_SITE_TRUST_PROXY: "1"
+    volumes:
+      - site_data:/var/lib/qwb
+    security_opt:
+      - no-new-privileges:true
+    cap_drop: [ALL]
+    networks: [backend]
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    depends_on:
+      site:
+        condition: service_healthy
+    environment:
+      QWB_DOMAIN: ${QWB_DOMAIN:?Set QWB_DOMAIN}
+      ACME_EMAIL: ${ACME_EMAIL:?Set ACME_EMAIL}
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    networks: [backend]
+networks:
+  backend:
+volumes:
+  site_data:
+  caddy_data:
+  caddy_config:

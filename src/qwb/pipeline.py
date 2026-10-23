@@ -18,7 +18,7 @@ import numpy as np
 import pandas as pd
 import yaml
 
-from . import advice, daily, env, leakcheck, ledger, metrics, netcost
+from . import advice, daily, env, experiments, leakcheck, ledger, metrics, netcost
 
 TZ = {"cn_a": "Asia/Shanghai", "us": "America/New_York"}
 
@@ -64,7 +64,8 @@ def load_data(rc: dict, cwd: Path) -> tuple[dict, str, pd.DataFrame | None, pd.D
     if not data_dir:
         raise FileNotFoundError("data.dir not set and no data_dir in config.local.yaml")
     from . import dataset
-    ds = dataset.load(Path(data_dir))           # base bars + any added sources
+    location = Path(data_dir)
+    ds = dataset.load(location if location.is_absolute() else cwd / location)
     P, snap = ds["P"], ds["snapshot_id"]
     dates, codes = P["close"].index, P["close"].columns
     st_all = None if ds["st"] is None else daily.st_wide(ds["st"], dates, codes)
@@ -86,7 +87,7 @@ def load_data(rc: dict, cwd: Path) -> tuple[dict, str, pd.DataFrame | None, pd.D
 
 
 def _summ(ic, dates, years, lag):
-    return metrics.newey_west(ic[np.isin(dates.year, years)], lag)
+    return metrics.newey_west(np.where(np.isin(dates.year, years), ic, np.nan), lag)
 
 
 def _fmt(s: dict) -> str:
@@ -96,24 +97,43 @@ def _fmt(s: dict) -> str:
 
 
 def run(rc: dict, cwd: Path, log: Callable[[str], None] = print) -> dict:
-    """Compute into a staging folder; move into the output folder only on success.
-
-    A failed rerun (out of memory, cancelled, bad data) must not leave new settings
-    next to old results: another process (a bench run, the model page) may be
-    reading the previous run's files while this one computes.
-    """
+    """Preserve each attempt; refresh the compatibility output only after success."""
+    cwd = Path(cwd).resolve()
     target = (cwd / rc["output"]).resolve()
-    stage = target.parent / f".{target.name}.staging-{os.getpid()}"
-    if stage.exists():
-        shutil.rmtree(stage)
-    (stage / "models").mkdir(parents=True)
+    history = cwd / "runs" / "history"
+    if target == history or history in target.parents or target in (cwd, cwd / "runs") or target in cwd.parents:
+        raise ValueError("output must be a dedicated run directory outside runs/history")
+    if (target / "run.json").is_file() and Path(experiments.read(target / "run.json")["archive_dir"]).resolve() == target:
+        raise ValueError("output is an archived training version; choose a latest-output directory")
+    out, record = experiments.begin(cwd, rc, target)
     try:
-        summary = _compute(rc, cwd, log, stage, target)
-    except BaseException:
-        shutil.rmtree(stage, ignore_errors=True)
+        with experiments.output_lock(target):
+            if (target / "metrics.json").is_file():
+                previous = experiments.preserve_latest(target, cwd)
+                log(f"preserved previous run {previous['run_id']}")
+            (out / "models").mkdir()
+            resolved = dict(rc, _lineage={k: record[k] for k in ("run_id", "experiment_id", "code_hash")})
+            log(f"run_id {record['run_id']}  archive {out}")
+            summary = _compute(resolved, cwd, log, out, target)
+            experiments.finish(out, record, summary)
+            stage = target.parent / f".{target.name}.staging-{record['run_id']}"
+            try:
+                shutil.copytree(out, stage)
+                _publish(stage, target)
+            except (OSError, RuntimeError) as exc:
+                log(f"latest output was not refreshed: {exc}; archived result: {out}")
+            finally:
+                if stage.exists():
+                    shutil.rmtree(stage, ignore_errors=True)
+    except BaseException as exc:
+        if record["state"] != "succeeded":
+            from .jobs import Cancelled
+            record.update(state="cancelled" if isinstance(exc, (Cancelled, KeyboardInterrupt)) else "failed",
+                          finished_at=experiments.now(), error=f"{type(exc).__name__}: {exc}")
+            experiments.write(out / "run.json", record)
         raise
-    _publish(stage, target)
-    summary["output"] = str(target)
+    summary["output"] = str(out)
+    summary["latest_output"] = str(target)
     return summary
 
 
@@ -150,6 +170,14 @@ def _publish(stage: Path, target: Path) -> None:
 
 
 def _compute(rc: dict, cwd: Path, log: Callable[[str], None], out: Path, target: Path) -> dict:
+    if rc.get("engine") == "e2e_utility_v1":
+        from .training.utility_runner import compute
+
+        return compute(rc, cwd, log, out, target)
+    if rc.get("engine") == "e2e_prediction_v1":
+        from .training.runner import compute
+
+        return compute(rc, cwd, log, out, target)
     card, cfg = rc["card"], rc["cfg"]
     tz = TZ.get(card["market"], "UTC")
     T = {}
@@ -160,18 +188,31 @@ def _compute(rc: dict, cwd: Path, log: Callable[[str], None], out: Path, target:
     acc_hash = hashlib.sha256(acc.encode("utf-8")).hexdigest()[:16]
     lock = target / "acceptance.lock"            # kept from the first run of this output
     acc_changed = lock.exists() and lock.read_text(encoding="utf-8").strip() != acc_hash
-    if not lock.exists():
-        (out / "acceptance.lock").write_text(acc_hash, encoding="utf-8")
+    (out / "acceptance.lock").write_text(lock.read_text(encoding="utf-8") if lock.exists() else acc_hash,
+                                         encoding="utf-8")
     (out / "task.yaml").write_text(yaml.safe_dump(card, allow_unicode=True, sort_keys=False),
                                    encoding="utf-8")
     (out / "config.resolved.yaml").write_text(yaml.safe_dump(
         {k: rc[k] for k in ("name", "data", "model", "cfg", "config_hash", "deviations")},
         allow_unicode=True, sort_keys=False), encoding="utf-8")
 
+    data_identity = None
+    data_root = None
+    if rc["data"]["source"] == "snapshot":
+        from . import dataset
+        location = Path(rc["data"].get("dir") or find_local_config(cwd).get("data_dir") or "")
+        data_root = location if location.is_absolute() else cwd / location
+        data_identity = dataset.fingerprint(data_root)
+        (out / "data_manifest.json").write_text(json.dumps(data_identity, indent=2), encoding="utf-8")
+        rc = dict(rc, _data_content_hash=data_identity["content_hash"])
     P, snap, st, members = load_data(rc, cwd)
     T["load"] = time.time() - t0
     dates = P["close"].index
     log(f"panel {len(dates)} days x {P['close'].shape[1]} codes, load {T['load']:.1f}s")
+    test_years = sorted({d.year for d in dates if d.year >= cfg["first_test_year"]})
+    final = cfg["final_test_years"]
+    if not final or not set(final) <= set(test_years):
+        raise ValueError("requested final test years are absent from the data; none may be silently dropped")
 
     t1 = time.time()
     res = daily.run(P, card, cfg, snap, tz, st=st, model_dir=out / "models", log=log,
@@ -187,8 +228,8 @@ def _compute(rc: dict, cwd: Path, log: Callable[[str], None], out: Path, target:
     seeds = list(res["pred"])
     ens = daily.ensemble(res["pred"])
     test_years = sorted({d.year for d in dates if d.year >= cfg["first_test_year"]})
-    final = [yy for yy in cfg["final_test_years"] if yy in test_years]
-    valid = [yy for yy in test_years if yy not in final]
+    final = list(cfg["final_test_years"])
+    valid = [yy for yy in test_years if yy < min(final)]
     if not final:
         raise ValueError(f"final_test_years {cfg['final_test_years']} not in the data")
 
@@ -196,12 +237,15 @@ def _compute(rc: dict, cwd: Path, log: Callable[[str], None], out: Path, target:
     tested = np.isin(dates.year, test_years)[:, None] & res["U"]
     base = {"reversal_5d (-r5)": -raw["r5"].values, "momentum_20d (r20)": raw["r20"].values,
             "low_vol (-vol20)": -raw["vol20"].values}
-    ic = {mk: metrics.rank_ic(ens, y)}
+    common = tested & np.isfinite(ens) & np.isfinite(y)
+    for values in base.values():
+        common &= np.isfinite(values)
+    ic = {mk: metrics.rank_ic(np.where(common, ens, np.nan), y)}
     if model == "lightgbm":            # ridge is deterministic: seeds are identical
         for s in seeds:
-            ic[f"lgbm_seed{s}"] = metrics.rank_ic(res["pred"][s], y)
+            ic[f"lgbm_seed{s}"] = metrics.rank_ic(np.where(common, res["pred"][s], np.nan), y)
     for k, v in base.items():
-        ic[k] = metrics.rank_ic(np.where(tested, v, np.nan), y)
+        ic[k] = metrics.rank_ic(np.where(common, v, np.nan), y)
     rows = {k: {"validation": _summ(v, dates, valid, lag), "final_test": _summ(v, dates, final, lag)}
             for k, v in ic.items()}
     fin = np.isin(dates.year, final)
@@ -234,6 +278,10 @@ def _compute(rc: dict, cwd: Path, log: Callable[[str], None], out: Path, target:
 
     t3 = time.time()
     pred_tab = daily.prediction_table(res, card, snap, tz)
+    prediction_version = experiments.object_digest({"fold_models": experiments.inventory(out / "models"),
+                                                    "config": rc["config_hash"], "snapshot": snap,
+                                                    "data_content_hash": (data_identity or {}).get("content_hash")})
+    pred_tab["model_version"] = prediction_version
     pred_tab.to_parquet(out / "predictions.parquet", index=False)
     (out / "folds.json").write_text(json.dumps(res["manifests"], indent=2), encoding="utf-8")
     T["write"] = time.time() - t3
@@ -243,25 +291,38 @@ def _compute(rc: dict, cwd: Path, log: Callable[[str], None], out: Path, target:
                                   res["U"], log=log)
     final_model.update({"cfg": cfg, "card": card, "data": rc["data"], "snapshot_id": snap,
                         "data_end": f"{dates[-1]:%Y-%m-%d}", "run": rc["name"]})
+    lineage = dict(rc.get("_lineage", {}), model_version=experiments.model_version(out, rc, snap),
+                   prediction_version=prediction_version)
+    final_model.update(lineage)
+    final_model["data_content_hash"] = (data_identity or {}).get("content_hash")
     (out / "final_model" / "meta.json").write_text(
         json.dumps(final_model, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
     T["final_model"] = time.time() - t4
     T["total"] = time.time() - t0
 
-    best_base = max(rows[k]["final_test"]["mean"] for k in base)
     f = rows[mk]["final_test"]
-    go = bool(f["n"] and f["mean"] > 0 and f["t"] > 2 and f["mean"] > best_base)
+    screen = metrics.paired_signal_screen(np.where(fin, ic[mk], np.nan),
+        {k: np.where(fin, ic[k], np.nan) for k in base}, lag)
     meta = env.metadata()
     summary = {"task": card["name"], "run": rc["name"], "config_hash": rc["config_hash"],
+               **lineage,
                "model": model, "model_key": mk, "scenario": cfg.get("scenario"),
                "universe_size": float(res["U"][np.isin(dates.year, final)].sum(axis=1).mean()),
                "data_snapshot_id": snap, "universe": cfg["universe"],
+               "data_content_hash": (data_identity or {}).get("content_hash"),
+               "selection": {"folds": [m.get("selection", []) for m in res["manifests"]],
+                             "final_refit": final_model.get("selection", [])},
                "panel": [len(dates), int(P["close"].shape[1])], "test_years": test_years,
                "final_test_years": final, "nw_lag": lag, "ic": rows,
+               "validation_years": valid, "post_test_years": [yy for yy in test_years if yy > max(final)],
                "shuffle_null_mean": float(np.mean(null)), "shuffle_null_sd": float(np.std(null)),
                "seed_pred_rank_corr": seed_corr, "seed_top10_overlap": seed_overlap,
                "net_of_cost": net, "conventions": conventions,
-               "go": go, "acceptance_hash": acc_hash, "acceptance_changed_after_lock": acc_changed,
+               "go": False, "signal_screen": screen,
+               "signal_sample": {"rule": "same_stock_date_pairs_for_candidate_and_all_simple_references",
+                                 "eligible_pairs": int((tested & np.isfinite(y)).sum()),
+                                 "common_pairs": int(common.sum())},
+               "acceptance_hash": acc_hash, "acceptance_changed_after_lock": acc_changed,
                "deviations": rc["deviations"], "timing_s": {k: round(v, 1) for k, v in T.items()},
                "env": meta, "rows_predicted": int(len(pred_tab)),
                "final_model": {k: final_model[k] for k in ("model", "train_end", "n_train", "data_end")},
@@ -269,6 +330,10 @@ def _compute(rc: dict, cwd: Path, log: Callable[[str], None], out: Path, target:
     # guardrails: look-ahead check, and how often this test period has been scored
     summary["leak_check"] = leakcheck.prefix_invariance(P, cfg, st, F=res["F"], U=res["U"],
                                                        members=members)
+    summary["go"] = bool(screen["status"] == "PASS" and summary["leak_check"]["ok"]
+                         and not acc_changed and snap != "snap-synthetic")
+    if data_root is not None and dataset.fingerprint(data_root) != data_identity:
+        raise ValueError("training data changed during the run; result is not a fixed-data experiment")
     # synthetic data has no test period worth protecting: installer smoke tests and
     # trial runs must not make a user's first real run look like a repeat view
     summary["ledger"] = None
@@ -276,7 +341,7 @@ def _compute(rc: dict, cwd: Path, log: Callable[[str], None], out: Path, target:
         led = cwd / "runs" / "ledger.jsonl"
         summary["ledger"] = ledger.history(led, card["name"], snap, final, rc["config_hash"],
                                            f["mean"])
-        ledger.append(led, {"run": rc["name"], "task": card["name"], "snapshot": snap,
+        ledger.append(led, {"run": rc["name"], **lineage, "task": card["name"], "snapshot": snap,
                             "config_hash": rc["config_hash"], "final_test_years": final,
                             "final_ic": f["mean"], "final_t": f["t"],
                             "net_excess": (net or {}).get("signals", {}).get(mk, {})
@@ -417,6 +482,15 @@ def _report(rc, s, rows, null, seed_corr, seed_overlap, valid, final, T, meta, n
         "- 未执行：冲击成本（大单）、优化型组合构建" if s.get("net_of_cost")
         else "- 未执行：扣成本检验（未安装 ashare-tcost），以下 IC 不代表收益",
         *_guard_lines(s), "",
+        *([f"- 最终测试之后的年份 {s['post_test_years']} 不用于验证期汇总或选择；"
+           "这些年份仍可生成滚动预测，并进入面向未来的最终重拟合。", ""]
+          if s.get("post_test_years") else []),
+        *(["## 历史内层模型选择", "",
+           "每个外层折仅在其训练历史内，以尾部交易日的平均 Rank IC 选择 LightGBM 轮数。"
+           "内层训练清除未在首个验证决策时点成熟的标签；选择后在全部外层已成熟样本上重拟合。"
+           "测试期不参与轮数选择。最终推理模型另用截至数据末日的历史选择与重拟合，未得到独立前向检验。", "",
+           "逐折日期、样本数、清除数量与每个种子的轮数见 folds.json；最终重拟合记录见 final_model/meta.json。", ""]
+          if cfg.get("selection") else []),
         *advice.as_markdown(s.get("advice") or []),
         f"## 结果（日度 Rank IC 均值，Newey-West t，lag 事先固定为 {s['nw_lag']}；"
         "MDE 为 80% 功效下可检出的最小均值）", "",
@@ -428,8 +502,18 @@ def _report(rc, s, rows, null, seed_corr, seed_overlap, valid, final, T, meta, n
     if seed_corr:
         lines.append(f"种子噪声地板：种子间预测秩相关 {np.mean(seed_corr):.3f}，前 10% 持仓重叠 "
                      f"{np.mean(seed_overlap):.3f}")
-    lines += ["", f"**预注册判定：{'Go' if s['go'] else 'No-Go'}**"
-              f"（{card.get('acceptance', {}).get('go', '未写门槛')}）", ""]
+    lines += ["", "## 相对固定参考的增量检验", "",
+              "候选与三个简单参考使用相同股票/日期样本；逐日 IC 差采用 Newey-West 标准误，"
+              "95% 正态近似区间对三项固定比较做 Bonferroni 校正，不校正全部调参/重复查看。", "",
+              "| 参考 | 新减参考 IC | 同组 95% 区间 | 状态 |", "|---|---|---|---|"]
+    for name, value in s["signal_screen"]["comparisons"].items():
+        ci = value["ci95_family"]
+        interval = "n/a" if ci is None else f"[{ci[0]:+.4f}, {ci[1]:+.4f}]"
+        lines.append(f"| {name} | {value['mean']:+.4f} | {interval} | {value['status']} |")
+    lines += ["", f"**历史信号筛选：{s['signal_screen']['status']}**；"
+              "只表示正 IC 与相对上述参考的历史增量证据，不是实盘准入。",
+              f"任务卡原始声明（仅记录，不解析执行）：{card.get('acceptance', {}).get('go', '未写门槛')}。",
+              "本地记录和门槛哈希不构成独立预注册；重复查看的测试期仍属于开发证据。", ""]
     lines += _ledger_table(s)
     lines += ["## 耗时（秒）", "", "| 阶段 | 秒 |", "|---|---|"]
     lines += [f"| {k} | {v:.1f} |" for k, v in T.items()]
@@ -437,5 +521,6 @@ def _report(rc, s, rows, null, seed_corr, seed_overlap, valid, final, T, meta, n
               + (f"{g['name']}（LightGBM 走 CPU，GPU 未使用）" if g else "无 GPU")
               + f"，lightgbm {meta['packages'].get('lightgbm')}", "",
               "## 证据边界",
-              "本报告只说明在给定数据、假设和配置下的预测排序能力；不含成本与成交约束，不代表可实现收益。"]
+              "IC 与配对检验描述历史排序信号。训练报告中的净收益是简化诊断，"
+              "独立现金/实际保留数量账户、拒单与数据资格检查以 QW-Bench 为准；均不代表实际可实现收益。"]
     return "\n".join(lines)

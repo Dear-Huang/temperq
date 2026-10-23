@@ -20,6 +20,7 @@ def test_render_parse_roundtrip():
     assert f["base_model"] == "lightgbm" and f["seeds"] == ["0", "1"]
     assert f["reproducibility"]["R2"] == "True" and f["custom_code"] is False
     assert "lgbm_seed0" not in md.split("---")[2]      # per-seed rows kept out of the card
+    assert not (card.OPTIONAL_SITE_FIELDS & set(p["missing"]))
 
 
 def test_parse_is_inert_and_sanitizes():

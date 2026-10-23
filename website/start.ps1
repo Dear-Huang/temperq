@@ -4,6 +4,8 @@ $pythonExe = Join-Path $repoRoot '.venv\Scripts\python.exe'
 if (-not (Test-Path -LiteralPath $pythonExe)) {
     throw 'Run the project installer first to create .venv.'
 }
+& $pythonExe -c "import httpx, itsdangerous, jinja2"
+if ($LASTEXITCODE -ne 0) { throw 'Install site dependencies first: .\install.ps1 -WithSite' }
 if (-not (Test-Path -LiteralPath (Join-Path $PSScriptRoot 'dist\index.html'))) {
     Push-Location $PSScriptRoot
     try {

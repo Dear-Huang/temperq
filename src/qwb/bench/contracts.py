@@ -11,7 +11,7 @@ import numpy as np
 import pandas as pd
 import yaml
 
-from .. import daily, pipeline, taskcard
+from .. import daily, dataset, experiments, pipeline, taskcard
 from . import VERSION
 from .account import DEFAULT_ACCOUNT
 
@@ -76,8 +76,10 @@ def data_files(root: Path) -> list[Path]:
     return files
 
 
-def inventory(root: Path) -> dict:
-    return {p.relative_to(root).as_posix(): digest(p) for p in data_files(root)}
+def inventory(root: Path, *, legacy=False) -> dict:
+    files = ({p.relative_to(root).as_posix(): p for p in data_files(root)} if legacy
+             else dataset.input_files(root))
+    return {name: digest(path) for name, path in files.items()}
 
 
 def resolve_data_dir(raw: dict, cwd: Path, override=None) -> Path:
@@ -91,10 +93,12 @@ def resolve_data_dir(raw: dict, cwd: Path, override=None) -> Path:
 def create_protocol(anchor_run: str | Path, output: str | Path, *, cwd: Path,
                     data_dir=None, block_days=20, resamples=10000, min_days=60,
                     min_signal_score=0.0, min_anchor_gain_score=0.0) -> dict:
-    anchor, output = Path(anchor_run).resolve(), Path(output).resolve()
+    anchor, output = experiments.frozen_source(Path(anchor_run)), Path(output).resolve()
     if output.exists():
         raise FileExistsError(f"protocol already exists: {output}")
     raw = read_yaml(anchor / "config.resolved.yaml")
+    if raw.get("model", "lightgbm") != "lightgbm":
+        raise ValueError("the frozen reference must be a LightGBM training run")
     card = read_yaml(anchor / "task.yaml")
     validate_task(card)
     if raw["data"]["source"] != "snapshot":
@@ -102,17 +106,26 @@ def create_protocol(anchor_run: str | Path, output: str | Path, *, cwd: Path,
     root = resolve_data_dir(raw, cwd, data_dir)
     years = sorted(set(raw["cfg"]["final_test_years"]))
     hashes = inventory(root)
+    if (anchor / "data_manifest.json").is_file():
+        declared = read_json(anchor / "data_manifest.json")
+        if declared != {"files": hashes, "content_hash": object_digest(hashes)}:
+            raise ValueError("anchor training data content differs from the requested protocol snapshot")
     evidence = {name: digest(anchor / name) for name in
                 ("predictions.parquet", "task.yaml", "config.resolved.yaml", "folds.json")}
     if (anchor / "metrics.json").is_file():
         evidence["metrics.json"] = digest(anchor / "metrics.json")
+    if (anchor / "data_manifest.json").is_file():
+        evidence["data_manifest.json"] = digest(anchor / "data_manifest.json")
     value = {
-        "schema_version": 3, "scorer_version": VERSION, "stage": "development",
+        "schema_version": 5, "scorer_version": VERSION, "stage": "development",
         "task": card, "timezone": "Asia/Shanghai",
         "data": {"dir": str(root), "snapshot_id": daily.load_snapshot(root)["data_snapshot_id"],
                  "files": hashes, "content_hash": object_digest(hashes)},
         "evaluation_years": years,
-        "universe": {k: raw["cfg"][k] for k in UNIVERSE_KEYS},
+        "universe": {**{k: raw["cfg"][k] for k in UNIVERSE_KEYS},
+                     "min_adv_yuan": raw["cfg"].get("min_adv_yuan") or 0,
+                     **({"universe_list": sorted(set(raw["cfg"].get("universe_list") or []))}
+                        if raw["cfg"]["universe"] == "list" else {})},
         "statistics": {"block_days": block_days, "resamples": resamples,
                        "seed": 0, "min_days": min_days},
         "coverage": {"min_daily": 1.0, "min_total": 1.0, "min_names": 20},
@@ -139,8 +152,13 @@ def validate_protocol(p: dict) -> None:
             "references", "anchor", "sample_status", "evidence_source"}
     keys.add("assessment")
     keys.add("account")
-    if set(p) != keys or p["schema_version"] != 3 or p["scorer_version"] != VERSION:
+    if set(p) - {"lifecycle"} != keys or p["schema_version"] not in (3, 4, 5) or p["scorer_version"] != VERSION:
         raise ValueError("unsupported protocol schema/fields/scorer version")
+    if "lifecycle" in p:
+        spec = p["lifecycle"]
+        if (not isinstance(spec, dict) or set(spec) != {"path", "sha256"}
+                or not str(spec["sha256"]).startswith("sha256:")):
+            raise ValueError("lifecycle block needs exactly path and sha256")
     if p["account"] != DEFAULT_ACCOUNT:
         raise ValueError("unsupported account assumptions; v0.3 uses one fixed research environment")
     if (p["stage"] != "development" or p["timezone"] != "Asia/Shanghai"
@@ -158,10 +176,23 @@ def validate_protocol(p: dict) -> None:
     if years != list(range(min(years), max(years) + 1)):
         raise ValueError("evaluation_years must be sorted and consecutive to preserve date blocks")
     u = p["universe"]
-    if (set(u) != set(UNIVERSE_KEYS) or u["universe"] not in {"all", "st", "all_ex_st"}
+    universe_keys = set(UNIVERSE_KEYS) | ({"min_adv_yuan"} if p["schema_version"] >= 4 else set())
+    allowed = {"all", "st", "all_ex_st"}
+    if p["schema_version"] >= 5:
+        allowed |= {"list", *daily.INDEX_CODES}
+        if u.get("universe") == "list":
+            universe_keys.add("universe_list")
+            names = u.get("universe_list")
+            if (not isinstance(names, list) or not names or not all(isinstance(n, str) for n in names)
+                    or names != sorted(set(names))):
+                raise ValueError("list universe requires sorted unique security codes")
+    if (set(u) != universe_keys or u["universe"] not in allowed
             or type(u["min_age_days"]) is not int or u["min_age_days"] < 1
             or not 0 <= u["min_amount_quantile"] < 1):
         raise ValueError("invalid universe settings")
+    if (p["schema_version"] >= 4 and (type(u["min_adv_yuan"]) not in (int, float)
+            or not np.isfinite(u["min_adv_yuan"]) or u["min_adv_yuan"] < 0)):
+        raise ValueError("invalid min_adv_yuan")
     s = p["statistics"]
     if (set(s) != {"block_days", "resamples", "seed", "min_days"}
             or any(type(v) is not int for v in s.values())
@@ -200,13 +231,14 @@ def validate_protocol(p: dict) -> None:
         raise ValueError("data manifest content hash mismatch")
     anchor_files = set(p["anchor"]["files"])
     required = {"predictions.parquet", "task.yaml", "config.resolved.yaml", "folds.json"}
-    if not required <= anchor_files or anchor_files - required - {"metrics.json"}:
+    optional = {"metrics.json"} | ({"data_manifest.json"} if p["schema_version"] >= 5 else set())
+    if not required <= anchor_files or anchor_files - required - optional:
         raise ValueError("anchor artifacts are incomplete")
 
 
 def verify_inputs(p: dict, data_dir=None) -> tuple[Path, Path]:
     root = Path(data_dir or p["data"]["dir"]).resolve()
-    if inventory(root) != p["data"]["files"]:
+    if inventory(root, legacy=p["schema_version"] < 5) != p["data"]["files"]:
         raise ValueError("snapshot content changed: create a new protocol, do not reuse its scores")
     if daily.load_snapshot(root)["data_snapshot_id"] != p["data"]["snapshot_id"]:
         raise ValueError("snapshot ID mismatch")
@@ -221,6 +253,8 @@ def align_predictions(path: Path, dates: pd.DatetimeIndex, codes: pd.Index,
                       p: dict) -> tuple[np.ndarray, dict]:
     frame = (pd.read_parquet(path) if path.suffix == ".parquet" else
              pd.read_csv(path, dtype={"code": "string"}))
+    if {"target_weight", "cash_weight", "receivable_weight", "state_id"} & set(frame):
+        raise ValueError("target-weight/state submissions require the separate portfolio interface")
     required = {"code", "decision_time", "task", "prediction", "model_version", "data_snapshot_id"}
     if not required <= set(frame) or frame.empty:
         raise ValueError("prediction table is empty or missing required columns")

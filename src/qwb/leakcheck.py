@@ -32,12 +32,12 @@ def prefix_invariance(P: dict, cfg: dict, st: pd.DataFrame | None = None,
                       members: pd.DataFrame | None = None) -> dict:
     dates = P["close"].index
     days = days if days is not None else check_days(dates, cfg["final_test_years"])
-    F = F if F is not None else daily.features(P)
+    F = F if F is not None else daily.selected_features(P, cfg)
     U = np.asarray(U if U is not None else daily.universe(P, cfg, st, members))
     violations = []
     for t in days:
         Pt = {k: v.iloc[:t + 1] for k, v in P.items()}
-        Ft = daily.features(Pt)
+        Ft = daily.selected_features(Pt, cfg)
         Ut = np.asarray(daily.universe(Pt, cfg, None if st is None else st.iloc[:t + 1],
                                      None if members is None else members.iloc[:t + 1]))
         for k in daily.feature_names(F):

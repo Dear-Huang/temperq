@@ -9,6 +9,7 @@ or Task Scheduler, and copy backup_dir off the server.
 
 from __future__ import annotations
 
+import os
 import sqlite3
 import sys
 from datetime import datetime, timezone
@@ -18,6 +19,8 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 def backup(db: Path, out_dir: Path, keep: int = 14) -> Path:
+    if keep < 1:
+        raise ValueError("keep must be at least 1")
     if not db.is_file():
         raise FileNotFoundError(db)
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -41,7 +44,7 @@ def backup(db: Path, out_dir: Path, keep: int = 14) -> Path:
 
 
 if __name__ == "__main__":
-    db = Path(sys.argv[1]) if len(sys.argv) > 1 else ROOT / "runs" / "site.db"
+    db = Path(sys.argv[1]) if len(sys.argv) > 1 else Path(os.environ.get("QWB_SITE_DB", str(ROOT / "runs" / "site.db")))
     out = Path(sys.argv[2]) if len(sys.argv) > 2 else ROOT / "runs" / "site_backups"
     keep = int(sys.argv[3]) if len(sys.argv) > 3 else 14
     print(backup(db, out, keep))

@@ -24,6 +24,40 @@ def test_effective_days_rules():
     assert nd.dt.strftime("%m%d").tolist()[:2] == ["0103", "0105"] and pd.isna(nd.iloc[2])
 
 
+def test_removing_a_source_cannot_make_next_import_overwrite_an_existing_source(tmp_path):
+    root, bars = base(tmp_path)
+    combined = tmp_path / "combined"
+    dataset.create(root, combined)
+    frame = pd.DataFrame({"code": ["000001"], "date": ["2019-01-02"], "value": [1.]})
+    first = dataset.add_factor(combined, frame, "next_day", "first", "fixture")
+    second = dataset.add_factor(combined, frame.assign(value=2.), "next_day", "second", "fixture")
+    path = combined / "sources" / f"{second['id']}.parquet"
+    saved = path.read_bytes()
+    dataset.remove(combined, first["id"])
+    third = dataset.add_factor(combined, frame.assign(value=3.), "next_day", "third", "fixture")
+    assert third["id"] != second["id"]
+    assert path.read_bytes() == saved
+    assert len({s["id"] for s in dataset.spec(combined)["sources"]}) == 2
+
+
+def test_effective_bar_overlay_cannot_inherit_normal_state_from_replaced_row(tmp_path):
+    from qwb.bench.economics import load_normal
+
+    root = tmp_path / "base"
+    (root / "bars").mkdir(parents=True)
+    bars = pipeline.synth_bars(80, 30).assign(state="normal")
+    bars.to_parquet(root / "bars" / "fixture.parquet", index=False)
+    (root / "snapshot.json").write_text(json.dumps({"data_snapshot_id": "fixture"}))
+    combined = tmp_path / "combined"
+    dataset.create(root, combined)
+    replacement = bars.head(1).drop(columns="state").copy()
+    source = dataset._save(combined, "bars", replacement, "overlay", "fixture", {"priority": "override"}, [])
+    loaded = dataset.load(combined)["P"]
+    with pytest.raises(ValueError, match="state missing"):
+        load_normal(combined, loaded["close"].index, loaded["close"].columns)
+    assert f"sources/{source['id']}.parquet" in dataset.input_files(combined)
+
+
 def test_factor_source_becomes_feature_and_is_timed(tmp_path):
     root, b = base(tmp_path)
     comb = tmp_path / "comb"

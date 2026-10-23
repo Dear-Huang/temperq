@@ -14,6 +14,7 @@ export default defineConfig({
         "/share",
         "/m/",
         "/downloads",
+        "/community",
       ].map((path) => [path, "http://127.0.0.1:8800"]),
     ),
   },

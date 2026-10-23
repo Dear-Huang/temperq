@@ -150,6 +150,12 @@ def model_report(s: dict) -> str:
     labels = LABELS
     lines = ["# QW-Bench 模型报告", "", f"开发诊断版 {s['scorer_version']}；不作为正式经济或平台成绩。", "",
              f"任务：`{s['task']}`；区间：{s['evaluation_years']}；数据：`{s['data_snapshot_id']}`。", ""]
+    if s.get("data_snapshot_id") == "snap-synthetic":
+        lines += ["**合成数据：仅验证工作流，不代表真实市场预测或投资表现。**", ""]
+    if s.get("lineage"):
+        lines += [f"训练运行：`{s['lineage']['run_id']}`；评价：`{s['evaluation_id']}`。",
+                  f"滚动样本外预测版本：`{s['lineage'].get('prediction_version')}`。",
+                  "本次评价使用各历史训练折的预测，不是对全量重拟合最终模型的独立样本外评价。", ""]
     if s["status"] == "INVALID":
         return "\n".join(lines + ["**评估无效，未产生分数或排名。**", "", *s["errors"], "",
                        "先根据错误定位输入：时区/决策时点、重复股票/日期、任务名、快照和文件哈希必须与协议一致。",
@@ -224,7 +230,15 @@ def economics_section(s):
         f"请求 {v['requested_orders']:,} 笔，零成交 {v['rejected_orders']:,} 笔，现金缩量 {v['scaled_orders']:,} 笔；单边换手日均 {v['mean_one_way_turnover']:.2%}。",
         f"期末现金 {v['ending_cash']:,.2f}，净值 {v['ending_equity']:,.2f}，仍持有 {v['ending_held_names']} 只；净值不等于现金。",
         f"候选陈旧收盘估值 {v['stale_close_name_days']} 股票日、调仓开盘陈旧估值 {v['stale_open_name_days']} 股票次；"
-        f"缺价格/涨跌停价/价差估计导致的拒单 {v['data_gap_orders']} 笔；候选或等权出现任一次陈旧估值或这些数据缺口，比较均标 DIAGNOSTIC_ONLY。", "",
+        f"缺价格/涨跌停价/价差估计导致的拒单 {v['data_gap_orders']} 笔。"
+        f"其中无停牌或退市记录、原因不明的：陈旧收盘 {v.get('unexplained_stale_close_name_days', v['stale_close_name_days'])} 股票日、"
+        f"陈旧开盘 {v.get('unexplained_stale_open_name_days', v['stale_open_name_days'])} 股票次、"
+        f"数据缺口拒单 {v.get('unexplained_data_gap_orders', v['data_gap_orders'])} 笔；候选或等权出现任一项原因不明，比较标 DIAGNOSTIC_ONLY。", "",
+        *([f"分辨率：按本区间宽度，两个版本的净超额相差约 {v['net_excess_mde_ann_bp']:,.0f} bp/年以内时无法区分；"
+           "版本比较应以信号配对差和成本、换手等测得准的量为主。"] if v.get("net_excess_mde_ann_bp") else []),
+        *([f"风格对照：相对同规则、同成本的低波动前 10% 组合，年化净超额 {v['net_excess_vs_low_vol_ann_bp']:+.2f} bp，"
+           f"95% 区间 {interval(v['net_excess_vs_low_vol_ci95_bp'])} bp。对等权的超额中可能包含小盘、低波等风格倾斜。", ""]
+          if v.get("net_excess_vs_low_vol_ci95_bp") else []),
         "`account_paths.parquet`、`fills.parquet`、`holdings.parquet` 可核对每天现金、单位、费用和估值；",
         "`bench verify` 会独立累计成交现金流/数量、核对日末持仓和净值，并重算指标及区间。", "",
         *[f"- {x}" for x in e["limits"]], "",
@@ -245,6 +259,10 @@ def comparison_report(s: dict) -> str:
         "区间跨零表示证据不足，不表示两者相同。区间未包含重复训练与选择不确定性。",
         f"协议：`{s['protocol_hash']}`；有效配对日期：{delta['n']}。", "",
     ]
+    decisions = {"IMPROVED": "信号改善", "DEGRADED": "信号变差", "NO_CHANGE": "配对差为零",
+                 "BELOW_MINIMUM_GAIN": "未达到预设最小增量", "INCONCLUSIVE": "证据不足"}
+    if s.get("signal_decision"):
+        lines += [f"版本信号判断：**{decisions[s['signal_decision']['status']]}**；只评价配对 Rank IC，不代表整体投资效果改善。", ""]
     economic = s.get("economic_comparison", {})
     if economic.get("status") == "COMPLETED":
         lines += ["## 同规则净账户比较", "", "新减旧的日净收益配对差，乘 252 × 10,000，单位年化 bp。",
@@ -253,4 +271,13 @@ def comparison_report(s: dict) -> str:
         for scenario, v in economic["results"].items():
             lines.append(f"| {scenario} | {v['annual_net_gain_bp']:+.2f} | {interval(v['ci95_annual_net_gain_bp'])} | {LABELS[v['conclusion']['status']]} |")
         lines += [""]
+        operations = economic["results"].get("extra_0bp_per_side", {}).get("operational_deltas", {})
+        if operations:
+            lines += ["## 基础费用下的交易诊断", "", "各项差值为新减旧，不作统计显著性或收益改善判定。", "",
+                      "| 项目 | 旧 | 新 | 差值 |", "|---|---:|---:|---:|"]
+            for name, value in operations.items():
+                lines.append(f"| {name} | {value['old']:.6g} | {value['new']:.6g} | {value['delta']:+.6g} |")
+            lines += [""]
+    lines += ["版本比较以配对信号差为主要统计依据；净收益及费用、换手、拒单为条件研究诊断。",
+              "净收益区间不足以分辨差异时，不据点估计判定新版更好。", ""]
     return "\n".join(lines)

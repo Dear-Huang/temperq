@@ -21,12 +21,14 @@ DEFAULT_ACCOUNT = {
 
 
 def replay(panel, normal, spread_bp, targets, *, start, end, initial_cash,
-           commission_bp, extra_slippage_bp=0.0):
+           commission_bp, extra_slippage_bp=0.0, explained=None):
     """targets maps decision indices to weights; sells precede pro-rata funded buys.
 
     Units are raw shares / adj_factor. A factor change keeps units constant,
     approximating reinvested corporate actions; no cash dividend ledger is claimed.
-    Missing marks use only the last observed adjusted mark and disable qualification.
+    Missing marks use only the last observed adjusted mark. `explained` (same
+    shape as the panel) marks days with a lifecycle record (suspension or after
+    delisting); only unexplained stale marks and data gaps disable qualification.
     """
     dates, codes = panel["close"].index, panel["close"].columns
     op, cl, adj, up, dn = (panel[k].to_numpy() for k in
@@ -37,7 +39,8 @@ def replay(panel, normal, spread_bp, targets, *, start, end, initial_cash,
         raise ValueError("invalid account window or cash")
     if not np.isfinite([initial_cash, commission_bp, extra_slippage_bp]).all() or min(commission_bp, extra_slippage_bp) < 0:
         raise ValueError("invalid account costs")
-    if normal.shape != cl.shape or spread.shape != cl.shape:
+    explained = np.zeros(cl.shape, bool) if explained is None else np.asarray(explained, bool)
+    if normal.shape != cl.shape or spread.shape != cl.shape or explained.shape != cl.shape:
         raise ValueError("execution arrays are not aligned")
     for t, w in targets.items():
         w = np.asarray(w, dtype=float)
@@ -56,11 +59,12 @@ def replay(panel, normal, spread_bp, targets, *, start, end, initial_cash,
         open_mark = np.where(open_ok, ao, last)
         cost = commission = stamp = slip = notional = 0.0
         requested, rejected, scaled, data_gap_orders = 0, 0, 0, 0
-        stale_open = 0
+        stale_open = unexplained_open = unexplained_gaps = 0
         if t - 1 in targets:
             w = np.asarray(targets[t - 1], dtype=float)
             held = units > 0
             stale_open = int((held & ~open_ok).sum())
+            unexplained_open = int((held & ~open_ok & ~explained[t]).sum())
             if np.any(held & ~np.isfinite(open_mark)):
                 raise ValueError("holding has no historical valuation")
             equity_open = cash + np.dot(units[held], open_mark[held])
@@ -124,6 +128,7 @@ def replay(panel, normal, spread_bp, targets, *, start, end, initial_cash,
                 rejected += int(value == 0)
                 scaled += int(reason == "CASH_SCALED")
                 data_gap_orders += int(reason.startswith("MISSING_"))
+                unexplained_gaps += int(reason.startswith("MISSING_") and not explained[t, j])
                 qty = value / ao[j] if value else 0.0
                 fills.append((dates[t], dates[t - 1], str(codes[j]), side, reason,
                               qty, float(op[t, j]) if open_ok[j] else None,
@@ -141,7 +146,8 @@ def replay(panel, normal, spread_bp, targets, *, start, end, initial_cash,
         days.append((dates[t], equity, cash, float(values.sum()), equity / previous - 1,
                      commission, stamp, slip, cost, notional,
                      notional / previous / 2, int(held.sum()), int((held & ~close_ok).sum()),
-                     stale_open, requested, rejected, scaled, data_gap_orders))
+                     stale_open, requested, rejected, scaled, data_gap_orders,
+                     int((held & ~close_ok & ~explained[t]).sum()), unexplained_open, unexplained_gaps))
         idx = np.flatnonzero(held)
         if len(idx):
             holdings.append(pd.DataFrame({"date": dates[t], "code": codes[idx],
@@ -150,7 +156,8 @@ def replay(panel, normal, spread_bp, targets, *, start, end, initial_cash,
         previous = equity
     path = pd.DataFrame(days, columns=["date", "equity", "cash", "holdings_value", "net_return",
         "commission", "stamp_tax", "slippage", "total_cost", "traded_notional", "one_way_turnover",
-        "held_names", "stale_close_names", "stale_open_names", "requested_orders", "rejected_orders", "scaled_orders", "data_gap_orders"])
+        "held_names", "stale_close_names", "stale_open_names", "requested_orders", "rejected_orders", "scaled_orders", "data_gap_orders",
+        "unexplained_stale_close_names", "unexplained_stale_open_names", "unexplained_data_gap_orders"])
     fill_frame = pd.DataFrame(fills, columns=["date", "decision_date", "code", "side", "reason",
         "units", "raw_open", "adj_factor", "notional", "commission", "stamp_tax", "slippage", "total_cost"])
     for field in ("date", "decision_date"):
@@ -188,5 +195,9 @@ def metrics(path, initial_cash):
             "requested_orders": int(path["requested_orders"].sum()),
             "scaled_orders": int(path["scaled_orders"].sum()),
             "data_gap_orders": int(path["data_gap_orders"].sum()),
+            # v0.3 paths have no lifecycle columns: fall back to raw counts (all unexplained).
+            "unexplained_stale_close_name_days": int(path.get("unexplained_stale_close_names", path["stale_close_names"]).sum()),
+            "unexplained_stale_open_name_days": int(path.get("unexplained_stale_open_names", path["stale_open_names"]).sum()),
+            "unexplained_data_gap_orders": int(path.get("unexplained_data_gap_orders", path["data_gap_orders"]).sum()),
             "ending_cash": float(path["cash"].iloc[-1]), "ending_equity": float(equity[-1]),
             "ending_held_names": int(path["held_names"].iloc[-1])}

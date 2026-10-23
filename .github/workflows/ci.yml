@@ -1,0 +1,61 @@
+name: CI
+on: [push, pull_request, workflow_dispatch]
+permissions:
+  contents: read
+jobs:
+  python:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: python -m pip install -r requirements-dev.lock
+      - run: python -m pip install --no-deps -e . -e third_party/ashare-tcost
+      - run: python -m pytest -q
+      - run: python -m pytest -q third_party/ashare-tcost/tests
+      - run: python scripts/check_repository.py
+      - run: python -m qwb.cli run examples/run_smoke.yaml
+  website:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: website/package-lock.json
+      - run: npm ci
+        working-directory: website
+      - run: npm run build
+        working-directory: website
+  e2e-reference:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - uses: astral-sh/setup-uv@v6
+      - uses: ilammy/msvc-dev-cmd@v1
+        if: runner.os == 'Windows'
+      - run: uv pip install --system -r requirements-e2e.lock --torch-backend cpu
+      - run: uv pip install --system --no-deps -e . -e third_party/ashare-tcost
+      - run: python -m pytest -q tests/test_portfolio_contracts.py tests/test_portfolio_reference.py tests/test_observations.py tests/test_time_folds.py tests/test_portfolio_optimization.py tests/test_sequence_model.py tests/test_sequence_runs.py tests/test_target_bench.py
+      - run: python -m qwb.cli e2e check --output artifacts/e2e-reference
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: e2e-reference-${{ matrix.os }}
+          path: artifacts/e2e-reference/
+  container:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker build -f deploy/Dockerfile -t qwb-site:ci .

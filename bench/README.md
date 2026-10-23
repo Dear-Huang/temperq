@@ -1,4 +1,11 @@
-# QW-Bench v0.3
+# QW-Bench
+
+本目录保存上线后模型评价的协议、规则与研究说明；执行代码位于 `src/qwb/bench/`。CLI 与本地工作台“实验记录”均可发起评价、冻结协议和比较，公开网站不自动执行评分。新训练产物以 `runs/history/<run_id>/` 固定版本传入，`runs/<名称>/` 保留为最新兼容入口，详见 [研究闭环说明](../docs/RESEARCH_WORKFLOW.md)。
+
+2026-10-22 衔接更新：Bench 结果记录训练运行、折预测版本和独立评价 ID；最终重拟合模型的身份另行保留。新协议 schema 5 保留 ADV 门槛，增加组合数据、指数名单和训练数据内容绑定；旧 schema 3/4 按原清单解释，不改写。评分实现改变后，比较需用当前评分器重评双方；旧文件仍可独立校验和追溯。
+
+> **v0.4（2026-10-22）**：陈旧估值按停牌/退市记录归因、低波动风格对照、净超额分辨率、首批 7 对平台陷阱集（`qwb bench traps`）。见 [REAL_RUN_V0_4.md](REAL_RUN_V0_4.md)，协议 `protocols/cn_rank_5d_development_v4_lifecycle.yaml`。
+
 
 已实现预测赛道的开发诊断闭环：已有预测 → 原快照重算标签与股票池 → 固定参考对照 → 日期块置信区间 → 独立现金/持仓回放与费用压力 → 短板诊断和中文报告。无需重新训练。
 
@@ -12,22 +19,27 @@ v0.3 新增：独立分数复权单位账户、逐笔费用/拒单、每日现�
 
 ## 快速运行
 
-在 `D:\huang\quant-workbench` 的 PowerShell 中运行。协议 `bench/protocols/cn_rank_5d_development_v3.yaml` 固定当前本地行情、费用/账户规则和现有 LightGBM 参考产物。
+在 `D:\huang\quant-workbench` 的 PowerShell 中运行。先用当前评分器建立新协议，固定本地行情、费用/账户规则和 LightGBM 参考产物；以下输出路径必须不存在。
 
 ```powershell
 # 评估自己训练好的运行目录；输出目录必须不存在。
-.venv\Scripts\python.exe -m qwb.cli bench model runs/cn_rank_5d_lgbm --protocol bench/protocols/cn_rank_5d_development_v3.yaml --output runs/bench/my_model_003
+.venv\Scripts\python.exe -m qwb.cli bench init runs/cn_rank_5d_lgbm --output bench/protocols/my_current.yaml
+.venv\Scripts\python.exe -m qwb.cli bench model runs/cn_rank_5d_lgbm --protocol bench/protocols/my_current.yaml --output runs/bench/anchor_current
+.venv\Scripts\python.exe -m qwb.cli bench model runs/my_new_model --protocol bench/protocols/my_current.yaml --output runs/bench/my_model_current
 
 # 对比两次同协议、同评分器、证据与覆盖合格的 Bench 结果。
-.venv\Scripts\python.exe -m qwb.cli bench compare runs/bench/cn_rank_5d_v0_3_verified runs/bench/my_model_003 --output runs/bench/comparison_003
+.venv\Scripts\python.exe -m qwb.cli bench compare runs/bench/anchor_current runs/bench/my_model_current --output runs/bench/comparison_current
 
 # 检查本地评分文件、原始输入，重算逐日 IC 均值和分数。
-.venv\Scripts\python.exe -m qwb.cli bench verify runs/bench/cn_rank_5d_v0_3_verified --inputs
+.venv\Scripts\python.exe -m qwb.cli bench verify runs/bench/my_model_current --inputs
+
+# 旧协议不被当前版本接受时，只检查保存文件的哈希与绑定关系。
+.venv\Scripts\python.exe -m qwb.cli bench verify runs/bench/cn_rank_5d_v0_3_replay --integrity-only
 ```
 
-真实示例见 `runs/bench/cn_rank_5d_v0_3_verified/report.md`。它以参考模型自身为候选，用于验证闭环，不表示平台改进。旧版及早期探索目录保留；正式使用本段路径。当前评分器不接受旧协议，升级后须为双方新建同版协议并重新评分。
+历史真实示例见 `runs/bench/cn_rank_5d_v0_3_verified/report.md`。它以参考模型自身为候选，用于验证闭环，不表示平台改进。旧版及早期探索目录保留；升级后须为双方新建同版协议并重新评分。
 
-安装了项目后也可使用 `qwb bench ...`。本版本为 CLI 与报告交付，尚未加入网页入口。
+安装了项目后也可使用 `qwb bench ...`，或在本地工作台“实验记录”中发起评价和比较。
 
 ## 在其他机器或任务上建立协议
 
@@ -39,7 +51,9 @@ v0.3 新增：独立分数复权单位账户、逐笔费用/拒单、每日现�
 .venv\Scripts\python.exe -m qwb.cli bench init runs/cn_rank_5d_lgbm --output bench/protocols/my_targets.yaml --min-signal-score 1 --min-anchor-gain-score 0.5
 ```
 
-`init` 固定参考目录中的 `task.yaml`、`config.resolved.yaml`、`folds.json`、`predictions.parquet`，以及存在时的 `metrics.json`；行情分区、快照元信息和 ST 文件均使用完整 SHA-256。参考应当是平台选定的 LightGBM 运行；该命令只读取产物，不认证这些文件确实来自 LightGBM 训练。请保留原目录，不要在其中重训覆盖。
+`init` 固定参考目录中的 `task.yaml`、`config.resolved.yaml`、`folds.json`、`predictions.parquet`，以及存在时的 `metrics.json`、`data_manifest.json`；行情分区、快照元信息、ST、指数名单、组合数据配方和来源均使用完整 SHA-256。新训练的数据清单必须与协议实际输入匹配。参考应当是平台选定的 LightGBM 运行；该命令只读取产物，不认证这些文件确实来自 LightGBM 训练。请保留原目录，不要在其中重训覆盖。
+
+schema 5 支持组合数据以及 all / st / all_ex_st / list / csi300 / csi500 / csi1000 股票池；使用训练相同的数据覆盖顺序和历史名单规则。原始名单缺失时明确失败；覆盖行情的行若缺交易状态，不能从基础行继承“正常”。旧训练缺少数据内容清单时会记录证据局限。
 
 协议始终为 `development`。默认块长 20 日、10,000 次重采样、最少 60 个有效日期；同时要求不少于四个块长度的有效日期才能给区间。敏感性检查默认增加 10/40 日块长。这些是可运行的开发参数，尚未完成正式统计校准。可以在新建协议时指定 `--block-days`、`--resamples`、`--min-days`，参数变化后必须在新协议下重评双方。`--min-signal-score` 与 `--min-anchor-gain-score` 比较区间下界，而不是只比较均值。
 
@@ -91,6 +105,7 @@ checksums.json             # 评分产物及 scorecard 的完整哈希清单
 - 成本空间是前 10% 股票的重叠标签事件分析，单位 bp/标签期；假设额外完整买卖摩擦为 10/30/60 bp。没有成交或真实持仓，不能把残差当作净收益或年化成策略业绩。
 - `readiness` 仅给出修复输入、继续研究、已有历史信号可进入组合与成交验证研究三个阶段。当前不会给出仿真准入或实盘准入认证；所有短板记录都注明观测、门槛和下一步，不将症状冒充已证实的原因。
 - `bench verify` 独立从成交累计现金流与数量，核对每天持仓、净值、费用和换手，重算净指标和区间。`--inputs` 还检查原始输入哈希。它不重新生成订单、查证成交或加载原模型；本地一致性不是第三方防作弊认证。
+- `--integrity-only` 用于保留的旧报告，只检查清单、文件哈希、协议哈希和已有训练绑定；不接受协议、不重算算术，也不检查原始输入。不能与 `--inputs` 同用；旧协议的算术复核需要原评分环境。比较入口始终执行完整验证。
 - IC 通过不代表扣成本盈利；同锚点持平不构成训练失败。当前区间只描述日期不确定性，没有完整重复训练和模型选择的不确定性。
 - 所有当前结果均为本地历史开发证据，不作前向验证或反作弊认证；正式分数资格恒为 false。
 
@@ -107,3 +122,7 @@ checksums.json             # 评分产物及 scorecard 的完整哈希清单
 账户单位为 `原始股数 / adj_factor`；恒定单位乘复权价格近似含公司行动的总回报再投资。它不是实际股数账户，未模拟整数手、最低佣金、现金分红事件、冲击、容量、开盘队列、延迟或退市清算。当日状态/开盘价只是日线代理。缺持仓估值沿用最近过去复权价并标记；候选或等权存在任一次陈旧估值/关键价格费用缺口时，对比标 `DIAGNOSTIC_ONLY`，不能获得净账户通过结论。即使 `CONDITIONAL_RESEARCH` 也只有在上述假设下的含义。
 
 期末持仓不强制平仓，仍计市值，不收假想退出成本，因此期末净值不是可提取现金。`net_account` 的 PASS 仅表示输入合格、无上述缺口且研究净超额区间下界严格大于零；不能抵消容量、风险、复现、搜索和前向证据的缺失。正式经济分、仿真准入和实盘准入保持 false。
+
+## 目标持仓扩展
+
+直接持仓提交使用独立 `qwb bench targets` 和 `target-verify`，原始股数、真实现金、T+1、未成交与逐日权益回放。示例、纯 JSON 契约和限制见 [目标持仓 Bench](../docs/TARGET_BENCH.md)。当前仍为诊断参考，不支持公司行为、已有跨日挂单或容量认证；不把权重塞入旧预测分数入口。

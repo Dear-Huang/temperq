@@ -4,10 +4,9 @@ from __future__ import annotations
 
 import numpy as np
 import pandas as pd
-import pyarrow.parquet as pq
 
-from .. import netcost
-from . import account
+from .. import dataset, netcost
+from . import account, lifecycle
 from .statistics import block_summary, conclusion
 
 
@@ -16,7 +15,7 @@ LIMITS = [
     "开盘价和当日状态仅为日线成交代理，无法验证竞价队列、开盘深度或实际成交概率。",
     "STRUCT 价差为上月输入估计；佣金假设包含经手等费用，不含最低佣金；另按日期收卖出印花税。",
     "未模拟整数手、冲击、资金容量、订单延迟、停牌后复牌队列、税费个体差异或退市清算。",
-    "缺失持仓估值仅沿用过去复权价格并标记；任何陈旧估值会使结果仅供诊断，不获正式经济资格。",
+    "缺失持仓估值仅沿用过去复权价格并标记；有停牌或退市记录的陈旧估值视为已解释，原因不明的陈旧估值或数据缺口使结果仅供诊断。退市股按最后价格保留，未模拟清算回收。",
     "期末按收盘估值，不强制卖出，不收取假想平仓费用；余额不是可立即提取的现金。",
     "经济回放不依赖未来标签可用性；与 IC 样本/日期不同，不能把两种结果混算。",
     "历史开发诊断，不包含完整搜索校正、重复训练、独立前向或风险预算准入。",
@@ -24,10 +23,11 @@ LIMITS = [
 
 
 def load_normal(root, dates, codes):
-    files = sorted((root / "bars").glob("*.parquet"))
-    if any("state" not in pq.read_schema(f).names for f in files):
+    status = dataset.load_bars(root, include_state=True)
+    if "state" not in status:
         raise ValueError("state field required; missing status cannot be assumed normal")
-    status = pd.concat([pd.read_parquet(f, columns=["date", "code", "state"]) for f in files])
+    if status["state"].isna().any():
+        raise ValueError("state missing in part of the effective bars; cannot assume normal after overlays")
     status["date"] = pd.to_datetime(status["date"])
     return status.pivot(index="date", columns="code", values="state").reindex(
         index=dates, columns=codes).eq("normal").to_numpy()
@@ -68,8 +68,19 @@ def summarize(paths, protocol):
         entry["net_excess_ann_ci95_bp"] = None if stat["ci95"] is None else [x * 252 * 10000 for x in stat["ci95"]]
         entry["net_excess_conclusion"] = conclusion(stat, cfg["min_net_excess_ann_bp"] / (252 * 10000))
         entry["qualification"] = ("DIAGNOSTIC_ONLY" if any(summary[scenario][x][k]
-            for x in (name, "equal_weight") for k in ("stale_close_name_days", "stale_open_name_days", "data_gap_orders"))
+            for x in (name, "equal_weight") for k in ("unexplained_stale_close_name_days",
+                "unexplained_stale_open_name_days", "unexplained_data_gap_orders"))
             else "CONDITIONAL_RESEARCH")
+        # Resolution of the score: two versions differing by less than this are not separable.
+        entry["net_excess_mde_ann_bp"] = (None if stat["ci95"] is None else
+            (stat["ci95"][1] - stat["ci95"][0]) / 3.92 * 2.8 * 252 * 10000)
+        if name != "low_vol_20d" and (scenario, "low_vol_20d") in groups:
+            # Style check: same top-10% long-only rule on low volatility, same costs.
+            lv = (frame["net_return"] - groups[(scenario, "low_vol_20d")]["net_return"]).to_numpy()[1:]
+            s2 = block_summary(lv, **protocol["statistics"])[0]
+            entry["net_excess_vs_low_vol_ann_bp"] = s2["mean"] * 252 * 10000
+            entry["net_excess_vs_low_vol_ci95_bp"] = (None if s2["ci95"] is None
+                else [x * 252 * 10000 for x in s2["ci95"]])
         entry["by_year"] = {}
         for year in sorted(set(frame["date"].dt.year)):
             rows = frame["date"].dt.year.to_numpy()[1:] == year
@@ -87,6 +98,9 @@ def evaluate(panel, root, universe, predictions, references, protocol):
     if len(window) < 2:
         raise ValueError("insufficient economic dates")
     normal = load_normal(root, dates, codes)
+    events = lifecycle.load_declared(protocol.get("lifecycle"))
+    suspended, delisted = lifecycle.masks(events, dates, codes)
+    explained = suspended | delisted
     if "down_limit" not in panel:
         raise ValueError("down_limit field required for account replay")
     spread = netcost.struct_half_spread_bp(panel).to_numpy()
@@ -114,7 +128,8 @@ def evaluate(panel, root, universe, predictions, references, protocol):
         for name in names:
             p, f, held = account.replay(panel, normal, spread, target_tables[name],
                 start=int(window[0]), end=int(window[-1]), initial_cash=cfg["initial_cash"],
-                commission_bp=cfg["commission_bp"], extra_slippage_bp=extra)
+                commission_bp=cfg["commission_bp"], extra_slippage_bp=extra, explained=explained)
+            held = lifecycle.classify(held, events)
             for frame, container in ((p, paths), (f, fills), (held, holdings)):
                 frame["scenario"], frame["strategy"] = scenario, name
                 container.append(frame)
@@ -126,6 +141,8 @@ def evaluate(panel, root, universe, predictions, references, protocol):
               "formal_score_eligible": False, "account_config": cfg,
               "decision_dates": len(decisions), "start": str(dates[window[0]].date()),
               "universe_eligibility": eligibility,
+              "lifecycle": {"declared": events is not None,
+                            "rule": "stale marks on recorded suspension days or after delisting are explained; others keep DIAGNOSTIC_ONLY"},
               "end": str(dates[window[-1]].date()), "results": summary, "limits": LIMITS,
               "score_unit": "252 * 10000 * mean(daily_net_return - realizable_equal_weight_daily_net_return)",
               "interval_scope": "marginal_date_block_only_not_search_or_execution_uncertainty"}

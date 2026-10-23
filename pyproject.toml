@@ -2,6 +2,7 @@
 name = "qwb"
 version = "0.0.1"
 description = "Quant model workbench: point-in-time data, task cards, validation, packaging"
+readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
     "pandas>=2.0",
@@ -14,11 +15,12 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-# ashare-tcost powers the net-of-cost check; until it is on PyPI the installers
-# pick it up from a sibling checkout (../ashare-tcost)
-dev = ["pytest>=8.0", "httpx>=0.27", "qwb[site]"]
+# The installers also install third_party/ashare-tcost for net-of-cost checks.
+dev = ["pytest>=8.0", "httpx>=0.27", "itsdangerous>=2.1", "jinja2>=3.1"]
 # share site (server side only, not needed for local training)
 site = ["httpx>=0.27", "itsdangerous>=2.1", "jinja2>=3.1"]
+# Optional portfolio research requires Python >=3.11 (CVXPYlayers requirement).
+e2e = ["torch==2.11.0", "cvxpylayers==1.2.0"]
 
 [project.scripts]
 qwb = "qwb.cli:main"
@@ -29,6 +31,9 @@ build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.setuptools.package-data]
+"qwb.rules" = ["*.yaml"]
 
 [tool.pytest.ini_options]
 pythonpath = ["src"]

@@ -27,6 +27,7 @@ import io
 import json
 import re
 import time
+import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -41,8 +42,8 @@ KINDS = {
     "st": "ST 标记",
 }
 RULES = {
-    "evening": "当天收盘后到次日开盘前能拿到（用于当天收盘后的决策）",
-    "next_day": "次日开盘后才能拿到（晚一天使用）",
+    "evening": "当日 15:30 决策前已实际可得（时间由来源声明）",
+    "next_day": "当日决策后发布，下一交易日决策时使用",
     "announce": "按公告日：文件里有公告日列 ann_date，公告后的下一个交易日起使用，并一直有效到下一条",
 }
 NAME_RE = re.compile(r"^[A-Za-z0-9_-]{1,40}$")
@@ -76,7 +77,43 @@ def spec(path: Path) -> dict:
 def root(path: Path) -> Path:
     """The folder that holds the base bars."""
     b = spec(path)["base"]
-    return Path(b) if b else Path(path)
+    if not b:
+        return Path(path)
+    base = Path(b)
+    return base if base.is_absolute() else Path(path) / base
+
+
+def input_files(path: Path) -> dict[str, Path]:
+    """Logical inventories include composite recipes, sources and their base data."""
+    path = Path(path)
+    specification, base = spec(path), root(path)
+    if specification["base"] and (base / "dataset.json").is_file():
+        raise SourceError("combined datasets must use a flat base; recreate with dataset.create")
+    bars = sorted((base / "bars").glob("*.parquet"))
+    if not bars:
+        raise SourceError("dataset requires base bars/*.parquet")
+    base_files = [base / "snapshot.json", *bars]
+    for name in ("st_status.parquet", "index_members.parquet"):
+        if (base / name).is_file():
+            base_files.append(base / name)
+    prefix = "base/" if specification["base"] else ""
+    result = {prefix + p.relative_to(base).as_posix(): p for p in base_files}
+    if specification["base"]:
+        result.update({"snapshot.json": path / "snapshot.json", "dataset.json": path / "dataset.json"})
+    for source in specification["sources"]:
+        if not NAME_RE.fullmatch(str(source["id"])):
+            raise SourceError("invalid source id in dataset.json")
+        name = f"sources/{source['id']}.parquet"
+        result[name] = path / name
+    if any(not p.is_file() for p in result.values()):
+        raise SourceError("dataset inventory contains missing files")
+    return result
+
+
+def fingerprint(path: Path) -> dict:
+    from .experiments import digest, object_digest
+    files = {name: digest(file) for name, file in input_files(path).items()}
+    return {"files": files, "content_hash": object_digest(files)}
 
 
 def has_index(path: Path) -> bool:
@@ -95,29 +132,44 @@ def calendar(path: Path) -> pd.DatetimeIndex:
     return pd.DatetimeIndex(sorted(pd.to_datetime(d["date"].unique())))
 
 
-def _base_bars(r: Path) -> pd.DataFrame:
+def _base_bars(r: Path, *, include_state=False) -> pd.DataFrame:
     import pyarrow.parquet as pq
     files = sorted((r / "bars").glob("*.parquet"))
     if not files:
         raise FileNotFoundError(f"no bars under {r / 'bars'}")
-    have = set(pq.read_schema(files[0]).names)
+    schemas = {file: set(pq.read_schema(file).names) for file in files}
+    have = set.union(*schemas.values())
     cols = ["code", "date"] + daily.FIELDS + [f for f in daily.OPTIONAL_FIELDS if f in have]
-    return pd.concat([pd.read_parquet(f, columns=cols) for f in files], ignore_index=True)
+    if include_state and "state" in have:
+        cols.append("state")
+    return pd.concat([pd.read_parquet(f, columns=[c for c in cols if c in schema])
+                      for f, schema in schemas.items()], ignore_index=True)
+
+
+def load_bars(path: Path, *, include_state=False) -> pd.DataFrame:
+    """The same overlay precedence for research prices and execution status."""
+    path = Path(path)
+    bars = _base_bars(root(path), include_state=include_state)
+    bars["date"] = pd.to_datetime(bars["date"])
+    for source in [x for x in spec(path)["sources"] if x["kind"] == "bars"]:
+        if not NAME_RE.fullmatch(str(source["id"])):
+            raise SourceError("invalid source id in dataset.json")
+        extra = pd.read_parquet(path / "sources" / f"{source['id']}.parquet")
+        extra["date"] = pd.to_datetime(extra["date"])
+        cols = ["code", "date", *daily.FIELDS, *daily.OPTIONAL_FIELDS]
+        if include_state:
+            cols.append("state")
+        extra = extra[[c for c in cols if c in extra.columns]]
+        first, second = (extra, bars) if source.get("priority") == "override" else (bars, extra)
+        bars = pd.concat([first, second], ignore_index=True).drop_duplicates(["code", "date"], keep="first")
+    return bars
 
 
 def load(path: Path) -> dict:
     """Panel (with x_* factor frames), snapshot id, ST status, index members, sources."""
     path = Path(path)
     s, r = spec(path), root(path)
-    bars = _base_bars(r)
-    bars["date"] = pd.to_datetime(bars["date"])
-    for src in [x for x in s["sources"] if x["kind"] == "bars"]:
-        extra = pd.read_parquet(path / "sources" / f"{src['id']}.parquet")
-        extra["date"] = pd.to_datetime(extra["date"])
-        extra = extra[[c for c in bars.columns if c in extra.columns]]
-        first, second = (extra, bars) if src.get("priority") == "override" else (bars, extra)
-        bars = pd.concat([first, second], ignore_index=True).drop_duplicates(
-            ["code", "date"], keep="first")
+    bars = load_bars(path)
     P = daily.panel_from_bars(bars)
     dates, codes = P["close"].index, P["close"].columns
     for src in [x for x in s["sources"] if x["kind"] == "factor"]:
@@ -339,7 +391,7 @@ def _save(dest: Path, kind: str, frame: pd.DataFrame, label: str, origin: str,
     s = spec(dest)
     if not s["base"]:
         raise SourceError("只能给组合数据添加来源；请先以它为基础新建一份组合数据")
-    sid = f"s{len(s['sources']) + 1}"
+    sid = "s" + uuid.uuid4().hex[:16]
     p = dest / "sources" / f"{sid}.parquet"
     frame.to_parquet(p, index=False)
     src = {"id": sid, "kind": kind, "label": label[:60] or KINDS[kind], "origin": origin,

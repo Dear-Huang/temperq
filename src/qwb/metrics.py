@@ -8,6 +8,7 @@ and seed / shuffle reference points.
 from __future__ import annotations
 
 import warnings
+from statistics import NormalDist
 
 import numpy as np
 
@@ -19,7 +20,7 @@ def _rank_rows(a: np.ndarray) -> np.ndarray:
     """Row-wise average ranks, NaN kept."""
     out = np.full(a.shape, np.nan)
     for t in range(a.shape[0]):
-        v = ~np.isnan(a[t])
+        v = np.isfinite(a[t])
         if v.any():
             x = a[t, v]
             order = x.argsort(kind="mergesort")
@@ -34,7 +35,7 @@ def _rank_rows(a: np.ndarray) -> np.ndarray:
 
 def rank_ic(pred: np.ndarray, y: np.ndarray) -> np.ndarray:
     """Spearman correlation per row (date) between two T x N arrays."""
-    valid = ~np.isnan(pred) & ~np.isnan(y)
+    valid = np.isfinite(pred) & np.isfinite(y)
     p = np.where(valid, pred, np.nan)
     q = np.where(valid, y, np.nan)
     rp, rq = _rank_rows(p), _rank_rows(q)
@@ -52,19 +53,50 @@ def rank_ic(pred: np.ndarray, y: np.ndarray) -> np.ndarray:
 
 def newey_west(x: np.ndarray, lag: int) -> dict:
     x = np.asarray(x, dtype=float)
-    x = x[~np.isnan(x)]
-    n = len(x)
+    observed = np.isfinite(x)
+    n = int(observed.sum())
+    mean = float(x[observed].mean()) if n else np.nan
     if n < 2 * (lag + 1):
-        return {"n": n, "mean": float(np.mean(x)) if n else np.nan, "se": np.nan,
+        return {"n": n, "mean": mean, "se": np.nan,
                 "t": np.nan, "mde": np.nan, "lag": lag}
-    u = x - x.mean()
+    # Zero scores at missing dates preserve trading-calendar lag distances.
+    u = np.where(observed, x - mean, 0.0)
     s = u @ u / n
     for k in range(1, lag + 1):
         s += 2 * (1 - k / (lag + 1)) * (u[k:] @ u[:-k]) / n
     se = float(np.sqrt(max(s, 0.0) / n))
     # a constant series (e.g. no trades at all) has no sampling error to test against
-    t = float(x.mean() / se) if se > 0 else np.nan
-    return {"n": n, "mean": float(x.mean()), "se": se, "t": t, "mde": Z_MDE * se, "lag": lag}
+    t = float(mean / se) if se > 0 else np.nan
+    return {"n": n, "mean": mean, "se": se, "t": t, "mde": Z_MDE * se, "lag": lag}
+
+
+def paired_signal_screen(candidate: np.ndarray, references: dict, lag: int) -> dict:
+    """Paired historical IC differences; a fixed family, not all-search correction."""
+    family = len(references)
+    if not family:
+        raise ValueError("at least one fixed reference is required")
+    z = NormalDist().inv_cdf(1 - 0.05 / (2 * family))
+    arrays = [np.asarray(candidate), *(np.asarray(value) for value in references.values())]
+    active = np.logical_or.reduce([np.isfinite(value) for value in arrays])
+    common = np.logical_and.reduce([np.isfinite(value) for value in arrays])
+    complete = bool(np.array_equal(active, common))
+    compared = {}
+    for name, reference in references.items():
+        stat = newey_west(np.asarray(candidate) - np.asarray(reference), lag)
+        ci = ([stat["mean"] - z * stat["se"], stat["mean"] + z * stat["se"]]
+              if np.isfinite(stat["se"]) else None)
+        status = ("INSUFFICIENT" if ci is None else "IMPROVED" if ci[0] > 0
+                  else "DEGRADED" if ci[1] < 0 else "NO_CHANGE" if ci == [0, 0]
+                  else "INCONCLUSIVE")
+        compared[name] = {**stat, "ci95_family": ci, "status": status}
+    own = newey_west(candidate, lag)
+    positive = np.isfinite(own["se"]) and own["mean"] - 1.96 * own["se"] > 0
+    passed = bool(complete and positive and all(v["status"] == "IMPROVED" for v in compared.values()))
+    return {"status": "PASS" if passed else "NOT_ESTABLISHED", "candidate": own,
+            "comparisons": compared, "family_size": family, "family_alpha": 0.05,
+            "daily_ic_coverage_complete": complete, "missing_common_dates": int((active & ~common).sum()),
+            "method": "paired_newey_west_normal_bonferroni",
+            "scope": "historical_signal_only_not_all_search_or_live_approval"}
 
 
 def top_overlap(a: np.ndarray, b: np.ndarray, q: float = 0.1) -> float:

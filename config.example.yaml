@@ -1,0 +1,8 @@
+# Copy to config.local.yaml and set paths for this machine.
+# Store the token in a separate, ignored file; never put its value in YAML.
+tushare:
+  url: https://api.tushare.pro
+  token_file: data/secrets/tushare-token.txt
+  min_interval: 0.25
+cache_dir: data/cache
+data_dir: data/snapshots/cn_daily

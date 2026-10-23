@@ -190,8 +190,15 @@ def create_app(db_path: Path | None = None, hf: HFClient | None = None,
     # added after the limiter so it wraps it: the limiter can read the session
     app.add_middleware(SessionMiddleware, secret_key=secret, same_site="lax",
                        https_only=bool(oauth))
-    con = db(db_path or ROOT / "runs" / "site.db")
+    database = Path(db_path or os.environ.get("QWB_SITE_DB") or ROOT / "runs" / "site.db")
+    database.parent.mkdir(parents=True, exist_ok=True)
+    con = db(database)
     hf = hf or HFClient(proxy=os.environ.get("HTTPS_PROXY"))
+
+    @app.get("/healthz")
+    def health():
+        con.execute("select 1").fetchone()
+        return {"status": "ok"}
 
     def user(req: Request) -> str | None:
         return req.session.get("user")

@@ -7,7 +7,7 @@ from pathlib import Path
 import pandas as pd
 
 from .. import folds
-from .contracts import digest, read_json, read_yaml
+from .contracts import digest, object_digest, read_json, read_yaml
 
 
 def inspect_evidence(run_dir: Path | None, dates: pd.DatetimeIndex, protocol: dict) -> dict:
@@ -18,9 +18,17 @@ def inspect_evidence(run_dir: Path | None, dates: pd.DatetimeIndex, protocol: di
     if run_dir is None or not (run_dir / "folds.json").is_file():
         result["issues"].append("training_fold_evidence_missing")
         return result
-    for name in ("folds.json", "task.yaml", "config.resolved.yaml", "metrics.json"):
+    for name in ("folds.json", "task.yaml", "config.resolved.yaml", "metrics.json", "data_manifest.json"):
         if (run_dir / name).is_file():
             result["files"][name] = digest(run_dir / name)
+    if (run_dir / "data_manifest.json").is_file():
+        manifest = read_json(run_dir / "data_manifest.json")
+        expected = {"files": protocol["data"]["files"],
+                    "content_hash": object_digest(protocol["data"]["files"])}
+        if manifest != expected:
+            result["issues"].append("training_data_content_mismatch")
+    else:
+        result["limits"].append("training_data_content_not_recorded_legacy_declaration_only")
     for name in ("task.yaml", "config.resolved.yaml"):
         if not (run_dir / name).is_file():
             result["issues"].append(f"missing_training_artifact:{name}")

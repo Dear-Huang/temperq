@@ -111,9 +111,9 @@ def build():
 
     sections = [
         ("一、Windows 一键使用", [
-            "1. 从压缩包中解压整个 qwb 文件夹，不要只复制 bat 文件。",
-            "2. 双击 1_安装.bat。它会在当前文件夹创建独立的 Python 3.11 环境并安装固定版本依赖。第一次需要联网，通常几分钟完成。",
-            "3. 安装窗口出现“安装完成”后，双击 2_启动.bat。浏览器打开 http://127.0.0.1:8765。",
+            "1. 从压缩包中解压整个 quant-workbench 文件夹，不要只复制 bat 文件。",
+            "2. 双击 install.bat。它会在当前文件夹创建独立的 Python 3.11 环境并安装固定版本依赖。第一次需要联网，通常几分钟完成。",
+            "3. 安装窗口出现“安装完成”后，双击 start.bat。浏览器打开 http://127.0.0.1:8765。",
             "4. 关闭启动窗口即可停止工作台。浏览器可以关闭，训练任务仍会在本机继续。",
             "安装默认用 CPU 训练 LightGBM，所以 NVIDIA、AMD、核显和没有显卡的电脑都能使用。只有使用 Kronos 等需要 PyTorch 的底座时，才选择 GPU 选项；GPU 选项针对 NVIDIA 驱动和 CUDA 版本。",
         ]),
@@ -126,7 +126,7 @@ def build():
         for para in paras:
             add_text(doc, para)
         if heading.startswith("二"):
-            add_code(doc, "cd /path/to/qwb/quant-workbench\nsh install.sh\nsh start.sh --no-browser")
+            add_code(doc, "cd /path/to/quant-workbench\nsh install.sh\nsh start.sh --no-browser")
             add_text(doc, "服务器只监听 127.0.0.1。远程服务器上运行时，在自己的电脑另开终端做端口转发：")
             add_code(doc, "ssh -N -L 8765:127.0.0.1:8765 user@server")
             add_text(doc, "然后在本地浏览器打开 http://127.0.0.1:8765。默认 LightGBM 不依赖 GPU；Debian/Ubuntu 若提示缺少运行库，执行 sudo apt install libgomp1。")
@@ -183,7 +183,7 @@ def build():
         "显卡不同：首版 LightGBM 固定走 CPU，不要为了 LightGBM 安装 PyTorch。",
         "CSV 成交额单位：Tushare 的 amount 通常是千元，导入前换算成元。",
         "内存不足：先跑试运行，再使用较小 CSV 或较少股票。",
-        "扣成本检验缺失：安装包中应同时有 quant-workbench 和 ashare-tcost 两个目录；源码运行时把两个仓库放在同一级目录。",
+        "扣成本检验缺失：确认项目内有 third_party/ashare-tcost，并重新运行安装器。",
     ]:
         add_text(doc, text, bold_prefix=text.split("：")[0] + "：")
 

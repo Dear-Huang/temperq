@@ -215,3 +215,22 @@ def test_db_backup_keeps_newest_and_is_consistent(tmp_path):
     assert sorted(p.name for p in out.glob("s-*.db"))[-1] == dest.name
     assert len(list(out.glob("s-*.db"))) == 2
     assert sqlite3.connect(dest).execute("select count(*) from shares").fetchone()[0] == 1
+
+
+def test_site_database_env_creates_parent_and_healthcheck(tmp_path, monkeypatch):
+    database = tmp_path / "persistent" / "site.db"
+    monkeypatch.setenv("QWB_SITE_DB", str(database))
+    app = site.create_app(hf=FakeHF(), oauth={}, secret="test")
+    assert database.is_file()
+    c = TestClient(app)
+    assert c.get("/healthz").json() == {"status": "ok"}
+    assert c.get("/api/site").json()["user"] is None
+    app.state.db.close()
+
+
+def test_explicit_database_overrides_server_env(tmp_path, monkeypatch):
+    monkeypatch.setenv("QWB_SITE_DB", str(tmp_path / "server.db"))
+    app = site.create_app(tmp_path / "test.db", FakeHF(), oauth={}, secret="test")
+    assert (tmp_path / "test.db").is_file()
+    assert not (tmp_path / "server.db").exists()
+    app.state.db.close()

@@ -1,12 +1,13 @@
-﻿# qwb 安装脚本（Windows）。双击 1_安装.bat 即可，不需要手动装任何东西。
+﻿# qwb 安装脚本（Windows）。双击 install.bat，或运行 install.ps1。
 
 #   -WithGpu  额外安装 GPU 版 PyTorch（只有 Kronos 底座需要；默认的 LightGBM 训练不用）
+#   -WithSite 安装网站服务依赖；-Dev 安装网站和测试依赖
 
 #   -Mirror   直接使用国内镜像（默认会自动判断）
 
 #   -DryRun   只显示要执行的命令
 
-param([switch]$WithGpu, [switch]$Mirror, [switch]$DryRun)
+param([switch]$WithGpu, [switch]$WithSite, [switch]$Dev, [switch]$Mirror, [switch]$DryRun)
 
 $ErrorActionPreference = 'Stop'
 
@@ -118,17 +119,20 @@ Step @($uv, 'venv', '.venv', '--python', '3.11', '--managed-python', '--clear')
 
 Say '[2/4] 安装依赖（版本固定在 requirements.lock，约 100MB）'
 
-Step @($uv, 'pip', 'install', '--python', $py, '-r', 'requirements.lock')
+$lockfile = 'requirements.lock'
+if ($WithSite) { $lockfile = 'requirements-site.lock' }
+if ($Dev) { $lockfile = 'requirements-dev.lock' }
+Step @($uv, 'pip', 'install', '--python', $py, '-r', $lockfile)
 
 Step @($uv, 'pip', 'install', '--python', $py, '--no-deps', '-e', '.')
 
-if (Test-Path '..\ashare-tcost\pyproject.toml') {
+if (Test-Path 'third_party\ashare-tcost\pyproject.toml') {
 
-    Step @($uv, 'pip', 'install', '--python', $py, '--no-deps', '-e', '..\ashare-tcost')
+    Step @($uv, 'pip', 'install', '--python', $py, '--no-deps', '-e', 'third_party\ashare-tcost')
 
 } else {
 
-    Write-Host '提示：没找到 ..\ashare-tcost，报告里将没有扣成本检验' -ForegroundColor Yellow
+    throw '缺少 third_party\ashare-tcost，请获取完整的 quant-workbench 源码或发布包。'
 
 }
 
@@ -164,7 +168,7 @@ if ($DryRun) { Say '（DryRun：没有实际执行）'; exit 0 }
 
 Say '[3/4] 检查'
 
-& $py -X utf8 -c "import lightgbm, qwb; print('lightgbm', lightgbm.__version__)" | Out-Host
+& $py -X utf8 -c "import lightgbm, qwb, ashare_tcost; print('lightgbm', lightgbm.__version__)" | Out-Host
 
 if ($LASTEXITCODE -ne 0) {
 
@@ -178,7 +182,7 @@ if ($LASTEXITCODE -ne 0) {
 
     Start-Process $vc -ArgumentList '/install', '/passive', '/norestart' -Wait
 
-    & $py -X utf8 -c "import lightgbm, qwb" | Out-Host
+    & $py -X utf8 -c "import lightgbm, qwb, ashare_tcost" | Out-Host
 
     if ($LASTEXITCODE -ne 0) { throw 'LightGBM 仍然无法加载。请把这个窗口截图发给维护者。' }
 
@@ -194,5 +198,5 @@ if ($LASTEXITCODE -ne 0) { throw '试运行失败。请把这个窗口截图发�
 
 Write-Host ''
 
-Write-Host '安装完成。双击 2_启动.bat 打开工作台。' -ForegroundColor Green
+Write-Host '安装完成。双击 start.bat 打开工作台。' -ForegroundColor Green
 

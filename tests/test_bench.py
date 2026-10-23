@@ -9,7 +9,7 @@ import pandas as pd
 import pytest
 import yaml
 
-from qwb import cli, daily, folds, pipeline, taskcard
+from qwb import cli, daily, dataset, folds, pipeline, taskcard
 from qwb.bench.contracts import (create_protocol, digest, read_json,
                                 validate_protocol, verify_inputs, write_json)
 from qwb.bench.runner import compare_models, evaluate_model, verify_result
@@ -104,6 +104,82 @@ def test_cli_model_end_to_end_and_same_model_comparison(market, tmp_path):
     assert comparison["signal_score_gain"] == 0
     assert cli.main(["bench", "model", str(market["anchor"]), "--protocol", str(market["path"]),
                      "--output", str(output)]) == 1
+
+
+def test_legacy_integrity_mode_does_not_accept_old_accounts_or_hide_changes(market, tmp_path):
+    from qwb.bench.contracts import object_digest
+
+    output = tmp_path / "legacy"
+    result = evaluate_model(market["anchor"], market["path"], output, log=lambda *_: None)
+    protocol = read_json(output / "protocol.json")
+    del protocol["account"]["history_eligibility"]
+    write_json(output / "protocol.json", protocol)
+    result["protocol_hash"] = object_digest(protocol)
+    result["artifacts"]["protocol.json"] = digest(output / "protocol.json")
+    write_json(output / "scorecard.json", result)
+    checksums = read_json(output / "checksums.json")
+    checksums["files"] = {**result["artifacts"], "scorecard.json": digest(output / "scorecard.json")}
+    write_json(output / "checksums.json", checksums)
+
+    checked = verify_result(output, integrity_only=True)
+    assert checked["status"] == "PASS"
+    assert not any(checked[k] for k in
+                   ("inputs_checked", "daily_mean_recomputed", "account_ledger_recomputed"))
+    assert checked["scope"] == "local_artifact_integrity_only_not_arithmetic_or_certification"
+    assert cli.main(["bench", "verify", str(output), "--integrity-only"]) == 0
+    with pytest.raises(ValueError, match="unsupported account"):
+        verify_result(output)
+    with pytest.raises(ValueError, match="unsupported account"):
+        compare_models(output, output, tmp_path / "comparison")
+    with pytest.raises(ValueError, match="cannot be combined"):
+        verify_result(output, inputs=True, integrity_only=True)
+    (output / "report.md").write_text("changed", encoding="utf-8")
+    with pytest.raises(ValueError, match="scored artifact changed"):
+        verify_result(output, integrity_only=True)
+
+
+@pytest.mark.parametrize("universe", ["all_ex_st", "list", "csi300"])
+def test_composite_factors_and_professional_universes_reach_independent_bench(market, tmp_path, universe):
+    root = market["root"]
+    codes = market["codes"]
+    pd.DataFrame({"field": ["st"], "code": [codes[0]], "start": ["2020-02-01"],
+                  "end": ["2020-03-01"]}).to_parquet(root / "st_status.parquet", index=False)
+    pd.DataFrame({"index": "000300.SH", "code": codes[:30], "date": "2019-01-01"}).to_parquet(
+        root / "index_members.parquet", index=False)
+    combined = tmp_path / "combined"
+    dataset.create(root, combined)
+    source = dataset.add_factor(combined, pd.DataFrame({"code": codes[0],
+        "date": market["dates"][:40].strftime("%Y-%m-%d"), "flow": np.arange(40.)}),
+        "next_day", "own factor", "fixture")
+    raw = read_json(root / "snapshot.json")
+    composite_id = read_json(combined / "snapshot.json")["data_snapshot_id"]
+    config = yaml.safe_load((market["anchor"] / "config.resolved.yaml").read_text(encoding="utf-8"))
+    config["data"]["dir"] = str(combined)
+    config["cfg"]["universe"] = universe
+    if universe == "list":
+        config["cfg"]["universe_list"] = list(codes[:30])
+    (market["anchor"] / "config.resolved.yaml").write_text(yaml.safe_dump(config), encoding="utf-8")
+    manifests = read_json(market["anchor"] / "folds.json")
+    for manifest in manifests:
+        manifest["data_snapshot_id"] = composite_id
+    write_json(market["anchor"] / "folds.json", manifests)
+    market["table"].assign(data_snapshot_id=composite_id).to_parquet(
+        market["anchor"] / "predictions.parquet", index=False)
+    protocol_path = tmp_path / "composite.yaml"
+    protocol = create_protocol(market["anchor"], protocol_path, cwd=tmp_path,
+                               block_days=2, resamples=100, min_days=8)
+    assert protocol["schema_version"] == 5
+    assert {"dataset.json", "base/index_members.parquet", f"sources/{source['id']}.parquet"} <= set(protocol["data"]["files"])
+    result = evaluate_model(market["anchor"], protocol_path, tmp_path / "scored", log=lambda *_: None)
+    assert result["status"] == "COMPLETED", result["errors"]
+    assert result["evaluation"]["comparable"], result["evaluation"]["issues"]
+    assert result["evaluation"]["models"]["candidate"]["mean"] == pytest.approx(1)
+    factor_path = combined / "sources" / f"{source['id']}.parquet"
+    values = pd.read_parquet(factor_path).assign(flow=-5.)
+    values.to_parquet(factor_path, index=False)
+    with pytest.raises(ValueError, match="snapshot content changed"):
+        verify_inputs(protocol)
+    assert read_json(root / "snapshot.json") == raw
 
 
 def test_independent_accounts_end_to_end_and_recomputed_evidence(market, tmp_path):

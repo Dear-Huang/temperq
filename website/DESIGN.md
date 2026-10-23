@@ -62,10 +62,13 @@ The public database starts empty. Browser workflow QA uses a temporary isolated 
 
 ## Run
 
-From `website`: `npm install`, then `npm run build`.
-From the repository root: `.venv/Scripts/python.exe -X utf8 -m uvicorn share_site.app:app --host 127.0.0.1 --port 8800`.
+Install site dependencies using `install.ps1 -WithSite` (Windows) or `sh install.sh --with-site` (Linux).
+From `website`: `npm ci`, then `npm run build`.
+On Windows use `website/start.ps1` for loopback-only local preview. On Linux set `QWB_SITE_DEV=1` and run `.venv/bin/python -m uvicorn share_site.app:app --host 127.0.0.1 --port 8800` from the root.
 Open http://127.0.0.1:8800 .
 
 For frontend development, run the backend on port 8800 and `npm run dev` in `website`; Vite proxies API and sharing requests.
 
 For a public launch configure `QWB_SITE_SECRET`, `HF_OAUTH_CLIENT_ID`, `HF_OAUTH_CLIENT_SECRET`, and `HF_OAUTH_REDIRECT_URI`, then use HTTPS. The local development login is only available from loopback.
+
+The integrated Docker/Compose/Caddy deployment and backup commands are in [deploy/README.md](../deploy/README.md).

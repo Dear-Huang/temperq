@@ -1,0 +1,21 @@
+schema_version: prediction_allocation_v1
+risk:
+  lookback: 60
+  min_observations: 20
+  shrinkage: 0.1
+  variance_floor: 0.00000001
+cost:
+  impact_bp_at_full_adv: 10
+  sell_tax_bp: 10
+  available_at: "2023-01-01T00:00:00+08:00"
+optimizer:
+  risk_penalty: 1.0
+  stability_penalty: 0.01
+  max_weight: 0.1
+  min_cash: 0.05
+  max_turnover: 2.0
+  tolerance: 0.000001
+output_policy: highs_l1_projection_v1
+diagnostics:
+  max_cost_gap_equity: 0.0001
+  max_turnover_gap: 0.1
