@@ -15,7 +15,7 @@ from . import experiments
 from .jobs import Store
 
 
-ACTIONS = {"train", "protocol", "bench", "compare", "free_data"}
+ACTIONS = {"train", "protocol", "bench", "compare", "free_data", "governance"}
 
 
 def execute(ctx, config: dict, workdir: Path, *, echo=False) -> None:
@@ -26,7 +26,16 @@ def execute(ctx, config: dict, workdir: Path, *, echo=False) -> None:
         if echo:
             print(message, flush=True)
         ctx.check_cancel()
-    if action == "free_data":
+    if action == "governance":
+        from . import governance
+        out = Path(config["output"])
+        if out.exists():
+            # A retry is a new recorded attempt; preserve the failed artifact.
+            out = out.with_name(uuid.uuid4().hex)
+        governance.run(config["predictions"], config["data_dir"], out,
+            governance.GovernanceConfig(**config["governance_config"]), start=config["start"],
+            end=config["end"], initial_cash=config["initial_cash"], check=ctx.check_cancel, log=log)
+    elif action == "free_data":
         from .free_data import fetch
         name = config["name"]
         import re

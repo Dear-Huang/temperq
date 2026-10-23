@@ -462,7 +462,7 @@ def create_app(workdir: Path, task_dir: Path | None = None,
 
     def submit(kind: str, cfg: dict, fn=None) -> str:
         jid = store.submit(JobSpec(kind, cfg))
-        if cfg.get("action") in {"train", "protocol", "bench", "compare", "free_data"}:
+        if cfg.get("action") in {"train", "protocol", "bench", "compare", "free_data", "governance"}:
             from . import worker
             if runner is default_runner:
                 try:
@@ -809,7 +809,7 @@ def create_app(workdir: Path, task_dir: Path | None = None,
         head = {"queued": "排队中", "running": "正在运行…", "succeeded": "完成",
                 "failed": "失败", "cancelled": "已取消"}[st["state"]]
         parts = [f'<p><a href="/">← 返回首页</a></p>',
-                 f'<h2>{ {"train": "训练", "audit": "体检", "bench": "Bench", "compare": "版本比较", "protocol": "冻结协议"}.get(what, "下载数据")}：{html.escape(name)}</h2>',
+                 f'<h2>{ {"train": "训练", "audit": "体检", "bench": "Bench", "compare": "版本比较", "protocol": "冻结协议", "governance": "治理实验"}.get(what, "下载数据")}：{html.escape(name)}</h2>',
                  f'<p class="state {st["state"]}">{head}</p>']
         if prog:
             p = prog[-1]
@@ -834,6 +834,9 @@ def create_app(workdir: Path, task_dir: Path | None = None,
             parts.append(f'<form method="post" action="/job/{jid}/cancel"><input type="hidden" '
                          f'name="token" value="{token}"><button class="secondary">取消</button></form>')
         out_file = store.root / jid / "artifacts" / "output.txt"
+        if what == "governance" and st["state"] == "succeeded" and out_file.exists():
+            attempt = Path(out_file.read_text(encoding="utf-8")).name
+            parts.append(f'<p><a class="btn" href="/governance/{html.escape(attempt)}">查看治理对照与决策回放</a></p>')
         if what == "protocol" and st["state"] == "succeeded":
             parts.append(f'<p><a href="/experiments/{html.escape(ui.get("run_id", ""))}">返回训练版本</a></p>')
         if what in ("bench", "compare") and out_file.exists():
@@ -1188,6 +1191,9 @@ def create_app(workdir: Path, task_dir: Path | None = None,
     from . import strategy_ui, paper_ui
     strategy_ui.register(app, workdir, page=page, guard=guard, token=token, locate=_run_dir)
     paper_ui.register(app, workdir, page=page, guard=guard, token=token)
+    from . import governance_ui
+    governance_ui.register(app, workdir, page=page, guard=guard, token=token, locate=_run_dir,
+                           submit=submit, datasets=datasets)
     from . import workflow_ui
     workflow_ui.register(app, workdir, page=page, guard=guard, token=token, locate=_run_dir, submit=submit)
     app.state.token = token
@@ -1215,7 +1221,7 @@ def _job_rows(store: Store) -> str:
         ui = spec.get("config", {}).get("ui")
         if not ui:
             continue
-        kind = {"train": "训练", "audit": "体检外部模型", "bench": "基准评价", "compare": "版本比较", "protocol": "冻结协议"}.get(ui.get("what"), "下载数据")
+        kind = {"train": "训练", "audit": "体检外部模型", "bench": "基准评价", "compare": "版本比较", "protocol": "冻结协议", "governance": "治理实验"}.get(ui.get("what"), "下载数据")
         name = ui["name"]
         if ui.get("what") == "bench" and re.fullmatch(r"[0-9a-f]{12,32}", name or ""):
             # Older records stored the run id; show the model name it belongs to.
@@ -1357,7 +1363,7 @@ svg{max-width:100%}
 </style></head><body>
 <header class="top"><div class="top-in">
 <a class="brand" href="/" aria-label="TemperQ 首页"><img src="/static/favicon.svg" alt=""><span>TemperQ</span></a>
-<nav class="nav" aria-label="主导航"><a href="/">1 训练</a><a href="/models">2 评价</a><a href="/paper">3 纸面交易</a><a href="/holdings">4 模拟持仓</a></nav>
+<nav class="nav" aria-label="主导航"><a href="/">1 训练</a><a href="/models">2 评价</a><a href="/paper">3 纸面交易</a><a href="/holdings">4 模拟持仓</a><a href="/governance">治理实验</a></nav>
 </div></header>
 <main>
 <p class="workspace-caption">本地工作台 / A 股 <span style="float:right"><a href="/experiments">实验记录</a> · <a href="/audit">体检外部模型</a></span></p>

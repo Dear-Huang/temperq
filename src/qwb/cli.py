@@ -230,6 +230,8 @@ def main(argv: list[str] | None = None) -> int:
     sub = ap.add_subparsers(dest="cmd", required=True)
     from . import paper_cli
     paper_cli.add_parser(sub)
+    from . import governance_cli
+    governance_cli.add_parser(sub)
 
     v = sub.add_parser("validate", help="validate a data table, task card, recipe or manifest")
     v.add_argument("what", choices=sorted(SPECS) + ["task", "recipe", "manifest"])
@@ -335,6 +337,8 @@ def main(argv: list[str] | None = None) -> int:
                         help="check stored hashes/bindings only, without protocol acceptance or arithmetic")
 
     args = ap.parse_args(argv)
+    if args.cmd == "governance":
+        return governance_cli.run(args)
     if args.cmd == "paper":
         return paper_cli.run(args)
     if args.cmd == "e2e":
