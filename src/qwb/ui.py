@@ -846,7 +846,9 @@ def create_app(workdir: Path, task_dir: Path | None = None,
                          f'name="token" value="{token}"><button class="secondary">取消</button></form>')
         out_file = store.root / jid / "artifacts" / "output.txt"
         if what == "strategy":
-            parts.append(f'<p><a class="btn" href="/strategies/{html.escape(ui["sid"])}/{html.escape(ui["vid"])}">返回策略与检验结果</a></p>')
+            suffix='/dashboard' if ui.get('return_to')=='dashboard' else ''
+            label='返回部署看板' if suffix else '返回策略与检验结果'
+            parts.append(f'<p><a class="btn" href="/strategies/{html.escape(ui["sid"])}/{html.escape(ui["vid"])}{suffix}">{label}</a></p>')
         if what == "governance" and st["state"] == "succeeded" and out_file.exists():
             attempt = Path(out_file.read_text(encoding="utf-8")).name
             parts.append(f'<p><a class="btn" href="/governance/{html.escape(attempt)}">查看治理对照与决策回放</a></p>')
@@ -1228,6 +1230,8 @@ def create_app(workdir: Path, task_dir: Path | None = None,
     experience_ui.register(app, workdir, page=page, datasets=datasets)
     from . import external_signals_ui
     external_signals_ui.register(app,workdir,page=page,guard=guard,token=token)
+    from . import deployment_ui
+    deployment_ui.register(app,workdir,page=page,guard=guard,token=token,submit=submit)
     app.state.token = token
     app.state.store = store
     return app

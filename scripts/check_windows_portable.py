@@ -98,6 +98,8 @@ print(json.dumps(loaded,ensure_ascii=False))
             assert "TemperQ" in page and "一键下载免费数据（BaoStock）" in page
             assert "使用入门模型" in get("/strategies/new")
             assert len(opener.open(base + "/static/dm-sans.ttf").read()) > 1000
+            assert len(get("/static/deployment.js")) > 1000
+            assert len(get("/static/deployment.css")) > 1000
             token = re.search('name="token" value="([^"]+)"', page)[1]
             fields = dict(token=token, name="portable_acceptance", market="cn_a", horizon="5",
                           universe="all", capital="lt30w", model="lightgbm", dataset="__synthetic__",
@@ -125,6 +127,7 @@ print(json.dumps(loaded,ensure_ascii=False))
                       "path": env["PATH"], "user_site": "disabled", "gpu": "not bundled",
                       "detached_training_job": job_id, "elapsed_seconds": round(time.monotonic() - started, 2),
                       "bundled_starter": "installed package files verified; visible in model selection",
+                      "deployment_assets": "local dashboard script and styles served from relocated app",
                       "limit": "Same Windows host; fresh-machine CI and nondeveloper trials remain separate acceptance."}
             (destination / "acceptance.json").write_text(json.dumps(output, ensure_ascii=False, indent=2), encoding="utf-8")
             print(json.dumps(output, ensure_ascii=False, indent=2), flush=True)

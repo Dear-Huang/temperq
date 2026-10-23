@@ -23,17 +23,17 @@ STEPS = (
     ("模型", "训练或选择，给股票打分"),
     ("政策", "按持仓和纪律决定怎么买"),
     ("检验", "看历史表现与成本差异"),
-    ("运行", "从启用日起持续纸面观察"),
+    ("部署", "开启纸面运行，在看板持续跟踪"),
 )
 
 
 def flow(step=0, base=""):
-    links = ["/strategies/new", f"{base}/edit", f"{base}#history", f"{base}#running"]
+    links = ["/strategies/new", f"{base}/edit", f"{base}#history", f"{base}/dashboard"]
     parts = []
     for index, (name, meaning) in enumerate(STEPS, 1):
         content = f'<b>{index:02d} · {name}</b><small>{meaning}</small>'
         attrs = ' aria-current="step"' if index == step else ''
-        if base and index < step:
+        if base and (index < step or index == step == 4):
             content = f'<a href="{links[index-1]}">{content}</a>'
         parts.append(f'<li{attrs}>{content}</li>')
     return '<ol class="experience-flow" aria-label="从模型到运行">'+''.join(parts)+'</ol>'
@@ -87,7 +87,7 @@ def register(app, workdir, *, page, datasets):
                     runtime = ex.read(root / "runtime.json") if running else {}
                     health = ex.read(root / "health.json") if (root / "health.json").exists() else {}
                     demo = runtime.get("scope") == "historical_replay"
-                    projects.append({"name": spec["name"], "url": f'/strategies/{spec["sid"]}/{spec["vid"]}',
+                    projects.append({"name": spec["name"], "url": f'/strategies/{spec["sid"]}/{spec["vid"]}'+('/dashboard' if running else ''),
                         "priority": 2 if running and not demo else 1 if running else 0,
                         "label": "历史演示" if demo else "已启用运行" if running else "配置与检验",
                         "message": health.get("message", "设置已保存，下一步做历史检验"),

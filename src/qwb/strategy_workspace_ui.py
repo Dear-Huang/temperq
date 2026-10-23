@@ -55,7 +55,8 @@ def register(app, workdir, *, page, guard, token, locate, submit, datasets):
                 spec=ex.read(path)
                 runtime=ex.read(path.parent/"runtime.json") if (path.parent/"runtime.json").exists() else None
                 health=ex.read(path.parent/"health.json") if (path.parent/"health.json").exists() else {}
-                body+=f'<p><a href="/strategies/{spec["sid"]}/{spec["vid"]}">版本 {spec["vid"][:8]}</a> · {esc(spec["name"])} · '
+                route=f'/strategies/{spec["sid"]}/{spec["vid"]}'+('/dashboard' if runtime else '')
+                body+=f'<p><a href="{route}">版本 {spec["vid"][:8]}</a> · {esc(spec["name"])} · '
                 body+=esc(health.get("message","待检验 / 待启用"))
                 if runtime:body+=' · '+("历史演示" if runtime["scope"]=="historical_replay" else "纸面观察")
                 body+='</p>'
@@ -219,7 +220,7 @@ def register(app, workdir, *, page, guard, token, locate, submit, datasets):
         body=header(4 if state["runtime"] else 3,base)+f'<h1>{esc(spec["name"])}</h1><p>版本 {vid[:8]} · {esc(policy.PRESETS[spec["resolved"]["preset"]]["name"])} · {mode_name}'
         body+=f' · <a href="{base}/edit">修改并建立新版本</a></p>'
         if state["runtime"]:
-            body+=f'<section class="policy-next"><h2>日常只需看这里</h2><p>{esc(state["health"]["message"])}</p><p>先看最近记录与等待原因；想调整时创建新版本，已有账户保留。</p><a class="btn primary" href="#running">查看今日运行</a></section>'
+            body+=f'<section class="policy-next"><h2>部署后，在看板持续跟踪</h2><p>{esc(state["health"]["message"])}</p><p>净值、持仓、最近决策、费用与运行状态集中展示；想调整时创建新版本，已有账户保留。</p><a class="btn primary" href="{base}/dashboard">打开部署看板</a> <a href="#running">运行设置</a></section>'
         elif latest:
             body+='<section class="policy-next"><h2>下一步：开启纸面观察</h2><p>历史检验已完成，可以查看差异，再决定是否从今天开始记录。检验完成不等于已经证明收益优势。</p><a class="btn primary" href="#activation">查看启用设置</a></section>'
         else:
@@ -325,7 +326,9 @@ def register(app, workdir, *, page, guard, token, locate, submit, datasets):
                     config.update(start=start,end=end)
                 jid=submit("evaluate",config)
                 return RedirectResponse(f'/job/{jid}',303)
-            if action=="start":ws.start(workdir,sid,vid,historical_start=str(form.get("historical_start","")) or None)
+            if action=="start":
+                ws.start(workdir,sid,vid,historical_start=str(form.get("historical_start","")) or None)
+                if not form.get('historical_start'):return RedirectResponse(base+'/dashboard',303)
             elif action=="automation":ws.automation(workdir,sid,vid,form.get("enabled")=="yes")
             else:raise HTTPException(404)
             return RedirectResponse(base,303)
