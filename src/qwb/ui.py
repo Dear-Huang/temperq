@@ -28,7 +28,7 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
-from . import daily, data_readiness, dataset, experiments, runconfig, scenario
+from . import daily, data_readiness, dataset, experiments, runconfig, scenario, experience_ui
 from .jobs import JobSpec, Store
 
 NAME_RE = re.compile(r"^[A-Za-z0-9_-]{1,40}$")
@@ -417,7 +417,11 @@ def step1_html() -> str:
             f'{"<span class=tag>规划中</span>" if off else ""}'
             f'<span>{html.escape(v["note"])}</span></label>')
     return (
-        '<div class="scenario-grid">'
+        f'<div class="q"><b>打算投入多少资金</b><div><select name="capital" form="main" id="capital">{cap}</select></div>'
+        '<small class="mut" id="capnote"></small></div>'
+        f'<div class="q"><b>用什么模型</b><div class="model-choices">{"".join(cards)}</div></div>'
+        '<p class="mut">默认：A 股、只做多、5 日预测。先按默认完成，再展开研究设置微调。</p>'
+        '<details id="training-scope"><summary>研究设置 · 股票池、预测期限和市场</summary><div class="scenario-grid">'
         f'<div class="q"><b>用在哪个市场</b><div>{"".join(mk)}</div></div>'
         f'<div class="q"><b>多久调一次仓（持有期）</b><div>{"".join(hz)}</div>'
         '<small class="mut">每天收盘后选股，第二天开盘买入，持有到期后开盘卖出。</small></div>'
@@ -425,10 +429,9 @@ def step1_html() -> str:
         '<div id="listbox" hidden><textarea name="universe_list" form="main" rows="3" '
         'placeholder="填股票代码，空格、逗号或换行分隔，例如 000001 600000.SH ……至少 30 只"></textarea></div>'
         '<small class="mut">指数成分股按每个历史时点当时的成分取，不用今天的名单回看过去。</small></div>'
-        f'<div class="q"><b>打算投入多少资金</b><div><select name="capital" form="main" id="capital">{cap}</select></div>'
-        '<small class="mut" id="capnote"></small></div>'
         f'<div class="q"><b>交易方式</b><div>{"".join(dr)}</div></div></div>'
-        f'<div class="q"><b>用什么模型</b><div class="model-choices">{"".join(cards)}</div>'
+        '</details>'
+        '<div class="q">'
         f'<details><summary>规划中的模型</summary>{"".join(planned_cards)}</details></div>')
 
 
@@ -531,7 +534,7 @@ def create_app(workdir: Path, task_dir: Path | None = None,
                               for x in trained_models()[:6])
         if model_links:
             body += '<section class="data-section"><h2>已训练模型</h2><ul>' + model_links + '</ul><a href="/models">查看全部模型</a></section>'
-        return page("训练模型", body)
+        return page("训练模型", experience_ui.flow(1) + '<div class="training-context"><small>当前在第 1 步：建立给股票打分的模型。下面是本页的训练设置；完成后继续配置政策。</small></div>' + body)
 
     @app.get("/data-readiness", response_class=HTMLResponse)
     def data_check(dataset_id: str, horizon: int = 5):
@@ -850,7 +853,14 @@ def create_app(workdir: Path, task_dir: Path | None = None,
             m = json.loads((out_dir / "metrics.json").read_text(encoding="utf-8"))
             items = "".join(f'<li class="{lv}">{html.escape(s)}</li>' for lv, s in verdict(m))
             parts.append(f'<div class="box"><h3>一句话结论</h3><ul class="verdict">{items}</ul></div>')
-            parts.append(f'<details open><summary>完整报告</summary>'
+            if (out_dir / "final_model" / "meta.json").is_file():
+                from . import strategy as signal_strategy
+                try:
+                    signal_strategy.locked_recipe(json.loads((out_dir / "final_model" / "meta.json").read_text(encoding="utf-8")))
+                    parts.append(f'<section class="policy-next"><h2>模型已训练，下一步定怎么用它</h2><p>训练给出股票排名；政策决定买多少、何时调整。先用默认政策，再按自己的纪律修改。</p><a class="btn primary" href="/strategies/new?source={html.escape(out_dir.name)}">下一步：配置我的政策 →</a></section>')
+                except (ValueError, KeyError, TypeError):
+                    parts.append('<p class="mut">当前模型可继续研究；每日治理闭环暂只支持五日、次日开盘执行的任务。</p>')
+            parts.append(f'<details><summary>完整报告</summary>'
                          f'{md_to_html((out_dir / "report.md").read_text(encoding="utf-8"))}</details>')
             if (out_dir / "final_model" / "meta.json").is_file():
                 parts.append(f'<p><a class="btn" href="/strategies/new?source={html.escape(out_dir.name)}">用这个模型建立策略 →</a></p>')
@@ -1201,6 +1211,7 @@ def create_app(workdir: Path, task_dir: Path | None = None,
     workflow_ui.register(app, workdir, page=page, guard=guard, token=token, locate=_run_dir, submit=submit)
     from . import strategy_workspace_ui
     strategy_workspace_ui.register(app,workdir,page=page,guard=guard,token=token,locate=_run_dir,submit=submit,datasets=datasets)
+    experience_ui.register(app, workdir, page=page, datasets=datasets)
     app.state.token = token
     app.state.store = store
     return app
@@ -1267,7 +1278,7 @@ def serve(workdir: Path, port: int = 8765, open_browser: bool = True) -> None:
     app = create_app(workdir, port=port)
     if open_browser:
         import webbrowser
-        threading.Timer(1.5, lambda: webbrowser.open(f"http://127.0.0.1:{port}/strategies")).start()
+        threading.Timer(1.5, lambda: webbrowser.open(f"http://127.0.0.1:{port}/start")).start()
     print(f"TemperQ 工作台已启动：http://127.0.0.1:{port}  （关闭这个窗口即退出）", flush=True)
     uvicorn.run(app, host="127.0.0.1", port=port, log_level="warning")
 
@@ -1275,6 +1286,8 @@ def serve(workdir: Path, port: int = 8765, open_browser: bool = True) -> None:
 LAYOUT = """<!doctype html><html lang="zh"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1"><title>{{title}} · TemperQ</title>{{refresh}}
 <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/static/experience.css">
+<script src="/static/experience.js" defer></script>
 <style>
 @font-face{font-family:"DM Sans";src:url("/static/dm-sans.ttf") format("truetype");font-weight:100 1000;font-display:swap}
 :root{--bg:#f5f6f8;--card:#fff;--fg:#15171d;--mut:#66707c;--line:#e6e8ed;--acc:#2855ed;--acch:#1744d5;--accbg:#edf1ff;
@@ -1368,8 +1381,8 @@ svg{max-width:100%}
 @media(prefers-reduced-motion:reduce){*{transition:none!important}}
 </style></head><body>
 <header class="top"><div class="top-in">
-<a class="brand" href="/" aria-label="TemperQ 首页"><img src="/static/favicon.svg" alt=""><span>TemperQ</span></a>
-<nav class="nav" aria-label="主导航"><a href="/strategies">我的策略</a><a href="/">训练模型</a><details><summary>更多工具</summary><div class="tool-links"><a href="/models">模型评价</a><a href="/paper">原纸面账户</a><a href="/holdings">模拟持仓</a><a href="/governance">治理实验</a></div></details></nav>
+<a class="brand" href="/start" aria-label="TemperQ 首页"><img src="/static/favicon.svg" alt=""><span>TemperQ</span></a>
+<nav class="nav" aria-label="主导航"><a href="/start">工作台</a><a href="/strategies">我的策略</a><a href="/">训练模型</a><details><summary>更多工具</summary><div class="tool-links"><a href="/models">模型评价</a><a href="/paper">原纸面账户</a><a href="/holdings">模拟持仓</a><a href="/governance">治理实验</a></div></details></nav>
 </div></header>
 <main>
 <p class="workspace-caption">本地工作台 / A 股 <span style="float:right"><a href="/experiments">实验记录</a> · <a href="/audit">体检外部模型</a></span></p>
@@ -1384,7 +1397,7 @@ if(best){best.classList.add("on");best.setAttribute("aria-current","page")}})();
 
 INDEX = """
 <div class="page-heading"><div><h1>训练模型</h1></div><a href="/models">已有模型</a></div>
-<nav class="training-steps" aria-label="训练步骤"><a href="#step1"><b>01</b>训练目标</a><a href="#step2"><b>02</b>选择数据</a><a href="#step3"><b>03</b>参数确认</a><a href="#step4"><b>04</b>开始训练</a></nav>
+<nav class="training-steps" aria-label="本页训练设置"><a href="#step1">训练目标</a><a href="#step2">选择数据</a><a href="#step3">参数确认</a><a href="#step4">开始训练</a></nav>
 <details class="hw-details"><summary>本机资源 · {mem} 内存 · CPU 训练</summary>
 <p class="hw">本机：{cpu}；内存 {mem}；显卡 {gpu}。<b>LightGBM 和 Ridge 只用 CPU，什么显卡（含 AMD、核显、没有显卡）都不影响。</b>树模型做的是排序和比大小，CPU 本来就擅长；只有神经网络底座（如 Kronos）才需要 NVIDIA 显卡。</p>
 </details>
@@ -1407,7 +1420,7 @@ INDEX = """
 </form>
 
 <section class="step" style="margin-top:-8px;border-top:0">
-<div class="box"><h3>没有数据？从免费日线开始</h3>
+<div class="box" id="free-data"><h3>没有数据？从免费日线开始</h3>
 <p>无需账号或 token。下载 40 只沪深股票，默认从 2021 年到昨天，包含原始价格、成交额、复权因子和 ST 状态。
 这是入门样本，不代表全市场；涨跌停价按规则估算，数据源可能延迟或中断。</p>
 <form method="post" action="/data/free"><input type="hidden" name="token" value="{token}">
@@ -1495,8 +1508,8 @@ SCRIPT = """<script>
       "<b>因为你在第 1 步的选择，默认这样训练：</b><ul>" +
       "<li>标签：第二天开盘买入，" + HZ[val("horizon") || "5"] + "。</li>" +
       "<li>持仓：" + n + " 只等权（资金 " + t.label + "）。</li>" +
-      "<li>只选近 20 日日均成交额 ≥ " + wan(floor) + "元的股票，保证每只仓位不超过它当天成交额的 " +
-      (PART * 100) + "%，买得进卖得出。</li>" +
+      "<li>只选近 20 日日均成交额 ≥ " + wan(floor) + "元的股票，按单只目标金额占该成交额的 " +
+      (PART * 100) + "% 筛选；实际成交仍受申报数量、停牌和涨跌停影响。</li>" +
       "<li>股票池：" + u.options[u.selectedIndex].text + "。</li>" +
       "<li>模型：" + (model === "ridge" ? "Ridge 线性回归，训练 1 次" : "LightGBM，按年滚动重训") + "。</li></ul>";
     document.querySelectorAll(".pm").forEach(function (b) { b.hidden = !b.classList.contains("pm-" + model); });

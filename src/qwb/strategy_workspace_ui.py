@@ -9,7 +9,7 @@ import pandas as pd
 from fastapi import HTTPException, Request
 from fastapi.responses import RedirectResponse, Response
 
-from . import experiments as ex, policy, strategy, strategy_workspace as ws
+from . import experiments as ex, policy, strategy, strategy_workspace as ws, experience_ui
 from .governance_ui import REASONS
 from .strategy_ui import reason_text
 
@@ -29,12 +29,7 @@ def register(app, workdir, *, page, guard, token, locate, submit, datasets):
         return response
 
     def header(step, base=""):
-        names=["选择信号","配置政策","历史检验","纸面运行"]
-        text='<style>[data-field]{display:grid!important;grid-template-columns:minmax(160px,1fr) minmax(100px,160px);gap:6px 12px;width:min(100%,640px);max-width:100%!important;align-items:center;margin-block:14px!important}[data-field] input{width:100%}[data-field] small{grid-column:1/-1;color:var(--mut);display:block}[data-field][hidden]{display:none!important}.policy-steps{display:flex;flex-wrap:wrap;gap:10px;margin:22px 0}.policy-steps span{padding:8px 12px;border-radius:8px;background:var(--card)}.policy-steps .current{background:var(--accbg);color:var(--acc)}.policy-cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,240px),1fr));gap:14px}.policy-cards .box{margin:0}code{overflow-wrap:anywhere}.policy-chart{width:100%;height:auto}</style>'
-        text+='<div class="policy-steps" aria-label="策略步骤">'+''.join(
-            f'<span class="{"current" if step==i else ""}" {"aria-current=step" if step==i else ""}>{i} · {name}</span>'
-            for i,name in enumerate(names,1))+'</div>'
-        return '<p><a href="/strategies">← 我的策略</a></p>'+text
+        return '<p><a href="/strategies">← 我的策略</a></p>'+experience_ui.flow(step, base)
 
     def get(sid,vid):
         try:return ws.inspect(workdir,sid,vid)
@@ -59,25 +54,21 @@ def register(app, workdir, *, page, guard, token, locate, submit, datasets):
         return page("我的策略",body)
 
     @app.get("/strategies/new")
-    def new(source:str=""):
-        sources=sorted({p.parent.name for p in (workdir/"runs").glob("*/predictions.parquet")}
-                       |{p.parent.name for p in (workdir/"runs/history").glob("*/predictions.parquet")})
-        options=''
-        for candidate in sources:
-            try:
-                path=locate(candidate)
-                if not (path/"final_model/meta.json").is_file():continue
-                meta=ex.read(path/"final_model/meta.json")
-                strategy.locked_recipe(meta)
-                options+=f'<option value="{esc(candidate)}" {"selected" if candidate==source else ""}>{esc(candidate)} · 训练截止 {esc(meta["data_end"])}</option>'
-            except (ValueError,OSError,KeyError,HTTPException):continue
-        data_options=''.join(f'<option value="{esc(k)}">{esc(k)}</option>' for k in datasets(workdir) if k!="_trial")
+    def new(source:str="",dataset:str=""):
+        sources=experience_ui.signal_options(workdir)
+        options=''.join(f'<option value="{esc(candidate)}" {"selected" if candidate==source else ""}>{esc(candidate)} · {esc(meta["model"])} · 训练截止 {esc(meta["data_end"])}</option>' for candidate,meta in sources.items())
+        available={k:v for k,v in datasets(workdir).items() if k!="_trial"}
+        data_options=''.join(f'<option value="{esc(k)}" {"selected" if k==dataset else ""}>{esc(k)}'+(f' · {esc(v["snap"]["start"])} 至 {esc(v["snap"]["end"])}' if "snap" in v else '')+'</option>' for k,v in available.items())
         body=header(1)+'<h1>先选给股票排名的模型</h1><p>信号负责打分，下一步才决定怎么买。这里使用已有训练模型的存档预测检验历史，用冻结模型处理启用后的新行情。</p>'
-        body+='<p class="mut">官方预训练模型和外部预测专用接入向导尚未发布。现在可以选择自己的已有模型，或<a href="/">先训练</a>。</p>'
+        if not sources or not available:
+            missing='兼容的五日模型' if not sources else '持续行情数据源'
+            body+=f'<section class="policy-next"><h2>先准备{missing}</h2><p>当前没有可用的{missing}，不用在空列表里继续尝试。</p><a class="btn primary" href="/{"#free-data" if not available else ""}">{"准备数据并训练" if not available else "训练一个五日模型"}</a> <a href="/models">查看已有模型</a></section>'
+        body+='<details><summary>哪些模型可以继续？</summary><p>当前支持平台训练的 LightGBM / Ridge 五日模型。其他期限的模型仍可研究，但暂不进入每日纸面闭环。官方预训练模型和外部预测专用接入向导尚未发布。</p></details>'
         body+='<form action="/strategies/configure" method="get">'
-        body+=f'<label class="f">信号来源<select name="source" required>{options}</select></label>'
-        body+=f'<label class="f">持续更新的数据源<select name="dataset" required>{data_options}</select></label>'
-        body+='<button>下一步：配置政策</button></form>'
+        body+=f'<label class="f">信号来源<select name="source" required {"disabled" if not sources else ""}>{options or "<option>还没有兼容模型</option>"}</select></label>'
+        body+=f'<label class="f">持续更新的数据源<select name="dataset" required {"disabled" if not available else ""}>{data_options or "<option>还没有行情数据</option>"}</select></label>'
+        body+=f'<button {"disabled" if not sources or not available else ""}>下一步：配置政策</button></form>'
+        body+='<div class="experience-help"><p><b>为什么选两项？</b>模型负责“怎么打分”，数据源负责“每天用什么新信息”。</p><p><b>接下来</b>选政策模板，再填写资金和持仓；选择模型不会立即买卖。</p></div>'
         return page("选择信号",body)
 
     def editor(source,dataset,previous=None):
@@ -93,24 +84,32 @@ def register(app, workdir, *, page, guard, token, locate, submit, datasets):
         body+='<label class="f">政策预设<select name="preset" id="policy-preset">'+''.join(
             f'<option value="{k}" {"selected" if k==resolved["preset"] else ""}>{esc(v["name"])}</option>' for k,v in policy.PRESETS.items())+'</select></label>'
         body+='<p id="preset-help" class="mut"></p><button type="button" class="secondary" id="reset-policy">恢复该预设</button><p class="mut">切换预设会载入该预设的参数。分步调整来自自有研究的机制，默认 0.5 是待验证的工程选择，不承诺更赚钱。</p>'
+        body+='<section class="policy-snapshot" aria-label="政策即时说明"><h2>这些设置会怎样运行？</h2><p id="policy-summary-text" aria-live="polite">正在读取当前设置。</p><p class="mut">这是目标政策的说明，不是成交承诺。已有持仓在下方导入；退出选股范围和硬限制优先。</p><details class="policy-changes"><summary id="policy-change-count">默认参数与我的改动</summary><ul id="policy-change-list"></ul><p>只收起高级设置不会撤销改动；冻结后，检验和运行使用同一份设置。</p></details></section>'
         body+='<details id="advanced"><summary>高级设置 · 微调纪律和实际费用</summary>'
+        body+='<div class="policy-advanced-tools"><label>查找参数 <input id="policy-search" type="search" placeholder="例如：现金 / n_hold"></label><small id="policy-search-result" role="status"></small></div>'
         body+='<label class="f">风险控制<select name="mode" id="policy-mode">'+''.join(
             f'<option value="{k}" {"selected" if k==chosen["mode"] else ""}>{v}</option>' for k,v in
             (("fixed","固定仓位"),("ewma","EWMA 波动目标"),("ml","ML 风险辅助 · 实验")))+'</select></label>'
         ui_schema=policy.schema()
         definition=next(v for v in ui_schema["$defs"].values() if "n_hold" in v.get("properties",{}))
-        for key,field in definition["properties"].items():
-            info=ui_schema["ui"][key]
-            bounds=''.join(f' {attr}="{field[k]}"' for k,attr in (("minimum","min"),("exclusiveMinimum","min"),("maximum","max")) if k in field)
-            body+=f'<label class="f" data-field="{key}">{esc(info["label"])}（{esc(info["unit"])}）<input name="{key}" type="number" step="{"1" if field["type"]=="integer" else "any"}" value="{values[key]}"{bounds} required><small>{esc(info["help"])}</small></label>'
+        groups=(("选股与保留",("n_hold","hold_until_rank")),("仓位与现金",("max_weight","exposure_cap","cash_floor")),("风险与调整",("adjustment_speed","target_volatility")),("实际费用与压力",("commission_bp","minimum_commission","slippage_bp")))
+        for title,keys in groups:
+            body+=f'<details class="policy-group" open><summary>{title}</summary>'
+            for key in keys:
+                field=definition["properties"][key];info=ui_schema["ui"][key]
+                bounds=''.join(f' {attr}="{field[k]}"' for k,attr in (("minimum","min"),("exclusiveMinimum","min"),("maximum","max")) if k in field)
+                equivalent='<small class="field-equivalent"></small>' if info["unit"]=="比例" else ''
+                body+=f'<label class="f" data-field="{key}">{esc(info["label"])}（{esc(info["unit"])}）<input name="{key}" type="number" step="{"1" if field["type"]=="integer" else "any"}" value="{values[key]}"{bounds} required><small>{esc(info["help"])}</small>{equivalent}</label>'
+            body+='</details>'
         body+='<p class="mut">比例用小数：0.1 = 10%。单票上限超出部分留现金。目标约束不能保证跳空或受阻后的实际持仓仍达标。</p>'
         body+='<label class="f">现有持仓 CSV（可选）<input type="file" name="holdings" accept=".csv"></label><p><a href="/account-template.csv">下载持仓模板</a>；列为 code,quantity,sellable_quantity。</p>'
         if old and old["holdings"]:body+='<p>未上传新文件时保留旧版本的初始持仓。</p>'
         body+='</details><details><summary>固定执行口径与费用说明</summary><p>T+1、申报数量、涨跌停、按日期生效的印花税及收盘决策口径固定。佣金和最低佣金可以按券商填写；价差与冲击未标定。遇到持仓公司行动或行情缺口停止。</p></details>'
         body+='<button>冻结设置，进入检验</button></form>'
-        presets={k:policy.resolve(k)["policy"]|{"description":v["description"]} for k,v in policy.PRESETS.items()}
+        presets={k:policy.resolve(k)["policy"]|{"description":v["description"],"name":v["name"]} for k,v in policy.PRESETS.items()}
         data=json.dumps(presets,ensure_ascii=False).replace("<","\\u003c")
-        body+='<script>(()=>{const presets='+data+';const p=document.querySelector("#policy-preset"),m=document.querySelector("#policy-mode");function show(){document.querySelector("[data-field=target_volatility]").hidden=m.value==="fixed";document.querySelector("#preset-help").textContent=presets[p.value].description;}function reset(){const v=presets[p.value];m.value=v.mode;Object.entries(v.parameters).forEach(([k,x])=>document.querySelector("input[name="+k+"]").value=x);show();}p.addEventListener("change",reset);document.querySelector("#reset-policy").addEventListener("click",reset);m.addEventListener("change",show);show();})();</script>'
+        body+='<script type="application/json" id="policy-presets">'+data+'</script>'
+        body+='<dialog id="preset-change-dialog" class="preset-dialog" aria-labelledby="preset-change-title"><h2 id="preset-change-title">载入另一套预设？</h2><p>当前微调还未冻结。载入会替换政策参数，策略名称、现金和已选的持仓文件保留。</p><div class="actions"><button type="button" class="secondary" id="keep-policy">保留当前微调</button><button type="button" id="replace-policy">切换并载入默认</button></div></dialog>'
         return page("配置政策",body)
 
     @app.get("/strategies/configure")
@@ -152,8 +151,15 @@ def register(app, workdir, *, page, guard, token, locate, submit, datasets):
         state=get(sid,vid);spec=state["spec"];base=f'/strategies/{sid}/{vid}'
         results=state["evaluations"];success=[r for r in results if r["status"]=="SUCCEEDED"]
         latest=success[-1] if success else None
-        body=header(4 if state["runtime"] else 3)+f'<h1>{esc(spec["name"])}</h1><p>版本 {vid[:8]} · {esc(policy.PRESETS[spec["resolved"]["preset"]]["name"])} · {esc(spec["resolved"]["policy"]["mode"])}'
+        mode_name={"fixed":"固定仓位","ewma":"EWMA 波动目标","ml":"ML 风险辅助 · 实验"}[spec["resolved"]["policy"]["mode"]]
+        body=header(4 if state["runtime"] else 3,base)+f'<h1>{esc(spec["name"])}</h1><p>版本 {vid[:8]} · {esc(policy.PRESETS[spec["resolved"]["preset"]]["name"])} · {mode_name}'
         body+=f' · <a href="{base}/edit">修改并建立新版本</a></p>'
+        if state["runtime"]:
+            body+=f'<section class="policy-next"><h2>日常只需看这里</h2><p>{esc(state["health"]["message"])}</p><p>先看最近记录与等待原因；想调整时创建新版本，已有账户保留。</p><a class="btn primary" href="#running">查看今日运行</a></section>'
+        elif latest:
+            body+='<section class="policy-next"><h2>下一步：开启纸面观察</h2><p>历史检验已完成，可以查看差异，再决定是否从今天开始记录。检验完成不等于已经证明收益优势。</p><a class="btn primary" href="#activation">查看启用设置</a></section>'
+        else:
+            body+='<section class="policy-next"><h2>下一步：做一次历史检验</h2><p>设置已冻结。先看这套政策在存档预测上会怎样运行；无需重新训练模型。</p><a class="btn primary" href="#history">设置检验区间</a></section>'
         body+='<div class="policy-cards"><section class="box"><h2>可运行性</h2>'
         operability=latest.get("operability") if latest else None
         if operability:body+=f'<p>{esc(operability["message"])}</p>'
@@ -163,6 +169,7 @@ def register(app, workdir, *, page, guard, token, locate, submit, datasets):
         body+=f'<p>本版本已记录 {len(results)} 次检验；本策略有 {len(ws.versions(workdir,sid))} 个版本。记录只覆盖本地可见尝试。</p>'
         predictions=pd.read_parquet(ws.location(workdir,sid)/"versions"/vid/"predictions.parquet",columns=["decision_time"])
         dates=pd.to_datetime(predictions.decision_time,utc=True).dt.tz_convert("Asia/Shanghai").dt.strftime("%Y-%m-%d")
+        body+='<details id="history"><summary>历史检验与对照（展开）</summary>' if state["runtime"] else '<section id="history">'
         if not state["runtime"]:
             body+='<h2>如果过去这样做，会怎样？</h2><p>与相同信号、风险方式和授权的“立即调整”比较。只改变调整速度；双方敞口可能不同，收益差不直接归因于算法。</p>'
             body+=f'<form method="post" action="{base}/evaluate">'+hidden()
@@ -191,16 +198,17 @@ def register(app, workdir, *, page, guard, token, locate, submit, datasets):
             body+='</table></div>'+f'<p>{latest["metrics"]["selected"]["sessions"]} 段日收益；{esc(latest["message"])}</p>'
             difference=latest["cost_difference"]
             body+=f'<p>这段路径已计费用比立即调整{"多" if difference>0 else "少"} {abs(difference):.2f} 元；请同时比较平均实际仓位。费用差包含交易规模和持仓路径变化，不代表全部成本或收益增量。</p>'
+        body+='</details>' if state["runtime"] else '</section>'
         failures=[r for r in results if r["status"]!="SUCCEEDED"]
         if failures:body+='<details><summary>未完成的尝试</summary>'+''.join(f'<p>{esc(r["status"])} · {esc(r.get("error","运行中"))}</p>' for r in failures)+'</details>'
         if latest and not state["runtime"]:
-            body+='<h2>从今天开始观察</h2><p>按本版本设置开启独立纸面账户。历史成绩不会转成前向成绩。默认不开定时检查。</p>'
+            body+='<h2 id="activation">从今天开始观察</h2><p>按本版本设置开启独立纸面账户。历史成绩不会转成前向成绩。默认不开定时检查。</p>'
             body+=f'<form method="post" action="{base}/start">'+hidden()+'<button>开启纸面观察</button></form>'
             body+=f'<details><summary>高级：用历史演示运行流程</summary><p>仅使用存档当期预测，每条记录标记为历史；不会显示为前向成绩。</p><form method="post" action="{base}/start">'+hidden()+f'<input type="date" name="historical_start" value="{esc(latest["start"])}" required><button class="secondary">开启历史演示</button></form></details>'
         if state["runtime"]:
             runtime=state["runtime"];records=state["records"]
             counts={scope:sum(r["scope"]==scope for r in records) for scope in ("forward_paper","late_reconstruction","historical_replay")}
-            body+='<h2>日常运行</h2>'+f'<p>启用日 {esc(runtime["start_date"])} · 按时纸面记录 {counts["forward_paper"]} 天 · 迟到重建 {counts["late_reconstruction"]} 天 · 历史演示 {counts["historical_replay"]} 天</p>'
+            body+='<h2 id="running">日常运行</h2>'+f'<p>启用日 {esc(runtime["start_date"])} · 按时纸面记录 {counts["forward_paper"]} 天 · 迟到重建 {counts["late_reconstruction"]} 天 · 历史演示 {counts["historical_replay"]} 天</p>'
             body+='<p>自动检查只在工作台开启时运行，17:30 后每天尝试一次，读取已经更新的数据源；当前不自动下载行情。手动检查可在补数据后重试。建议清单是纸面目标，不是已经成交的实盘订单。</p>'
             body+=f'<form method="post" action="{base}/tick">'+hidden()+'<button>检查新行情并记账</button></form>'
             body+=f'<form method="post" action="{base}/automation">'+hidden()+f'<input type="hidden" name="enabled" value="{"no" if runtime["enabled"] else "yes"}"><button class="secondary">{"关闭" if runtime["enabled"] else "开启"}每日检查</button></form>'
@@ -254,7 +262,7 @@ def register(app, workdir, *, page, guard, token, locate, submit, datasets):
     @app.get("/strategies/{sid}/{vid}/decisions")
     def decisions(sid:str,vid:str):
         state=get(sid,vid);root,_=ws.revision(workdir,sid,vid,verify_implementation=False)
-        records=state["records"];body=header(4 if records else 3)+'<h1>每一步为什么这样做</h1>'
+        records=state["records"];body=header(4 if state["runtime"] else 3,f'/strategies/{sid}/{vid}')+'<h1>每一步为什么这样做</h1>'
         if records:
             rows=[r["decision"] for r in records if r.get("decision")]
             fills=[f for r in records for f in r["fills"]]

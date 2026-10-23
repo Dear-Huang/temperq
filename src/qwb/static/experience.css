@@ -1,0 +1,25 @@
+.experience-flow{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));list-style:none;padding:0;margin:22px 0 28px;gap:10px}
+.experience-flow li{min-width:0;border-top:2px solid var(--line);padding:12px 8px;color:var(--mut)}
+.experience-flow b,.experience-flow small{display:block}.experience-flow b{font-size:14px}.experience-flow small{font-size:12px;margin-top:5px}
+.experience-flow li[aria-current]{border-color:var(--acc);color:var(--fg);background:var(--accbg);border-radius:0 0 8px 8px}
+.experience-flow a{color:inherit}.experience-paths,.experience-projects{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:18px}
+.policy-cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,240px),1fr));gap:14px}.policy-cards .box{margin:0}
+button:disabled{opacity:.5;cursor:not-allowed;box-shadow:none}section[id],h2[id],#free-data{scroll-margin-top:120px}
+.experience-paths .box{margin:0;padding:24px}.experience-paths h2{margin:10px 0}.experience-paths p{font-size:14px}.experience-secondary{display:inline-block;margin:10px 0 0 12px;font-size:13px}
+.experience-kicker{font-size:12px;color:var(--acc)}.experience-panel{margin:32px 0}.experience-panel h2{margin-bottom:16px}
+.experience-project{display:grid;gap:8px;padding:18px;border:1px solid var(--line);background:var(--card);border-radius:10px;color:var(--fg)}
+.experience-project:hover{text-decoration:none;border-color:var(--acc)}.experience-project .tag{width:max-content;margin:0}.experience-project small{color:var(--mut);overflow-wrap:anywhere}.experience-project>span:last-child{color:var(--acc);font-size:13px}
+.experience-depth{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:20px}.experience-depth p{margin:0}.experience-depth b,.experience-depth span{display:block}.experience-depth span{font-size:13px;color:var(--mut);margin-top:8px}
+.experience-help{border-left:2px solid var(--acc);padding:8px 16px;margin:18px 0 24px;font-size:14px}.experience-help p{margin:5px 0}.experience-help b{font-weight:600}
+.policy-snapshot{background:var(--accbg);border:1px solid var(--line);border-radius:12px;padding:18px 22px;margin:20px 0}.policy-snapshot h2{font-size:17px;margin:0 0 8px}.policy-snapshot p{margin:8px 0}.policy-snapshot ul{margin:10px 0;padding-left:20px;font-size:14px}
+.policy-advanced-tools{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;margin:18px 0}.policy-advanced-tools input{width:260px;max-width:100%}
+.policy-group{border-top:1px solid var(--line);padding:10px 0;margin:10px 0}.policy-group summary{color:var(--fg)}
+[data-field]{display:grid!important;grid-template-columns:minmax(160px,1fr) minmax(100px,160px);gap:6px 12px;width:min(100%,640px);max-width:100%!important;align-items:center;margin-block:14px!important}
+[data-field] input{width:100%}[data-field] small{grid-column:1/-1;color:var(--mut);display:block}[data-field][hidden],.policy-group[hidden]{display:none!important}
+[data-field] .field-equivalent{font-size:12px;color:var(--acc)}[data-field][data-modified=true]{border-left:2px solid var(--acc);padding-left:12px}
+.policy-changes{font-size:13px;color:var(--mut)}.policy-changes strong{color:var(--fg)}.policy-steps{display:none}.policy-chart{width:100%;height:auto}
+.preset-dialog{border:1px solid var(--line);border-radius:12px;padding:24px;width:min(480px,calc(100% - 32px));background:var(--card);color:var(--fg);box-shadow:var(--shadow)}
+.preset-dialog::backdrop{background:#10131a99}.preset-dialog h2{margin-top:0}.preset-dialog .actions{margin-top:20px}
+.policy-run-heading{display:flex;justify-content:space-between;gap:18px;align-items:start;flex-wrap:wrap}.policy-run-heading p{margin:0}.policy-next{margin:22px 0;padding:18px 22px;border:1px solid var(--line);border-radius:12px;background:var(--accbg)}.policy-next h2{font-size:17px;margin:0 0 8px}
+.training-context{margin-bottom:18px}.training-context p{margin:5px 0}.training-context small{color:var(--mut)}
+@media(max-width:640px){.experience-flow{grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}.experience-paths,.experience-projects,.experience-depth{grid-template-columns:1fr}.experience-paths .box{padding:18px}.experience-flow small{font-size:11px}[data-field]{grid-template-columns:minmax(0,1fr) 110px}.policy-snapshot{padding:16px}.policy-run-heading{display:block}.experience-secondary{margin-left:0;display:block}}
