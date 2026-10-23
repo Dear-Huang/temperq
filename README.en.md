@@ -2,7 +2,7 @@
 
 # TemperQ
 
-**An open-source, visual quant training platform. Models may converge; your strategy doesn't have to.**
+**Train your own model. Hold with clarity.**
 
 English · [中文](README.md)
 
@@ -13,9 +13,9 @@ English · [中文](README.md)
 
 </div>
 
-TemperQ aims to be for quant model training what LM Studio is for local language models: a complete training, evaluation and A-share trading-rule engine underneath, a few core steps on screen, sensible defaults for the rest, and advanced settings for those who want them. Signals can come from the built-in model, your own training, or predictions made elsewhere. The focus is governance: turning a signal into a strategy for your own account, based on your capital, holdings and trading views, then tracking it on paper every day.
+TemperQ is a local workbench for building China A-share stock-selection models on your own machine. Without writing code, you can train a model on your own data, see what is left after trading costs, then connect the model to your holdings for daily trade suggestions and a paper ledger.
 
-Unlike cloud quant platforms, TemperQ is open source and runs on your own machine; data and holdings stay local. You can extend it, and it adopts new methods as they mature.
+Most quant tools start from the model and stop at the backtest. TemperQ starts from your account: what you hold today, what to trade tomorrow, and what your account looks like after the fills.
 
 <p align="center">
   <img src="docs/img/train.png" width="49%" alt="Training page">
