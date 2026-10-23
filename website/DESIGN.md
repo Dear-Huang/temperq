@@ -1,8 +1,8 @@
-# Quant Workbench website
+# TemperQ website
 
 ## Direction
 
-Brand: Quant Workbench.
+Brand: TemperQ.
 Main line: 把你的想法，训练成模型。
 Campaign line: 训练你的判断。分享你的证据。
 

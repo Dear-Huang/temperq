@@ -6,10 +6,10 @@ COPY website/ ./
 RUN npm run build
 
 FROM python:3.11-slim-bookworm
-ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 QWB_SITE_DB=/var/lib/qwb/site.db
+ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 TEMPERQ_SITE_DB=/var/lib/temperq/site.db
 RUN apt-get update && apt-get install -y --no-install-recommends libgomp1 \
     && rm -rf /var/lib/apt/lists/* \
-    && useradd --create-home --uid 10001 qwb
+    && useradd --create-home --uid 10001 temperq
 WORKDIR /app
 COPY requirements-site.lock ./
 RUN pip install --no-cache-dir -r requirements-site.lock
@@ -22,8 +22,8 @@ COPY examples/ ./examples/
 COPY website/public/ ./website/public/
 COPY --from=website /build/dist/ ./website/dist/
 COPY scripts/backup_site_db.py ./scripts/backup_site_db.py
-RUN mkdir -p /var/lib/qwb && chown qwb:qwb /var/lib/qwb
-USER qwb
+RUN mkdir -p /var/lib/temperq && chown temperq:temperq /var/lib/temperq
+USER temperq
 EXPOSE 8800
 HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
   CMD python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8800/healthz', timeout=4)"

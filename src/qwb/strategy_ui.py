@@ -83,12 +83,15 @@ def register(app, workdir, *, page, guard, token, locate):
     @app.get("/advice/{advice_id}")
     def advice_page(advice_id: str):
         value = result(advice_id)
+        paper_link = (f'<p><a href="/holdings/{esc(value["paper_account"])}">修改真实仓位</a> · '
+                      f'<a href="/paper/{esc(value["paper_account"])}">返回纸面交易</a></p>'
+                      if value.get("paper_account") else '')
         rows = ''.join('<tr>' + ''.join(f'<td>{esc(cell)}</td>' for cell in
                        (row["code"], row["current_quantity"], row["sellable_quantity"],
                         f'{row["target_weight"]:.1%}', f'{row["reference_price"]:.2f}',
                         f'{row["suggested_delta"]:+d}', f'{row["estimated_cost"]:.2f}', reason_text(row["reason"]))) + '</tr>'
                        for row in value["rows"])
-        return page("账户交易建议", '<h2>账户交易建议</h2>'
+        body = '<h2>模拟持仓建议</h2>' + paper_link + (
                     f'<p>行情截止 {esc(value["date"])} · 计划执行 {esc(value["execution_day"])}</p>'
                     f'<p>账户参考权益 {value["equity"]:,.2f} 元 · 预估费用 {value["estimated_cost"]:,.2f} 元</p>'
                     '<p class="warn">参考价估算，尚未成交；仅扣佣金和印花税，未计价差冲击。'
@@ -97,11 +100,13 @@ def register(app, workdir, *, page, guard, token, locate):
                     f'<a href="/advice/{advice_id}/protocol.json">冻结配置</a></p>'
                     '<div class="tw"><table><tr><th>代码</th><th>持仓</th><th>可卖</th><th>目标权重</th>'
                     f'<th>参考价</th><th>建议增减</th><th>预估费用</th><th>状态</th></tr>{rows}</table></div>'
-                    f'<p class="mut">配置 <code>{esc(value["protocol_hash"])}</code></p>'
-                    f'<form method="post" action="/advice/{advice_id}/paper">'
+                    f'<p class="mut">配置 <code>{esc(value["protocol_hash"])}</code></p>')
+        if not value.get("paper_account"):
+            body += (f'<form method="post" action="/advice/{advice_id}/paper">'
                     f'<input type="hidden" name="token" value="{token}">'
                     '<label class="f">模拟账户名称 <input name="name" required pattern="[A-Za-z0-9_-]{1,40}"></label>'
                     '<button>启用前向模拟账户</button></form>')
+        return page("模拟持仓建议", body)
 
     @app.get("/advice/{advice_id}/orders.csv")
     def download(advice_id: str):
@@ -125,6 +130,8 @@ def register(app, workdir, *, page, guard, token, locate):
         guard(req, form.get("token"))
         value = result(advice_id)
         try:
+            if value.get("paper_account"):
+                raise ValueError("此建议已绑定纸面账户，请返回原账户查看")
             name = str(form.get("name", ""))
             paper.initialize(workdir, name, Path(value["run_source"]), value["cash"], value["holdings"])
             return RedirectResponse(f"/paper/{name}", 303)

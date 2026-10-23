@@ -1,6 +1,6 @@
-# WiseHold
+# TemperQ
 
-训练你自己的模型，看清你的每一笔持仓。对外品牌与命令为 **WiseHold / `wisehold`**；现有主目录 `quant-workbench`、Python 模块 `qwb` 与旧命令保持兼容，已有模型和账户无需迁移。目前从源码或本地发布包安装，尚未发布到 PyPI。
+训练你自己的模型，看清你的每一笔持仓。对外品牌与命令为 **TemperQ / `temperq`**；现有主目录 `quant-workbench`、Python 模块 `qwb` 与旧命令保持兼容，已有模型和账户无需迁移。目前从源码或本地发布包安装，尚未发布到 PyPI。
 
 本轮界面已完成，预览与发布前核对项见 [UI 核对说明](docs/UI_REVIEW_20261023.md)。本地工作台运行时不需要 Node，也不联网加载字体；官网构建需要 Node，构建后的站点由服务器直接提供。
 
@@ -8,7 +8,7 @@
 
 **当前方向（2026-10-23）**：B0 LightGBM/Ridge 为产品主线，B1 原始行情 GRU 为第二模型，B2 净效用训练保留实验地位并暂停扩展。先完成 B0 的每日策略闭环，再做共同真实数据上的模型对照和发布验收。见 [方向入口](docs/specs/README.md)、[实施 SPEC](docs/specs/PRODUCT_WORKFLOW_SPEC.md) 与 [竞品/文献核验](docs/research/PRODUCT_DIRECTION_REVIEW_20261023.md)。下文及历史研究记录中的已运行实验不代表整个产品已经一键可用或具有收益优势。
 
-定位与长期取舍见 [PRODUCT_VISION.md](docs/PRODUCT_VISION.md)。本轮最小入口：模型页“账户交易建议”支持现金与持仓 CSV；“模拟账户”查看日线账本，“更新日线数据”保存追加快照。操作和免费 BaoStock 路径见 [使用手册](docs/使用手册.md)。行情缺失时账本等待，不补造前向收益。
+定位与长期取舍见 [PRODUCT_VISION.md](docs/PRODUCT_VISION.md)。用户主流程是 **训练 → 评价 → 纸面交易 → 模拟持仓**：点击已训练模型，选择跑基准或调参重训；评价后用虚拟资金开始纸面观察，再输入真实现金和持仓 CSV 模拟参考建议。操作和免费 BaoStock 路径见 [使用手册](docs/使用手册.md)。行情缺失时账本等待，不补造前向收益。
 
 2026-10-23 最小交付：账户建议与每日模拟软件链路已验收；全市场独立数据源已补至 2026-10-22，主力前向账户已接入。Windows 每天 17:30 先更新行情、核验截止日，再记账；更新失败会受阻并留痕，漏记/晚到补记在账户页显示。当前上午核验仍为 0 日真实前向记录，收盘后才开始积累；192 日补齐不算前向成绩。原研究快照与模型保留。执行实验 A 已复用同一预测做四种口径对照，见 [实验报告](docs/research/EXECUTION_A_20261023.md)；这是口径适配实验，不是运行 Qlib 引擎或平台胜负结论。外部试用、服务器与免费 BaoStock 联网路径仍待验收。各步骤状态见 [实施 SPEC](docs/specs/PRODUCT_WORKFLOW_SPEC.md)。
 
@@ -73,9 +73,9 @@ sh start.sh --no-browser
 CLI 与网页使用同一训练链路：
 
 ```bash
-wisehold run examples/run_smoke.yaml
-wisehold run examples/run_cn_rank_5d.yaml --check
-wisehold run examples/run_cn_rank_5d.yaml
+temperq run examples/run_smoke.yaml
+temperq run examples/run_cn_rank_5d.yaml --check
+temperq run examples/run_cn_rank_5d.yaml
 ```
 
 真实数据设置：复制 `config.example.yaml` 为 `config.local.yaml`，填写本机数据/缓存路径和 token **文件路径**。现有本机配置会保留，不会被整合覆盖。数据下载可运行 `python scripts/fetch_cn_daily.py`，或使用本地 UI 的 CSV/API 导入。完整步骤见 [使用手册.md](docs/使用手册.md)。
@@ -101,23 +101,23 @@ powershell -ExecutionPolicy Bypass -File website/start.ps1
 sh install.sh --with-site
 npm --prefix website ci
 npm --prefix website run build
-QWB_SITE_DEV=1 .venv/bin/python -m uvicorn share_site.app:app --host 127.0.0.1 --port 8800
+TEMPERQ_SITE_DEV=1 .venv/bin/python -m uvicorn share_site.app:app --host 127.0.0.1 --port 8800
 ```
 
-正式服务器部署使用 [deploy/README.md](deploy/README.md)：提供 Docker 多阶段构建、单进程后端、持久化数据库、健康检查和 Caddy 自动 HTTPS。部署前填写域名、HF OAuth 与随机会话密钥。**公开服务器不能启用 `QWB_SITE_DEV=1`。**
+正式服务器部署使用 [deploy/README.md](deploy/README.md)：提供 Docker 多阶段构建、单进程后端、持久化数据库、健康检查和 Caddy 自动 HTTPS。部署前填写域名、HF OAuth 与随机会话密钥。**公开服务器不能启用 `TEMPERQ_SITE_DEV=1`。**
 
 ## 训练、分享、Bench 的衔接
 
-1. 训练：UI/`wisehold run` 将每次尝试归档到 `runs/history/<run_id>/`；成功后刷新兼容入口 `runs/<名称>/`，保留同名重跑历史。
+1. 训练：UI/`temperq run` 将每次尝试归档到 `runs/history/<run_id>/`；成功后刷新兼容入口 `runs/<名称>/`，保留同名重跑历史。
 2. 分享：用模型包与模型卡描述产物，在 HF 模型仓库保存可分发文件；网站读取固定提交的卡片与元信息，不下载执行模型代码。
-3. 评价：`wisehold bench model` 读取运行目录/预测文件，在冻结的原始快照与参考模型上独立重算标签、诊断和研究账户。
+3. 评价：`temperq bench model` 读取运行目录/预测文件，在冻结的原始快照与参考模型上独立重算标签、诊断和研究账户。
 4. 追踪：本地“实验记录”关联训练版本、折预测、最终模型和独立 Bench，支持配对比较和导出不含数据/权重的研究摘要。训练与网页评价由持久化 worker 执行。
 
 ```bash
-wisehold bench init runs/cn_rank_5d_lgbm --data-dir data/snapshots/cn_daily --output bench/protocols/my_development.yaml
-wisehold bench model runs/cn_rank_5d_lgbm --protocol bench/protocols/my_development.yaml --output runs/bench/my_model_001
-wisehold bench verify runs/bench/my_model_001 --inputs
-wisehold bench traps --help
+temperq bench init runs/cn_rank_5d_lgbm --data-dir data/snapshots/cn_daily --output bench/protocols/my_development.yaml
+temperq bench model runs/cn_rank_5d_lgbm --protocol bench/protocols/my_development.yaml --output runs/bench/my_model_001
+temperq bench verify runs/bench/my_model_001 --inputs
+temperq bench traps --help
 ```
 
 完整操作、后台任务、兼容与评价边界见 [研究闭环说明](docs/RESEARCH_WORKFLOW.md)。网站尚未自动接收模型并排队执行 Bench；本地工作台已支持冻结协议、运行 Bench 和比较。当前 Bench 是历史开发评价，不是实盘认证。已有 `bench/protocols/cn_rank_5d_development_v*.yaml` 固定原机器路径与数据哈希；换机器须按 [bench/README.md](bench/README.md) 建立新协议。原始行情和参考训练产物不随 GitHub 仓库分发。
@@ -137,7 +137,7 @@ git diff --check
 ```powershell
 git add .
 git commit -m "Consolidate workbench, cost library and deployment setup"
-git remote add origin https://github.com/YOUR_ACCOUNT/wisehold.git
+git remote add origin https://github.com/YOUR_ACCOUNT/temperq.git
 git push -u origin main
 ```
 

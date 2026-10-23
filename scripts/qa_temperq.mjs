@@ -4,7 +4,7 @@ import path from "node:path";
 
 const require = createRequire(new URL("../website/package.json", import.meta.url));
 const { chromium } = require("@playwright/test");
-const out = path.resolve("artifacts/wisehold-ui-qa");
+const out = path.resolve("artifacts/temperq-ui-qa");
 await mkdir(out, { recursive: true });
 const browser = await chromium.launch({ channel: "chrome", headless: true,
   args: ["--enable-webgl", "--use-angle=swiftshader", "--enable-unsafe-swiftshader"] });
@@ -24,11 +24,11 @@ async function capture(base, route, name, width, mode) {
   if (route === "/models/api_test_40_lgbm") {
     await page.getByRole("heading", { name: "模型参考清单" }).waitFor({ timeout: 120000 });
   }
-  if (!(await page.title()).includes("WiseHold")) throw Error(`Missing brand title ${route}`);
+  if (!(await page.title()).includes("TemperQ")) throw Error(`Missing brand title ${route}`);
   const overflow = await page.evaluate(() => document.documentElement.scrollWidth > innerWidth + 1);
   if (overflow) throw Error(`Overflow ${width} ${mode} ${route}`);
   const brand = await page.locator(".brand").first().innerText();
-  if (brand.trim() !== "WiseHold") throw Error(`Old brand ${brand}`);
+  if (brand.trim() !== "TemperQ") throw Error(`Old brand ${brand}`);
   const file = `${width}-${mode}-${name}.png`;
   if (base === site && route === "/") {
     await page.locator(".model-grid").scrollIntoViewIfNeeded();
@@ -42,6 +42,8 @@ async function capture(base, route, name, width, mode) {
 
 try {
   const routes = [["/", "training"], ["/models", "models"],
+    ["/workflow/api_test_40_lgbm", "workflow"],
+    ["/holdings", "holdings"], ["/holdings/lgbm_forward_20261023", "holdings-form"],
     ["/models/api_test_40_lgbm", "model"], ["/paper", "accounts"],
     ["/paper/lgbm_forward_20261023", "forward"],
     ["/paper/api_test_40_lgbm_replay", "replay"],
@@ -52,7 +54,7 @@ try {
     }
   }
   const csv = await page.request.get(local + "/template.csv");
-  if (!csv.ok() || !csv.headers()["content-disposition"].includes("wisehold"))
+  if (!csv.ok() || !csv.headers()["content-disposition"].includes("temperq"))
     throw Error("Template download branding failed");
   const history = await page.request.get(local + "/paper/api_test_40_lgbm_replay/history.csv");
   if (!history.ok() || !(await history.text()).includes("historical_replay"))

@@ -24,7 +24,7 @@ click==8.5.0
 fastapi==0.142.2
     # via
     #   -c requirements.lock
-    #   qwb (pyproject.toml)
+    #   temperq (pyproject.toml)
 h11==0.16.0
     # via
     #   -c requirements.lock
@@ -33,20 +33,20 @@ h11==0.16.0
 httpcore==1.0.9
     # via httpx
 httpx==0.28.1
-    # via qwb (pyproject.toml)
+    # via temperq (pyproject.toml)
 idna==3.20
     # via
     #   -c requirements.lock
     #   anyio
     #   httpx
 itsdangerous==2.2.0
-    # via qwb (pyproject.toml)
+    # via temperq (pyproject.toml)
 jinja2==3.1.6
-    # via qwb (pyproject.toml)
+    # via temperq (pyproject.toml)
 lightgbm==4.7.0
     # via
     #   -c requirements.lock
-    #   qwb (pyproject.toml)
+    #   temperq (pyproject.toml)
 markupsafe==3.0.4
     # via jinja2
 narwhals==2.26.0
@@ -72,11 +72,11 @@ opentelemetry-api==1.45.0
 pandas==3.0.6
     # via
     #   -c requirements.lock
-    #   qwb (pyproject.toml)
+    #   temperq (pyproject.toml)
 pyarrow==25.0.1
     # via
     #   -c requirements.lock
-    #   qwb (pyproject.toml)
+    #   temperq (pyproject.toml)
 pydantic==2.13.5
     # via
     #   -c requirements.lock
@@ -92,11 +92,11 @@ python-dateutil==2.9.0.post0
 python-multipart==0.0.32
     # via
     #   -c requirements.lock
-    #   qwb (pyproject.toml)
+    #   temperq (pyproject.toml)
 pyyaml==6.0.3
     # via
     #   -c requirements.lock
-    #   qwb (pyproject.toml)
+    #   temperq (pyproject.toml)
 scipy==1.17.1 ; python_full_version < '3.12'
     # via
     #   -c requirements.lock
@@ -135,4 +135,4 @@ tzdata==2026.4 ; sys_platform == 'emscripten' or sys_platform == 'win32'
 uvicorn==0.54.0
     # via
     #   -c requirements.lock
-    #   qwb (pyproject.toml)
+    #   temperq (pyproject.toml)

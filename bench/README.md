@@ -1,4 +1,6 @@
-# QW-Bench
+# TemperQ Bench
+
+产品名称为 TemperQ Bench；历史文档、协议字段和 `qwb` 模块标识保留兼容，不改写已保存的评价证据。
 
 本目录保存上线后模型评价的协议、规则与研究说明；执行代码位于 `src/qwb/bench/`。CLI 与本地工作台“实验记录”均可发起评价、冻结协议和比较，公开网站不自动执行评分。新训练产物以 `runs/history/<run_id>/` 固定版本传入，`runs/<名称>/` 保留为最新兼容入口，详见 [研究闭环说明](../docs/RESEARCH_WORKFLOW.md)。
 

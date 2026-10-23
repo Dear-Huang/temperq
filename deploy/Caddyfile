@@ -2,8 +2,14 @@
     email {$ACME_EMAIL}
 }
 
-{$QWB_DOMAIN} {
+{$TEMPERQ_DOMAIN} {
     encode zstd gzip
+    header {
+        X-Content-Type-Options nosniff
+        Referrer-Policy strict-origin-when-cross-origin
+        X-Frame-Options DENY
+        Permissions-Policy "camera=(), microphone=(), geolocation=()"
+    }
     request_body {
         max_size 1MB
     }

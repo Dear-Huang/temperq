@@ -26,7 +26,7 @@ from typing import Callable
 import pandas as pd
 
 DEFAULT_URL = "http://api.tushare.pro"
-TOKEN_ENV = "QWB_TUSHARE_TOKEN"
+TOKEN_ENV = "TEMPERQ_TUSHARE_TOKEN"
 RETRY_CODES = {429, 40203}      # vendor throttling; 40203 = per-minute quota on tushare
 
 
@@ -35,8 +35,8 @@ class ApiError(RuntimeError):
 
 
 def load_token(token_file: str | None = None) -> str:
-    """Token from $QWB_TUSHARE_TOKEN, else from a file path. Never logged."""
-    tok = os.environ.get(TOKEN_ENV, "").strip()
+    """Token from the environment (including legacy QWB), then a file. Never logged."""
+    tok = os.environ.get(TOKEN_ENV, os.environ.get("QWB_TUSHARE_TOKEN", "")).strip()
     if tok:
         return tok
     if token_file and Path(token_file).is_file():

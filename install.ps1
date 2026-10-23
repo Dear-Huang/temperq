@@ -71,7 +71,7 @@ function Step([string[]]$cmd) {
 
 
 
-Say '== WiseHold 安装 =='
+Say '== TemperQ 安装 =='
 
 
 
@@ -132,7 +132,7 @@ if (Test-Path 'third_party\ashare-tcost\pyproject.toml') {
 
 } else {
 
-    throw '缺少 third_party\ashare-tcost，请获取完整的 WiseHold 源码或发布包。'
+    throw '缺少 third_party\ashare-tcost，请获取完整的 TemperQ 源码或发布包。'
 
 }
 

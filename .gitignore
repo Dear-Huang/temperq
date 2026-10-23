@@ -17,6 +17,8 @@ data/
 !.env.example
 /archives/
 /artifacts/
+/bench/protocols/model-*.yaml
+/bench/protocols/development-*.yaml
 /tools/
 /backups/
 node_modules/

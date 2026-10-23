@@ -69,6 +69,12 @@ def update(feed, raw, calendar_raw, *, source="user_csv"):
         calendar["date"] = pd.to_datetime(calendar["date"], format="%Y-%m-%d", errors="raise").dt.strftime("%Y-%m-%d")
         if calendar["date"].duplicated().any():
             raise ValueError("日历日期重复")
+        if parent:
+            previous_calendar = pd.read_csv(previous / "calendar.csv", dtype=str)
+            fixed = previous_calendar.loc[previous_calendar.date.le(old["date"].max())].set_index("date")["is_open"]
+            updated = calendar.set_index("date")["is_open"].reindex(fixed.index)
+            if not fixed.eq(updated).all():
+                raise ValueError("检测到历史交易日历修订；请另建数据源")
         open_days = set(calendar.loc[calendar["is_open"] == "1", "date"])
         if not set(incoming["date"]) <= open_days:
             raise ValueError("行情日期必须全部在日历开市日中")

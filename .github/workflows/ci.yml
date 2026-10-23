@@ -58,4 +58,21 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - run: docker build -f deploy/Dockerfile -t qwb-site:ci .
+      - run: docker build -f deploy/Dockerfile -t temperq-site:ci .
+      - name: Smoke Test Production Container
+        run: |
+          docker run -d --name temperq-smoke \
+            -e HF_OAUTH_CLIENT_ID=ci-placeholder \
+            -e HF_OAUTH_CLIENT_SECRET=ci-placeholder \
+            -e HF_OAUTH_REDIRECT_URI=https://temperq.example.com/oauth/callback \
+            -e TEMPERQ_SITE_SECRET=$(openssl rand -hex 32) \
+            temperq-site:ci
+          for attempt in $(seq 1 30); do
+            if docker exec temperq-smoke python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8800/healthz', timeout=2)"; then break; fi
+            sleep 2
+          done
+          docker exec temperq-smoke python -c "import urllib.request; r=urllib.request.urlopen('http://127.0.0.1:8800/'); assert b'TemperQ' in r.read()"
+          docker exec temperq-smoke python -c "import json, urllib.request; r=urllib.request.urlopen('http://127.0.0.1:8800/api/site'); assert json.load(r)['dev'] is False"
+      - name: Container Logs
+        if: always()
+        run: docker logs temperq-smoke

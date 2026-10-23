@@ -151,7 +151,7 @@ def datasets(workdir: Path) -> dict[str, dict]:
 def register_folder(workdir: Path, path: str) -> str:
     p = Path(path.strip().strip('"')).expanduser()
     if _read_snapshot(p) is None:
-        raise ValueError("这个文件夹里没有 snapshot.json 和 bars 目录，不是 WiseHold 数据文件夹")
+        raise ValueError("这个文件夹里没有 snapshot.json 和 bars 目录，不是 TemperQ 数据文件夹")
     root = workdir / "data"
     root.mkdir(parents=True, exist_ok=True)
     reg = root / "registry.json"
@@ -300,8 +300,8 @@ def _inline(s: str) -> str:
 def md_to_html(md: str) -> str:
     """Enough Markdown for qwb's own reports: headings, lists, tables, bold, code."""
     # Display legacy reports with the current brand without changing archived evidence.
-    md = md.replace("Quant Workbench", "WiseHold").replace("QW-Bench", "WiseHold Bench")
-    md = md.replace("qwb 可成交口径", "WiseHold 可成交口径").replace("qwb 的可成交口径", "WiseHold 的可成交口径").replace("qwb 口径", "WiseHold 口径")
+    md = md.replace("Quant Workbench", "TemperQ").replace("QW-Bench", "TemperQ Bench")
+    md = md.replace("qwb 可成交口径", "TemperQ 可成交口径").replace("qwb 的可成交口径", "TemperQ 的可成交口径").replace("qwb 口径", "TemperQ 口径")
     out, table, lst = [], False, False
 
     def close():
@@ -448,7 +448,8 @@ def create_app(workdir: Path, task_dir: Path | None = None,
         threading.Thread(target=fn, daemon=True).start()
 
     runner = runner or default_runner
-    app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
+    from . import paper_auto
+    app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None, lifespan=paper_auto.lifespan(workdir))
     app.mount("/static", StaticFiles(directory=Path(__file__).parent / "static"), name="static")
     allowed_hosts = {f"127.0.0.1:{port}", f"localhost:{port}", "testserver"}
 
@@ -514,12 +515,16 @@ def create_app(workdir: Path, task_dir: Path | None = None,
             memwarn='<p class="warn">内存不足 8GB，全市场数据可能跑不动，可以先用试运行或少量股票的 CSV。</p>'
             if low_mem else "",
             jobs=_job_rows(store)) + script
+        model_links = ''.join(f'<li><a href="/workflow/{html.escape(x["run"])}">{html.escape(x["display"])}</a></li>'
+                              for x in trained_models()[:6])
+        if model_links:
+            body += '<section class="data-section"><h2>已训练模型</h2><ul>' + model_links + '</ul><a href="/models">查看全部模型</a></section>'
         return page("训练模型", body)
 
     @app.get("/template.csv")
     def template():
         return FileResponse(workdir / "examples" / "csv_template.csv",
-                            filename="wisehold_数据模板.csv", media_type="text/csv")
+                            filename="temperq_数据模板.csv", media_type="text/csv")
 
     @app.post("/run")
     async def run(req: Request):
@@ -801,8 +806,8 @@ def create_app(workdir: Path, task_dir: Path | None = None,
             parts.append(f'<details open><summary>完整报告</summary>'
                          f'{md_to_html((out_dir / "report.md").read_text(encoding="utf-8"))}</details>')
             if (out_dir / "final_model" / "meta.json").is_file():
-                parts.append(f'<p><a class="btn" href="/models/{html.escape(out_dir.name)}">'
-                             '用这个模型出今天的持仓清单 →</a></p>')
+                parts.append(f'<p><a class="btn" href="/workflow/{html.escape(out_dir.name)}">'
+                             '下一步：评价模型 / 继续训练 →</a></p>')
             if (out_dir / "run.json").is_file():
                 parts.append(f'<p><a href="/experiments/{out_dir.name}">训练版本与独立 Bench</a></p>')
             parts.append(f'<p class="mut">结果文件夹：<code>{html.escape(str(out_dir))}</code>（模型文件、'
@@ -829,7 +834,7 @@ def create_app(workdir: Path, task_dir: Path | None = None,
                      for k, v in scenario.UNIVERSES.items() if k != "list")
         body = ('<h2>体检外部模型</h2>'
                 '<p>模型在 Qlib、vn.py、自己的 Python 脚本里训练都可以。只要上传它每天给每只股票的打分，'
-                'WiseHold 会用你的数据、按可成交的规则重新检验：扣成本后还剩多少、能不能赢简单方法、'
+                'TemperQ 会用你的数据、按可成交的规则重新检验：扣成本后还剩多少、能不能赢简单方法、'
                 '换成 Qlib 默认回测口径会被高估多少、打分有没有前视嫌疑。不需要模型文件。</p>'
                 '<div class="box"><b>打分文件格式（CSV）</b><p>每行一只股票一天：'
                 '<code>code</code> 股票代码、<code>date</code> 打分日期（当天收盘后算出的）、<code>score</code> 打分。'
@@ -897,11 +902,27 @@ def create_app(workdir: Path, task_dir: Path | None = None,
     # ---------------------------------------------------------------- use a model
     runs_root = workdir / "runs"
 
-    def trained_models() -> list[dict]:
+    def trained_models(include_hidden: bool = False) -> list[dict]:
+        from .workflow_ui import hidden
         out = []
         if not runs_root.is_dir():
             return out
-        for d in runs_root.iterdir():
+        candidates = list((runs_root / "history").glob("*/final_model/meta.json"))
+        candidates += list(runs_root.glob("*/final_model/meta.json"))
+        seen = set()
+        for mp in candidates:
+            d = mp.parent.parent
+            if (d / "run.json").is_file():
+                try:
+                    identity = experiments.read(d / "run.json")["run_id"]
+                    if identity in seen:
+                        continue
+                    seen.add(identity)
+                    d = experiments.frozen_source(d)
+                except (OSError, ValueError, KeyError):
+                    continue
+            if not include_hidden and hidden(workdir, d):
+                continue
             mp = d / "final_model" / "meta.json"
             if not mp.is_file():
                 continue
@@ -912,7 +933,8 @@ def create_app(workdir: Path, task_dir: Path | None = None,
                 continue
             net = (m.get("net_of_cost") or {}).get("signals", {}).get(m.get("model_key", "lgbm_ensemble"))
             f = m["ic"][m.get("model_key", "lgbm_ensemble")]["final_test"]
-            out.append({"run": d.name, "meta": meta, "m": m, "net": net, "ic": f,
+            display = experiments.read(d / "run.json").get("name", d.name) if (d / "run.json").is_file() else d.name
+            out.append({"run": d.name, "display": display, "meta": meta, "m": m, "net": net, "ic": f,
                         "mtime": mp.stat().st_mtime})
         return sorted(out, key=lambda x: -x["mtime"])
 
@@ -928,35 +950,38 @@ def create_app(workdir: Path, task_dir: Path | None = None,
             raise HTTPException(400, str(exc)) from None
 
     @app.get("/models", response_class=HTMLResponse)
-    def models_page():
+    def models_page(deleted: bool = False):
         cards = []
-        for x in trained_models():
+        from .workflow_ui import evaluation_summary
+        for x in trained_models(include_hidden=deleted):
             sc = x["m"].get("scenario") or {}
             net = x["net"]
             synth = x["meta"].get("snapshot_id") == "snap-synthetic"
             ok = (not synth) and x["m"].get("go") and net and net["net_excess_t"] > 2
-            label, tone = ("试运行", "pending") if synth else ("历史诊断通过", "active") if ok else ("证据不足", "pending")
+            summary = evaluation_summary(workdir, _run_dir(x["run"]))
+            label, tone = ("试运行", "pending") if synth else (summary["label"], summary["tone"])
             name = html.escape(x["run"])
             net_txt = "仅演示" if synth else "未计算" if not net else f"{net['net_excess_ann']:+.1%}"
             note = "合成数据，无投资含义" if synth else "未通过检验" if not ok else "历史诊断，不代表实盘认证"
             net_t = "" if synth or not net else f't={net["net_excess_t"]:.2f}'
             cards.append(f'<article class="account-card model-result" data-model-card><div class="card-heading">'
                 f'<span class="scope-label">{html.escape(x["meta"]["model"])}</span><span class="status-badge {tone}">{label}</span></div>'
-                f'<h2><a href="/models/{name}">{name}</a></h2><p class="mut">'
+                f'<h2><a href="/workflow/{name}">{html.escape(x["display"])}</a></h2><p class="mut">'
                 f'{html.escape(sc.get("universe") or x["m"].get("universe", ""))} · '
                 f'{html.escape(sc.get("horizon", "5 日"))}</p><div class="metrics compact-metrics">'
                 f'<div class="metric"><span>扣成本后年化净超额</span><strong>{net_txt}</strong><small>{net_t}</small></div>'
                 f'<div class="metric"><span>测试期 IC</span><strong>{x["ic"]["mean"]:+.3f}</strong>'
                 f'<small>t={x["ic"]["t"]:.2f}</small></div></div><p class="evidence-note">{note}</p>'
                 f'<div class="card-meta"><span>数据截止 {html.escape(x["meta"].get("data_end", "未知"))}</span></div>'
-                f'<a class="card-link" href="/models/{name}">查看模型与清单</a></article>')
+                f'<a class="card-link" href="/workflow/{name}">评价 / 继续训练</a></article>')
         table = '<div class="account-grid">' + ''.join(cards) + '</div>' if cards else (
             '<div class="empty-state"><h3>还没有训练好的模型</h3><a class="btn" href="/">训练第一个模型</a></div>')
-        body = ('<div class="page-heading"><div><h1>使用模型</h1>'
-                f'<p class="mut">{len(cards)} 个模型 · 历史诊断与每日账户分别查看</p></div>'
+        body = ('<div class="page-heading"><div><h1>评价模型</h1>'
+                f'<p class="mut">{len(cards)} 个模型 · 选择一个版本，跑基准或继续训练</p></div>'
                 '<a class="btn" href="/">新建训练</a></div>'
-                '<p class="notice">历史诊断和参考清单不代表可投入实盘；真实账户建议需绑定现金与持仓。</p>' + table)
-        return page("使用模型", body)
+                '<p class="notice">先评价，再做纸面验证；历史诊断不代表可投入实盘。</p>' + table +
+                '<p><a href="/models?deleted=true">查看已删除模型并恢复</a> · <a href="/experiments">实验记录与版本比较</a></p>')
+        return page("评价模型", body)
 
     def _picks_or_error(run: str, date: str, capital: str):
         from . import picks
@@ -1106,6 +1131,8 @@ def create_app(workdir: Path, task_dir: Path | None = None,
     from . import strategy_ui, paper_ui
     strategy_ui.register(app, workdir, page=page, guard=guard, token=token, locate=_run_dir)
     paper_ui.register(app, workdir, page=page, guard=guard, token=token)
+    from . import workflow_ui
+    workflow_ui.register(app, workdir, page=page, guard=guard, token=token, locate=_run_dir, submit=submit)
     app.state.token = token
     app.state.store = store
     return app
@@ -1166,12 +1193,12 @@ def serve(workdir: Path, port: int = 8765, open_browser: bool = True) -> None:
     if open_browser:
         import webbrowser
         threading.Timer(1.5, lambda: webbrowser.open(f"http://127.0.0.1:{port}/")).start()
-    print(f"WiseHold 工作台已启动：http://127.0.0.1:{port}  （关闭这个窗口即退出）", flush=True)
+    print(f"TemperQ 工作台已启动：http://127.0.0.1:{port}  （关闭这个窗口即退出）", flush=True)
     uvicorn.run(app, host="127.0.0.1", port=port, log_level="warning")
 
 
 LAYOUT = """<!doctype html><html lang="zh"><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1"><title>{{title}} · WiseHold</title>{{refresh}}
+<meta name="viewport" content="width=device-width,initial-scale=1"><title>{{title}} · TemperQ</title>{{refresh}}
 <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
 <style>
 @font-face{font-family:"DM Sans";src:url("/static/dm-sans.ttf") format("truetype");font-weight:100 1000;font-display:swap}
@@ -1264,15 +1291,15 @@ svg{max-width:100%}
 @media(prefers-reduced-motion:reduce){*{transition:none!important}}
 </style></head><body>
 <header class="top"><div class="top-in">
-<a class="brand" href="/" aria-label="WiseHold 首页"><img src="/static/favicon.svg" alt=""><span>WiseHold</span></a>
-<nav class="nav" aria-label="主导航"><a href="/">训练模型</a><a href="/experiments">实验记录</a><a href="/models">使用模型</a><a href="/paper">模拟账户</a><a href="/audit">体检外部模型</a></nav>
+<a class="brand" href="/" aria-label="TemperQ 首页"><img src="/static/favicon.svg" alt=""><span>TemperQ</span></a>
+<nav class="nav" aria-label="主导航"><a href="/">1 训练</a><a href="/models">2 评价</a><a href="/paper">3 纸面交易</a><a href="/holdings">4 模拟持仓</a></nav>
 </div></header>
 <main>
-<p class="workspace-caption">本地工作台 / A 股</p>
+<p class="workspace-caption">本地工作台 / A 股 <span style="float:right"><a href="/experiments">实验记录</a> · <a href="/audit">体检外部模型</a></span></p>
 {{body}}
 </main>
 <footer class="foot">本地运行 · 127.0.0.1 · 结果只说明在给定数据和假设下得到了什么，不代表未来收益。</footer>
-<script>(function(){var p=location.pathname,best=null;document.querySelectorAll(".nav a").forEach(function(a){var h=a.getAttribute("href");
+<script>(function(){var p=location.pathname,best=null;if(p.indexOf('/workflow')===0||p.indexOf('/evaluations')===0)p='/models';document.querySelectorAll(".nav a").forEach(function(a){var h=a.getAttribute("href");
 var hit=h==="/"?(p==="/"||p.indexOf("/job")===0||p.indexOf("/data")===0):p.indexOf(h)===0;
 if(hit&&(!best||h.length>best.getAttribute("href").length))best=a});
 if(best){best.classList.add("on");best.setAttribute("aria-current","page")}})();</script>
@@ -1324,10 +1351,10 @@ INDEX = """
 <label class="f">到 <input type="number" name="end_year" value="2025"> 年</label>
 <button>开始下载</button></form></div></details>
 
-<details><summary>添加数据 · 方式 C：使用电脑上已有的 WiseHold 数据文件夹</summary><div class="sub">
+<details><summary>添加数据 · 方式 C：使用电脑上已有的 TemperQ 数据文件夹</summary><div class="sub">
 <form method="post" action="/data/folder">
 <input type="hidden" name="token" value="{token}">
-<label class="f">文件夹路径 <input name="path" size="40" placeholder="例如 E:\\data\\wisehold_data" required></label>
+<label class="f">文件夹路径 <input name="path" size="40" placeholder="例如 E:\\data\\temperq_data" required></label>
 <button>添加</button></form></div></details>
 </section>
 

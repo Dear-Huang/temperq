@@ -219,3 +219,28 @@ def test_calendar_gap_and_model_change_stop_ledger(tmp_path, monkeypatch):
     with pytest.raises(ValueError, match="冻结模型"):
         paper.tick(tmp_path, "missing", now="2026-10-20T16:00:00+08:00")
     assert len(paper.inspect(tmp_path, "missing")["sessions"]) == 1
+
+
+def test_csv_calendar_history_is_frozen_but_future_can_change(tmp_path):
+    dates = pd.bdate_range("2024-01-02", periods=8)
+    bars = pipeline.synth_bars(len(dates), 2)
+    bars["date"] = np.repeat(dates, 2)
+    bars["code"] = np.tile(["000001.SZ", "600000.SH"], len(dates))
+    raw = bars.to_csv(index=False).encode()
+    calendar = pd.DataFrame({"date": pd.date_range("2024-01-02", "2024-01-15")})
+    calendar["is_open"] = (calendar.date.dt.weekday < 5).astype(int)
+    calendar["date"] = calendar.date.dt.strftime("%Y-%m-%d")
+    feed = tmp_path / "feed"
+    initial = daily_data.update(feed, raw, calendar.to_csv(index=False).encode())
+    for change in ("reclassify", "remove"):
+        revised = calendar.copy()
+        if change == "reclassify":
+            revised.loc[revised.date.eq("2024-01-06"), "is_open"] = 1
+        else:
+            revised = revised.loc[revised.date.ne("2024-01-06")]
+        with pytest.raises(ValueError, match="历史交易日历修订"):
+            daily_data.update(feed, raw, revised.to_csv(index=False).encode())
+        assert daily_data.current(feed) == Path(initial["snapshot"])
+    calendar.loc[calendar.date.eq("2024-01-13"), "is_open"] = 1
+    result = daily_data.update(feed, raw, calendar.to_csv(index=False).encode())
+    assert result["added_rows"] == 0 and result["snapshot"] != initial["snapshot"]

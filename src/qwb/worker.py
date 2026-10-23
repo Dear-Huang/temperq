@@ -40,6 +40,11 @@ def execute(ctx, config: dict, workdir: Path, *, echo=False) -> None:
         create_protocol(config["anchor"], out, cwd=workdir, **config.get("statistics", {}))
     elif action == "bench":
         from .bench.runner import evaluate_model
+        if config.get("create_protocol"):
+            from .bench.contracts import create_protocol
+            protocol_path = Path(config["protocol"])
+            if not protocol_path.exists():
+                create_protocol(config["source"], protocol_path, cwd=workdir)
         evaluation_id = uuid.uuid4().hex
         out = workdir / "runs" / "bench" / evaluation_id
         summary = evaluate_model(config["source"], config["protocol"], out,

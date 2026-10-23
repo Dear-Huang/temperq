@@ -83,7 +83,7 @@ def test_flags_and_bad_cards(tmp_path):
     _, c = client(tmp_path, FakeHF("---\ntask: x\n---\n稳赚，加微信进付费群"))
     c.get("/login/dev")
     r = c.post("/share", data={"repo": "u/m", "token": token(c)}, follow_redirects=True)
-    assert "内容检查提示" in r.text and "不是 WiseHold 生成的卡片" in r.text
+    assert "内容检查提示" in r.text and "不是 TemperQ 生成的卡片" in r.text
 
     (tmp_path / "b").mkdir()
     _, c2 = client(tmp_path / "b", FakeHF("no front matter"))
@@ -234,3 +234,71 @@ def test_explicit_database_overrides_server_env(tmp_path, monkeypatch):
     assert (tmp_path / "test.db").is_file()
     assert not (tmp_path / "server.db").exists()
     app.state.db.close()
+
+
+def test_temperq_environment_overrides_legacy_without_exposing_dev_login(tmp_path, monkeypatch):
+    monkeypatch.setenv("TEMPERQ_SITE_DB", str(tmp_path / "temperq" / "site.db"))
+    monkeypatch.setenv("QWB_SITE_DB", str(tmp_path / "legacy.db"))
+    app = site.create_app(hf=FakeHF(), oauth={}, secret="test")
+    assert (tmp_path / "temperq" / "site.db").is_file()
+    assert not (tmp_path / "legacy.db").exists()
+    client = TestClient(app)
+    assert client.get("/login/dev", headers={"X-Forwarded-For": "203.0.113.9"}).status_code == 404
+    app.state.db.close()
+
+
+def test_hf_readme_stops_reading_oversized_stream():
+    import httpx
+
+    seen = []
+    class Stream(httpx.SyncByteStream):
+        def __iter__(self):
+            for i in range(100):
+                seen.append(i)
+                yield b"x" * 65536
+    hf = site.HFClient()
+    hf.http.close()
+    hf.http = httpx.Client(transport=httpx.MockTransport(lambda req: httpx.Response(200, stream=Stream())))
+    try:
+        assert hf.readme("u/m", SHA) is None
+        assert len(seen) == 4
+    finally:
+        hf.http.close()
+
+
+def test_share_vendor_timeout_is_retryable_and_does_not_store_a_model(tmp_path):
+    import httpx
+
+    class OfflineHF(FakeHF):
+        def commit(self, repo):
+            raise httpx.ConnectTimeout("private connection details")
+    _, c = client(tmp_path, OfflineHF())
+    c.get("/login/dev")
+    response = c.post("/share", data={"repo": "u/m", "token": token(c)})
+    assert response.status_code == 503
+    assert "private connection" not in response.text
+    assert c.get("/api/site").json()["models"] == []
+
+
+def test_backups_never_overwrite_even_with_identical_clock(tmp_path, monkeypatch):
+    import sqlite3
+    from datetime import datetime, timezone
+
+    spec = importlib.util.spec_from_file_location("backup_collision", ROOT / "scripts" / "backup_site_db.py")
+    backup_module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(backup_module)
+    fixed = datetime(2026, 10, 23, tzinfo=timezone.utc)
+    monkeypatch.setattr(backup_module, "datetime", type("Clock", (), {"now": staticmethod(lambda tz: fixed)}))
+    source = tmp_path / "source.db"
+    with sqlite3.connect(source) as con:
+        con.execute("create table records(value integer)")
+        con.execute("insert into records values (1)")
+    first = backup_module.backup(source, tmp_path / "copies")
+    with sqlite3.connect(source) as con:
+        con.execute("insert into records values (2)")
+    second = backup_module.backup(source, tmp_path / "copies")
+    assert first != second and first.is_file() and second.is_file()
+    for path, count in [(first, 1), (second, 2)]:
+        with sqlite3.connect(path) as restored:
+            assert restored.execute("pragma integrity_check").fetchone()[0] == "ok"
+            assert restored.execute("select count(*) from records").fetchone()[0] == count

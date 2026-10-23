@@ -35,13 +35,13 @@ colorama==0.4.6 ; sys_platform == 'win32'
 cvxpy==1.9.3
     # via cvxpylayers
 cvxpylayers==1.2.0
-    # via qwb (pyproject.toml)
+    # via temperq (pyproject.toml)
 diffcp==1.1.9
     # via cvxpylayers
 fastapi==0.142.2
     # via
     #   -c requirements-dev.lock
-    #   qwb (pyproject.toml)
+    #   temperq (pyproject.toml)
 filelock==4.2.4
     # via torch
 fsspec==2026.9.0
@@ -60,7 +60,7 @@ httpcore==1.0.9
 httpx==0.28.1
     # via
     #   -c requirements-dev.lock
-    #   qwb (pyproject.toml)
+    #   temperq (pyproject.toml)
 idna==3.20
     # via
     #   -c requirements-dev.lock
@@ -73,11 +73,11 @@ iniconfig==2.3.1
 itsdangerous==2.2.0
     # via
     #   -c requirements-dev.lock
-    #   qwb (pyproject.toml)
+    #   temperq (pyproject.toml)
 jinja2==3.1.6
     # via
     #   -c requirements-dev.lock
-    #   qwb (pyproject.toml)
+    #   temperq (pyproject.toml)
     #   osqp
     #   torch
 joblib==1.6.0
@@ -85,7 +85,7 @@ joblib==1.6.0
 lightgbm==4.7.0
     # via
     #   -c requirements-dev.lock
-    #   qwb (pyproject.toml)
+    #   temperq (pyproject.toml)
 markupsafe==3.0.4
     # via
     #   -c requirements-dev.lock
@@ -143,7 +143,7 @@ packaging==26.3
 pandas==3.0.6
     # via
     #   -c requirements-dev.lock
-    #   qwb (pyproject.toml)
+    #   temperq (pyproject.toml)
 pluggy==1.7.0
     # via
     #   -c requirements-dev.lock
@@ -151,7 +151,7 @@ pluggy==1.7.0
 pyarrow==25.0.1
     # via
     #   -c requirements-dev.lock
-    #   qwb (pyproject.toml)
+    #   temperq (pyproject.toml)
 pycparser==3.12 ; implementation_name != 'PyPy'
     # via cffi
 pydantic==2.13.5
@@ -169,7 +169,7 @@ pygments==2.21.0
 pytest==9.1.1
     # via
     #   -c requirements-dev.lock
-    #   qwb (pyproject.toml)
+    #   temperq (pyproject.toml)
 python-dateutil==2.9.0.post0
     # via
     #   -c requirements-dev.lock
@@ -177,11 +177,11 @@ python-dateutil==2.9.0.post0
 python-multipart==0.0.32
     # via
     #   -c requirements-dev.lock
-    #   qwb (pyproject.toml)
+    #   temperq (pyproject.toml)
 pyyaml==6.0.3
     # via
     #   -c requirements-dev.lock
-    #   qwb (pyproject.toml)
+    #   temperq (pyproject.toml)
 qdldl==0.1.9.post1
     # via cvxpy
 scipy==1.17.1 ; python_full_version < '3.12'
@@ -229,9 +229,9 @@ sympy==1.14.0
 threadpoolctl==3.7.0
     # via diffcp
 torch==2.11.0 ; sys_platform == 'darwin'
-    # via qwb (pyproject.toml)
+    # via temperq (pyproject.toml)
 torch==2.11.0+cpu ; sys_platform != 'darwin'
-    # via qwb (pyproject.toml)
+    # via temperq (pyproject.toml)
 typing-extensions==4.16.0
     # via
     #   -c requirements-dev.lock
@@ -255,4 +255,4 @@ tzdata==2026.4 ; sys_platform == 'emscripten' or sys_platform == 'win32'
 uvicorn==0.54.0
     # via
     #   -c requirements-dev.lock
-    #   qwb (pyproject.toml)
+    #   temperq (pyproject.toml)

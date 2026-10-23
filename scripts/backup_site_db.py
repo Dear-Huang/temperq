@@ -12,6 +12,7 @@ from __future__ import annotations
 import os
 import sqlite3
 import sys
+import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -24,9 +25,11 @@ def backup(db: Path, out_dir: Path, keep: int = 14) -> Path:
     if not db.is_file():
         raise FileNotFoundError(db)
     out_dir.mkdir(parents=True, exist_ok=True)
-    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-    dest = out_dir / f"{db.stem}-{stamp}.db"
-    src = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
+    descriptor, name = tempfile.mkstemp(prefix=f"{db.stem}-{stamp}-", suffix=".db", dir=out_dir)
+    os.close(descriptor)
+    dest = Path(name)
+    src = sqlite3.connect(db.resolve().as_uri() + "?mode=ro", uri=True)
     dst = sqlite3.connect(dest)
     try:
         src.backup(dst)
@@ -44,7 +47,7 @@ def backup(db: Path, out_dir: Path, keep: int = 14) -> Path:
 
 
 if __name__ == "__main__":
-    db = Path(sys.argv[1]) if len(sys.argv) > 1 else Path(os.environ.get("QWB_SITE_DB", str(ROOT / "runs" / "site.db")))
+    db = Path(sys.argv[1]) if len(sys.argv) > 1 else Path(os.environ.get("TEMPERQ_SITE_DB", os.environ.get("QWB_SITE_DB", str(ROOT / "runs" / "site.db"))))
     out = Path(sys.argv[2]) if len(sys.argv) > 2 else ROOT / "runs" / "site_backups"
     keep = int(sys.argv[3]) if len(sys.argv) > 3 else 14
     print(backup(db, out, keep))

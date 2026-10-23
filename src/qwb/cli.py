@@ -226,7 +226,7 @@ def _jobs(args) -> int:
 
 
 def main(argv: list[str] | None = None) -> int:
-    ap = argparse.ArgumentParser(prog="wisehold")
+    ap = argparse.ArgumentParser(prog="temperq")
     sub = ap.add_subparsers(dest="cmd", required=True)
     from . import paper_cli
     paper_cli.add_parser(sub)

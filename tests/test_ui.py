@@ -182,7 +182,7 @@ def test_use_model_page_and_downloads(tmp_path):
     app, c = client(tmp_path)
     r = c.post("/run", data=form(app, name="m1", capital="30w_100w"), follow_redirects=False)
     job = c.get(r.headers["location"]).text
-    assert "用这个模型出今天的持仓清单" in job
+    assert "下一步：评价模型 / 继续训练" in job
     lst = c.get("/models").text
     assert "m1" in lst and "试运行" in lst
     page = c.get("/models/m1").text

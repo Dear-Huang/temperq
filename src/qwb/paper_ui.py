@@ -9,7 +9,7 @@ import pandas as pd
 from fastapi import Request
 from fastapi.responses import RedirectResponse, Response
 
-from . import daily_data, daily_operation, paper
+from . import daily_data, daily_operation, experiments, paper, paper_auto
 from .strategy_ui import reason_text
 
 
@@ -90,7 +90,7 @@ def register(app, workdir, *, page, guard, token):
                 f'<a class="card-link" href="/paper/{esc(name)}">查看账户</a></article>')
         content = '<div class="account-grid">' + ''.join(cards) + '</div>' if cards else (
             '<div class="empty-state"><h3>还没有模拟账户</h3><a class="btn" href="/models">选择模型</a></div>')
-        return page("模拟账户", '<div class="page-heading"><div><h1>模拟账户</h1>'
+        return page("纸面交易", '<div class="page-heading"><div><h1>纸面交易</h1>'
                     f'<p class="mut">{len(accounts)} 个账户 · 前向模拟与历史演示分别记录</p></div>'
                     '<div class="actions"><a href="/paper/data">更新日线数据</a><a class="btn" href="/models">选择模型</a></div></div>'
                     '<p class="notice">模拟费用仅含佣金和印花税，未含价差与冲击。历史演示和晚到补记不算前向成绩。</p>' + content)
@@ -168,6 +168,21 @@ def register(app, workdir, *, page, guard, token):
             operations += ('<h3>未及时记录的交易日</h3><div class="tw"><table><tr><th>日期</th>'
                            f'<th>记录</th><th>原因</th></tr>{gaps}</table></div>')
         state, tone = STATES.get(status["state"], (status["state"], "pending"))
+        automatic = paper_auto.settings(workdir, name)
+        automation = (f'<form method="post" action="/paper/{esc(name)}/automatic">'
+                      f'<input type="hidden" name="token" value="{token}">'
+                      f'<label class="row"><input type="checkbox" name="enabled" value="yes" {"checked" if automatic["enabled"] else ""}>每日自动记账</label>'
+                      '<button class="secondary">保存</button></form>'
+                      '<p class="mut">每天 17:30 后检查一次，工作台须保持运行；关闭或注销期间不记账。已有 API 每日任务的账户先更新行情，其他账户需持续导入新数据。</p>'
+                      f'<p>{esc(automatic.get("attempted_at", "尚未自动运行"))} · {esc(automatic.get("message", ""))}</p>')
+        source_path = paper.location(workdir, name) / "workflow.json"
+        previous = (f'<a href="/workflow/{esc(experiments.read(source_path)["run"])}">返回模型评价</a>'
+                    if source_path.exists() else '<a href="/models">返回模型评价</a>')
+        next_step = (f'<section class="data-section"><h2>下一步：模拟持仓</h2>'
+                     f'<p>已记录 {len(records)} 日，其中当日前向 {stats["forward_days"]} 日。'
+                     '这些记录尚不能证明未来收益；可先用真实仓位查看参考建议。</p>'
+                     f'<a class="btn" href="/holdings/{esc(name)}">输入真实仓位 · 模拟建议</a></section>'
+                     if value["config"]["scope"] == "forward_paper" else '')
         scope = "前向模拟" if value["config"]["scope"] == "forward_paper" else "历史演示"
         empty_row = lambda columns, label: f'<tr><td colspan="{columns}" class="empty-cell">{label}</td></tr>'
         summary = '<div class="metrics account-metrics">' + \
@@ -175,7 +190,7 @@ def register(app, workdir, *, page, guard, token):
             metric("记录期收益", f'{stats["change"]:+.2%}' if stats["change"] is not None else "暂无", "相对首个记录日") + \
             metric("最大回撤", f'{stats["drawdown"]:.2%}' if stats["drawdown"] is not None else "暂无", "记录期内") + \
             metric("累计费用（元）", f'{stats["fees"]:,.2f}', "佣金与印花税") + '</div>'
-        return page(f"模拟账户 {name}", '<p class="breadcrumb"><a href="/paper">全部账户</a> / 账户详情</p>'
+        return page(f"纸面交易 {name}", '<p class="breadcrumb"><a href="/paper">全部账户</a> / 账户详情</p>' + previous +
                     f'<div class="page-heading"><div><span class="scope-label">{scope}</span><h1>{esc(name)}</h1></div>'
                     f'<div class="actions"><a href="/paper/{esc(name)}/history.csv">下载账户历史</a>'
                     f'<form method="post" action="/paper/{esc(name)}/tick">'
@@ -191,8 +206,19 @@ def register(app, workdir, *, page, guard, token):
                     f'<th>成交股数</th><th>状态</th></tr>{trades or empty_row(5, "暂无模拟成交")}</table></div>{rejections}</section></div>'
                     '<section class="data-section"><h2>每日账户记录</h2><div class="tw"><table><tr><th>日期</th><th>权益</th><th>现金</th>'
                     f'<th>费用</th><th>记录类型</th></tr>{rows or empty_row(5, "尚无记录，等待完整收盘数据")}</table></div></section>'
+                    f'<section class="data-section"><h2>自动运行</h2>{automation}</section>'
                     f'<details open class="operation-details"><summary>任务状态与记录完整性</summary>{operations or "尚无每日任务记录"}</details>'
-                    f'<details><summary>冻结协议</summary><code>{esc(value["config"]["protocol_hash"])}</code></details>')
+                    f'<details><summary>冻结协议</summary><code>{esc(value["config"]["protocol_hash"])}</code></details>' + next_step)
+
+    @app.post("/paper/{name}/automatic")
+    async def automatic_setting(req: Request, name: str):
+        form = await req.form()
+        guard(req, form.get("token"))
+        try:
+            paper_auto.configure(workdir, name, form.get("enabled") == "yes")
+        except (ValueError, OSError) as exc:
+            return page("自动记账未启用", f'<p>{esc(exc)}</p>')
+        return RedirectResponse(f"/paper/{name}", 303)
 
     @app.post("/paper/{name}/tick")
     async def tick(req: Request, name: str):

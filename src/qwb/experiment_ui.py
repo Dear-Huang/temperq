@@ -245,6 +245,13 @@ def register(app, workdir: Path, *, page, guard, submit, token: str, markdown):
         run_id = (score.get("lineage") or {}).get("run_id")
         body = '<p><a href="/experiments">返回实验记录</a> · <a href="/experiments/compare">比较结果</a></p>'
         if run_id:
+            from .workflow_ui import score_summary
+            summary = score_summary(score)
+            body += (f'<div class="page-heading"><h1>{summary["label"]}</h1></div>'
+                     f'<p>{esc(summary["message"])}</p>'
+                     '<p class="notice">此结论不代表可投入实盘。证据不足时，纸面账户仅用于继续观察。</p>'
+                     f'<div class="actions"><a class="btn" href="/workflow/{run_id}/paper">下一步：纸面交易</a>'
+                     f'<a href="/workflow/{run_id}">继续训练 / 调参 / 删除模型</a></div>')
             body += (f'<p><a href="/experiments/{run_id}">对应训练版本</a> · '
                      f'<a href="/experiments/{run_id}/evidence.zip?evaluation_id={evaluation_id}">导出含 Bench 的研究摘要</a></p>')
         body += markdown((root / "report.md").read_text(encoding="utf-8"))
@@ -268,4 +275,4 @@ def register(app, workdir: Path, *, page, guard, submit, token: str, markdown):
         except (OSError, ValueError, KeyError) as exc:
             raise HTTPException(400, str(exc)) from None
         return Response(payload, media_type="application/zip", headers={
-            "Content-Disposition": f'attachment; filename="wisehold-evidence-{run_id}.zip"'})
+            "Content-Disposition": f'attachment; filename="temperq-evidence-{run_id}.zip"'})

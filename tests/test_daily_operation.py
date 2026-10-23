@@ -171,3 +171,15 @@ def test_append_keeps_old_snapshot_and_st_intervals(tmp_path, monkeypatch):
     assert str(updated_st.iloc[0].end)[:10] == "2026-10-22"
     second = full_market.update(tmp_path, feed, "2026-10-22", log=lambda *a, **kw: None)
     assert first["snapshot"] == second["snapshot"] and second["new_sessions"] == 0
+
+
+def test_scheduled_runner_uses_bound_account_feed_not_developer_paths(tmp_path, monkeypatch):
+    import importlib.util
+
+    source = Path(__file__).parents[1] / "scripts" / "run_daily_paper.py"
+    spec = importlib.util.spec_from_file_location("daily_runner", source)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    monkeypatch.setattr(paper, "inspect", lambda *a: {"config": {"data": {"dir": "data/custom_feed"}}})
+    assert module.account_feed(tmp_path, "my_account") == (tmp_path / "data/custom_feed").resolve()
+    assert module.account_feed(tmp_path, "my_account", "other_feed") == (tmp_path / "other_feed").resolve()

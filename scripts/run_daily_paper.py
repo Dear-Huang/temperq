@@ -6,7 +6,15 @@ import sys
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
-from qwb import daily_operation, pipeline
+from qwb import daily_operation, paper
+
+
+def account_feed(workdir, name, override=None):
+    source = override or paper.inspect(workdir, name)["config"]["data"].get("dir")
+    if not source:
+        raise ValueError("Account has no bound daily data feed; specify --feed")
+    path = Path(source)
+    return path.resolve() if path.is_absolute() else (Path(workdir) / path).resolve()
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(__doc__)
@@ -14,8 +22,7 @@ if __name__ == "__main__":
     parser.add_argument("--feed")
     parser.add_argument("--activate", action="store_true", help="bind an unstarted account; preserve its prior configuration")
     args = parser.parse_args()
-    local = pipeline.find_local_config(ROOT)
-    feed = Path(args.feed) if args.feed else Path(local["data_dir"]).parent / "qwb_full_market_live"
+    feed = account_feed(ROOT, args.account, args.feed)
     if args.activate:
         daily_operation.activate_unstarted(ROOT, args.account, feed)
     result = daily_operation.run(ROOT, args.account, feed)
