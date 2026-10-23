@@ -330,6 +330,8 @@ def test_dividend_rights_survive_sale_and_payment_gradient_flows_through_recorde
 
 
 def test_continuous_audit_recomputes_recipes_rejects_rehashed_forgery_and_keeps_attempts(tmp_path, monkeypatch):
+    # Other tensor-account tests remain useful without the optional solver stack.
+    pytest.importorskip("cvxpy", reason="causal recipe audit requires the optional e2e solver extra")
     from qwb import experiments, pipeline, runconfig
     from qwb.portfolio import prediction
     from test_prediction_allocation import fixture, config

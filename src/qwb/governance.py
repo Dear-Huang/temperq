@@ -31,7 +31,10 @@ LIMITATIONS = ["历史回放，不是前向成绩；不连接券商或自动下�
     "原始股数开盘代理；公司行动不支持，持仓复权因子变化会停止回放。",
     "扣佣金、印花税和用户指定的滑点压力，未标定真实价差与冲击。",
     "日线平方收益是风险代理，不是高频 realized variance；短样本不能证明盈利。",
-    "仓位限制约束目标；跳空、涨跌停和停牌可能导致实际持仓超限。"]
+    "仓位限制约束目标；跳空、涨跌停和停牌可能导致实际持仓超限。",
+    "平均仓位匹配使用整段历史，属于事后解释对照，不是可部署策略或 ML 增益证明。"]
+EXPOSURE_MATCH_TOLERANCE = .002  # 0.2 percentage points of actual mean exposure
+EXPOSURE_MATCH_STEPS = 12
 
 
 @dataclass(frozen=True)
@@ -173,9 +176,12 @@ class RiskHead:
 
 
 def replay(panel, signals, cfg, *, mode, start, end, initial_cash, snapshot_id, samples,
-           check=lambda: None, log=lambda message: None):
+           check=lambda: None, log=lambda message: None, constant_exposure=None):
     if mode not in {"fixed", "ewma", "ml"}:
         raise ValueError("unknown risk control")
+    if constant_exposure is not None and (mode != "fixed" or isinstance(constant_exposure, bool)
+            or not np.isfinite(constant_exposure) or not 0 <= constant_exposure <= cfg.exposure_cap):
+        raise ValueError("固定仓位对照必须在原授权内，只适用于固定仓位政策")
     dates = panel["close"].index
     if pd.Timestamp(start) < dates[0] or pd.Timestamp(end) > dates[-1] or pd.Timestamp(start) > pd.Timestamp(end):
         raise ValueError("回放起止日期必须在行情覆盖范围内且顺序正确")
@@ -184,7 +190,8 @@ def replay(panel, signals, cfg, *, mode, start, end, initial_cash, snapshot_id, 
         raise ValueError("回放至少需要两个交易日，首日必须有信号")
     if not np.isfinite(initial_cash) or initial_cash <= 0:
         raise ValueError("初始资金需为正数")
-    identity = experiments.object_digest({"schema": SCHEMA, "config": asdict(cfg), "mode": mode})
+    identity = experiments.object_digest({"schema": SCHEMA, "config": asdict(cfg), "mode": mode,
+                                         "constant_exposure": constant_exposure})
     fees = Fees(slippage_bp=cfg.slippage_bp)
     risk, head = RiskData(panel), RiskHead(samples)
     state = AccountState(str(selected_days[0].tz_localize("Asia/Shanghai") + pd.Timedelta(hours=15, minutes=30)),
@@ -237,7 +244,7 @@ def replay(panel, signals, cfg, *, mode, start, end, initial_cash, snapshot_id, 
                 variance, risk_reason = (f[1], "EWMA_RISK") if mode == "ewma" else head.predict(day, t, f[0], f[1])
             # Reserve a tiny amount for strict binary floating-point cash checks.
             cap = max(0., min(cfg.exposure_cap, 1-cfg.cash_floor)-1e-12)
-            requested_exposure = cfg.exposure_cap if variance is None else cfg.target_volatility / np.sqrt(variance)
+            requested_exposure = (cfg.exposure_cap if constant_exposure is None else constant_exposure) if variance is None else cfg.target_volatility / np.sqrt(variance)
             exposure = min(cap, requested_exposure)
             weight = min(exposure / cfg.n_hold, cfg.max_weight)
             pending = {code: weight for code in basket}
@@ -281,6 +288,53 @@ def replay(panel, signals, cfg, *, mode, start, end, initial_cash, snapshot_id, 
             "risk_models": head.checkpoints, "metrics": summarize(paths, decisions, initial_cash, cfg)}
 
 
+def exposure_matched_control(panel, signals, cfg, reference, fixed, *, start, end,
+        initial_cash, snapshot_id, samples, check=lambda: None, log=lambda message: None):
+    """Post-hoc explanation only: calibrate constant intent to actual ML exposure.
+
+    Integer execution and policy feedback make the mapping discontinuous and not
+    necessarily monotone. Retain the best tested point and disclose the residual;
+    never select using returns or claim exact matching when it is infeasible.
+    """
+    target = reference["metrics"]["mean_exposure"]
+    trials = [{"constant_target": cfg.exposure_cap,
+               "actual_mean": fixed["metrics"]["mean_exposure"]}]
+    best, constant = fixed, cfg.exposure_cap
+    gap = abs(trials[0]["actual_mean"]-target)
+    lo, hi = 0., min(cfg.exposure_cap, 1-cfg.cash_floor)
+    if gap > EXPOSURE_MATCH_TOLERANCE:
+        for step in range(EXPOSURE_MATCH_STEPS):
+            check()
+            candidate = 0. if step == 0 else (lo+hi)/2
+            arm = replay(panel, signals, cfg, mode="fixed", start=start, end=end,
+                initial_cash=initial_cash, snapshot_id=snapshot_id, samples=samples,
+                constant_exposure=candidate, check=check)
+            actual = arm["metrics"]["mean_exposure"]
+            trials.append({"constant_target": candidate, "actual_mean": actual})
+            current = abs(actual-target)
+            if current < gap:
+                best, constant, gap = arm, candidate, current
+            log(f"事后仓位匹配 {step+1}/{EXPOSURE_MATCH_STEPS}：实际差 {current:.4%}")
+            if gap <= EXPOSURE_MATCH_TOLERANCE:
+                break
+            if actual < target:
+                lo = candidate
+            else:
+                hi = candidate
+    # Do not mutate the original fixed arm if it already meets the tolerance.
+    result = dict(best)
+    result["diagnostic"] = {"scope": "post_hoc_explanation_not_deployable", "reference_arm": "ml",
+        "matched_quantity": "mean_actual_close_exposure_excluding_initial_state",
+        "reference_mean_exposure": target, "constant_target_exposure": float(constant),
+        "actual_mean_exposure": best["metrics"]["mean_exposure"],
+        "signed_match_error": best["metrics"]["mean_exposure"]-target,
+        "tolerance": EXPOSURE_MATCH_TOLERANCE,
+        "status": "MATCHED_WITHIN_TOLERANCE" if gap <= EXPOSURE_MATCH_TOLERANCE else "NOT_MATCHED",
+        "selection_criterion": "absolute_exposure_error_only_not_return",
+        "trials": trials, "limitation": "使用整个回放区间的 ML 仓位校准；不能区分所有风格/择时效应或证明 alpha。"}
+    return result
+
+
 def summarize(path, decisions, cash, cfg):
     equity = np.array([row["equity"] for row in path])
     returns = np.array([row["net_return"] for row in path[1:]])
@@ -308,6 +362,8 @@ def compare(panel, signals, cfg, *, start, end, initial_cash=100000, snapshot_id
         log(f"运行 {name}")
         arms[name] = replay(panel, signals, rules, mode=mode, start=start, end=end,
             initial_cash=initial_cash, snapshot_id=snapshot_id, samples=samples, check=check, log=log)
+    arms["ml_matched_fixed"] = exposure_matched_control(panel, signals, cfg, arms["ml"], arms["fixed"],
+        start=start, end=end, initial_cash=initial_cash, snapshot_id=snapshot_id, samples=samples, check=check, log=log)
     return arms, samples
 
 
@@ -338,7 +394,11 @@ def run(predictions, data_dir, output, cfg, *, start, end, initial_cash=100000,
         record.update(signal_hash=experiments.digest(predictions), snapshot_id=snapshot_id,
             environment={"numpy": np.__version__, "pandas": pd.__version__},
             execution_policy={"protocol": strategy.protocol()[0], "fees": asdict(Fees(slippage_bp=cfg.slippage_bp)),
-                              "initial_account": "cash_only", "cadence_sessions": 5},
+                              "initial_account": "cash_only", "cadence_sessions": 5,
+                              "cadence_anchor": "first_observed_session_within_requested_interval",
+                              "cadence_anchor_resets_when_replay_start_changes": True},
+            exposure_match_spec={"scope": "post_hoc_explanation_not_deployable",
+                "reference_arm": "ml", "tolerance": EXPOSURE_MATCH_TOLERANCE, "max_steps": EXPOSURE_MATCH_STEPS},
             data_files={p.relative_to(snapshot).as_posix(): experiments.digest(p)
                         for p in sorted(snapshot.rglob("*")) if p.is_file() and p.suffix in {".parquet", ".csv", ".json"}},
             implementation_hash=experiments.object_digest({"governance": experiments.digest(Path(__file__)),
@@ -351,12 +411,13 @@ def run(predictions, data_dir, output, cfg, *, start, end, initial_cash=100000,
                        "training_basket": "decision_known_top_n_equal_weight",
                        "label": "annualized_mean_square_adjusted_open_returns"})
         record["experiment_hash"] = experiments.object_digest({key: record[key] for key in
-            ("schema", "config", "start", "end", "initial_cash", "signal_hash", "snapshot_id", "data_files", "implementation_hash", "risk_spec", "environment", "execution_policy")})
+            ("schema", "config", "start", "end", "initial_cash", "signal_hash", "snapshot_id", "data_files", "implementation_hash", "risk_spec", "environment", "execution_policy", "exposure_match_spec")})
         experiments.write(output / "result.json", record)
         arms, samples = compare(panel, signals, cfg, start=start, end=end, initial_cash=initial_cash,
                                 snapshot_id=snapshot_id, check=check, log=log)
         samples.to_parquet(output / "risk_samples.parquet", index=False)
         record["metrics"] = {}
+        record["diagnostics"] = {}
         for name, arm in arms.items():
             root = output / name
             root.mkdir()
@@ -364,6 +425,8 @@ def run(predictions, data_dir, output, cfg, *, start, end, initial_cash=100000,
             for kind in ("decisions", "fills", "positions", "risk_models"):
                 (root / f"{kind}.jsonl").write_text("".join(json.dumps(row, ensure_ascii=False, default=str)+"\n" for row in arm[kind]), encoding="utf-8")
             record["metrics"][name] = arm["metrics"]
+            if "diagnostic" in arm:
+                record["diagnostics"][name] = arm["diagnostic"]
         record.update(status="SUCCEEDED", elapsed_seconds=round(time.perf_counter()-started, 3),
             conclusion="历史工程对照完成；不据此宣布 ML 优于规则或产生 alpha。")
     except BaseException as exc:

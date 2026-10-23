@@ -14,7 +14,8 @@ from . import daily_data, experiments, governance
 from .strategy_ui import reason_text
 
 LABELS = {"rules_baseline": "规则基线（无排名缓冲、无单票截断）", "fixed": "你的规则 · 固定仓位",
-          "ewma": "你的规则 · EWMA 风险控制", "ml": "你的规则 · ML 风险控制"}
+          "ewma": "你的规则 · EWMA 风险控制", "ml": "你的规则 · ML 风险控制",
+          "ml_matched_fixed": "同平均仓位 · 固定仓位（事后解释）"}
 REASONS = {"BUY_TOP_N": "进入买入排名", "HOLD_IN_BAND": "排名仍在继续持有范围",
            "REDUCED_MANDATE": "受总仓位上限或最低现金约束",
            "SELL_OUT_OF_BAND": "离开继续持有范围或名额不足", "CAPPED_MAX_WEIGHT": "单票上限截断，余款留现金",
@@ -80,7 +81,7 @@ def register(app, workdir, *, page, guard, token, locate, submit, datasets):
             '<label class="f">每边滑点压力（bp） <input type="number" name="slippage_bp" min="0" max="1000" step="0.1" value="0" required></label>'
             '<p class="mut">风险目标采用日线平方收益代理；它是调仓依据，不是回撤或亏损保证。'
             '模型不能改动授权。首版不含止损、大盘择时和换手预算。</p></section>'
-            '<button>记录本次尝试并运行四组对照</button></form>'
+            '<button>记录本次尝试并运行对照</button></form>'
             f'<h2>本地尝试记录 · {len(attempts)} 次</h2><p class="mut">记录可用于自查，不能证明在别处没有尝试或本地记录未被删除。</p><ul>{history}</ul>')
 
     @app.post("/governance")
@@ -123,8 +124,10 @@ def register(app, workdir, *, page, guard, token, locate, submit, datasets):
                 f'{m["gross_traded_fraction"]:.2f}', f'{m["risk_target_error"]:.2%}', q,
                 m["ml_warmup_decisions"], m["actual_constraint_violations"])) + '</tr>'
         # Native SVG keeps the report self-contained and works without a chart CDN.
-        colors = {"rules_baseline": "#9097a4", "fixed": "#bb7834", "ewma": "#43866c", "ml": "#527ddd"}
-        curves = {name: pd.read_csv(path / name / "path.csv").equity.to_numpy()/result["initial_cash"] for name in LABELS}
+        colors = {"rules_baseline": "#9097a4", "fixed": "#bb7834", "ewma": "#43866c", "ml": "#527ddd",
+                  "ml_matched_fixed": "#9560b5"}
+        available = list(result["metrics"])
+        curves = {name: pd.read_csv(path / name / "path.csv").equity.to_numpy()/result["initial_cash"] for name in available}
         low, high = min(float(v.min()) for v in curves.values()), max(float(v.max()) for v in curves.values())
         span = max(high-low, .001)
         lines = ''.join('<polyline fill="none" stroke="'+colors[name]+'" stroke-width="2" points="' +
@@ -135,15 +138,26 @@ def register(app, workdir, *, page, guard, token, locate, submit, datasets):
                        for value,y in [(high,35),((low+high)/2,130),(low,225)])
         axes += (f'<text x="30" y="250" fill="#757d89" font-size="12">{esc(result["start"])}</text>'
                  f'<text x="930" y="250" text-anchor="end" fill="#757d89" font-size="12">{esc(result["end"])}</text>')
-        chart = f'<svg role="img" aria-label="四组历史净值对照，初始净值为一" viewBox="0 0 960 260" style="width:100%;height:auto"><title>历史净值对照，初始净值为一</title>{axes}{lines}</svg>'
-        legend = ' · '.join(f'<span style="color:{colors[name]}">{esc(LABELS[name])}</span>' for name in LABELS)
+        chart = f'<svg role="img" aria-label="历史净值对照，初始净值为一" viewBox="0 0 960 260" style="width:100%;height:auto"><title>历史净值对照，初始净值为一</title>{axes}{lines}</svg>'
+        legend = ' · '.join(f'<span style="color:{colors[name]}">{esc(LABELS[name])}</span>' for name in available)
+        diagnostic = result.get("diagnostics", {}).get("ml_matched_fixed")
+        matching = '<p class="warn">旧版结果尚无相同平均仓位对照，请新建实验；不能据此归因 ML 效果。</p>'
+        if diagnostic:
+            status = "误差在容许范围内" if diagnostic["status"] == "MATCHED_WITHIN_TOLERANCE" else "未匹配成功，勿据此归因"
+            matching = (f'<p>仓位匹配：ML 实际平均仓位 {diagnostic["reference_mean_exposure"]:.2%}；'
+                f'固定仓位对照 {diagnostic["actual_mean_exposure"]:.2%}；差 {diagnostic["signed_match_error"]*100:+.3f} 个百分点，{status}。</p>'
+                f'<p class="mut">用了 {len(diagnostic["trials"])} 次仅按仓位误差选择的校准，未按收益选优。'
+                '第五组使用整个区间的信息，是事后解释对照，不是当时可执行的策略；相同平均仓位也不等于相同风险。</p>')
+        if result["metrics"]["ml"]["sessions"] < 252:
+            matching += '<p class="warn">回放不足一年，只作短窗口工程检查；请勿从少量风险标签判断模型优劣。更长样本仍需检验不确定性。</p>'
         return page("治理对照报告", back + '<h1>规则和风险控制改变了什么</h1>'
             f'<p>{esc(result["start"])} 至 {esc(result["end"])} · {result["elapsed_seconds"]:.2f} 秒 · 历史回放</p>'
-            f'<p class="warn">{esc(result["conclusion"])}</p>{chart}<p>{legend}</p>'
-            '<div class="tw"><table><tr><th>方案</th><th>净收益</th><th>最大回撤</th><th>平均仓位</th><th>费用（元）</th>'
+            f'<p class="warn">{esc(result["conclusion"])}</p>{chart}<p>{legend}</p>{matching}'
+            '<p class="mut">表格可左右滑动查看全部指标。</p>'
+            '<div class="tw"><table style="min-width:1040px"><tr><th>方案</th><th>净收益</th><th>最大回撤</th><th>平均仓位</th><th>费用（元）</th>'
             '<th>累计成交额/权益</th><th>风险目标误差</th><th>风险预测损失/次数</th><th>ML 回退次数</th><th>实际超限天/项</th></tr>'
             f'{rows}</table></div><p class="mut">风险预测损失在同一前 N 名参考篮子上计算，越低越好；重叠的 5 日标签不独立。'
-            '方案平均仓位不同，收益差不能直接归因于 ML 选股能力；报告未给出显著性结论。</p>'
+            '方案平均仓位不同，收益差不能直接归因于 ML 增益；报告未给出显著性结论。</p>'
             f'<p><a href="/governance/{attempt}/decisions">逐日决策与成交</a> · '
             f'<a href="/governance/{attempt}/result.json">下载配置与结果</a></p>'
             '<details><summary>本次冻结的规则</summary><pre>'+esc(json.dumps(result["config"], ensure_ascii=False, indent=2))+'</pre></details>'
@@ -158,9 +172,12 @@ def register(app, workdir, *, page, guard, token, locate, submit, datasets):
         days = [record["date"] for record in records]
         chosen = day or (days[-1] if days else "")
         record = next((r for r in records if r["date"] == chosen), None)
-        controls = f'<form><select name="arm">'+''.join(f'<option value="{key}"'+(' selected' if key == arm else '')+f'>{esc(value)}</option>' for key,value in LABELS.items())+'</select> '
+        available = experiments.read(path / "result.json").get("metrics", {})
+        controls = f'<form><select name="arm">'+''.join(f'<option value="{key}"'+(' selected' if key == arm else '')+f'>{esc(LABELS[key])}</option>' for key in available)+'</select> '
         controls += '<select name="day">'+''.join(f'<option'+(' selected' if d == chosen else '')+f'>{d}</option>' for d in days)+'</select> <button>查看当天</button></form>'
         body = f'<p><a href="/governance/{attempt}">← 返回对照报告</a></p><h1>决策回放</h1>'+controls
+        if arm == "ml_matched_fixed":
+            body += '<p class="warn">此为整段历史校准的固定仓位事后对照，不能用于前向交易。</p>'
         if record:
             body += f'<p>{esc(REASONS[record["risk_reason"]])} · 目标现金 {record["cash_target"]:.1%} · 计划执行 {record["execution_date"]}</p>'
             if "unconstrained_exposure" in record:

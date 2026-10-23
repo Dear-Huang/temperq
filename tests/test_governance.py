@@ -201,6 +201,44 @@ def test_ml_warmup_is_explicit_not_claimed_as_ml(market):
     assert head.checkpoints == []
 
 
+def test_matched_control_uses_realized_exposure_and_discloses_hindsight(market):
+    panel, signals = market
+    cfg = g.GovernanceConfig(n_hold=2, hold_until_rank=3, max_weight=.6, target_volatility=.07)
+    # Larger cash reduces lot-size quantization; the small-account failure
+    # case below deliberately checks that matching need not be attainable.
+    arms, _ = g.compare(panel, signals, cfg, start=signals.index[300], end=signals.index[325],
+                        initial_cash=1_000_000)
+    control, reference = arms["ml_matched_fixed"], arms["ml"]
+    diagnostic = control["diagnostic"]
+    assert diagnostic["scope"] == "post_hoc_explanation_not_deployable"
+    assert diagnostic["status"] == "MATCHED_WITHIN_TOLERANCE"
+    actual = np.mean([row["exposure"] for row in control["path"][1:]])
+    assert actual == pytest.approx(reference["metrics"]["mean_exposure"], abs=g.EXPOSURE_MATCH_TOLERANCE)
+    assert diagnostic["signed_match_error"] == pytest.approx(actual-reference["metrics"]["mean_exposure"])
+    targets = [d["unconstrained_exposure"] for d in control["decisions"]]
+    assert len(set(targets)) == 1 and control["risk_models"] == []
+    assert targets[0] == diagnostic["constant_target_exposure"]
+    assert all(d["risk_reason"] == "FIXED_EXPOSURE" for d in control["decisions"])
+    assert all(row["cash"] >= 0 for row in control["path"])
+
+
+def test_unattainable_matching_reports_error_instead_of_forcing_weights(market, monkeypatch):
+    panel, signals = market
+    # The account is too small to buy even the minimum lot: no nonzero
+    # exposure is attainable. A constructed reference tests the failure state.
+    cfg = g.GovernanceConfig(n_hold=2, hold_until_rank=3, max_weight=.6)
+    samples = g.risk_samples(g.RiskData(panel), signals, cfg.n_hold)
+    kwargs = dict(start=signals.index[300],end=signals.index[310],initial_cash=1.,snapshot_id="fixture",samples=samples)
+    fixed = g.replay(panel, signals, cfg, mode="fixed", **kwargs)
+    reference = {"metrics":{"mean_exposure":.4}}
+    monkeypatch.setattr(g,"EXPOSURE_MATCH_STEPS",3)
+    arm = g.exposure_matched_control(panel, signals, cfg, reference, fixed, **kwargs)
+    assert arm["diagnostic"]["status"] == "NOT_MATCHED"
+    assert arm["diagnostic"]["signed_match_error"] == pytest.approx(-.4)
+    assert arm["metrics"]["mean_exposure"] == 0
+    assert "diagnostic" not in fixed
+
+
 def test_failure_retained_and_existing_output_never_overwritten(tmp_path, market):
     panel, signals = market
     data, source = snapshot(tmp_path,panel,signals)

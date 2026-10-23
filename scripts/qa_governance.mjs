@@ -29,18 +29,20 @@ try {
   await page.locator('input[name="max_weight"]').fill("30");
   await page.locator('input[name="target_volatility"]').fill("10");
   await capture("editor-desktop");
-  await page.getByRole("button", { name: "记录本次尝试并运行四组对照" }).click();
+  await page.getByRole("button", { name: "记录本次尝试并运行对照" }).click();
   await page.waitForURL(/\/job\//);
   await page.getByRole("link", { name: "查看治理对照与决策回放" }).waitFor({ timeout: 180000 });
   await page.getByRole("link", { name: "查看治理对照与决策回放" }).click();
   await page.waitForURL(/\/governance\/[0-9a-f]{32}$/);
   const report = page.url();
-  if (await page.locator("svg polyline").count() !== 4) throw Error("Missing equity curves");
+  if (await page.locator("svg polyline").count() !== 5) throw Error("Missing equity curves");
   await capture("report-desktop");
   const result = await page.request.get(`${report}/result.json`);
   const payload = await result.json();
   if (payload.status !== "SUCCEEDED" || payload.metrics.ml.ml_warmup_decisions !== 0)
     throw Error("ML did not fit on mature real-data labels");
+  if (!payload.diagnostics.ml_matched_fixed || !await page.getByText(/第五组使用整个区间/).count())
+    throw Error("Missing post-hoc exposure matching disclosure");
   await page.getByRole("link", { name: "逐日决策与成交" }).click();
   await capture("decisions-desktop");
   for (const [width, height] of [[390, 844], [768, 1024]]) {
