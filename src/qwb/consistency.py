@@ -21,7 +21,7 @@ def make_sample(model_files: list[Path], features: list[str], n: int = 256,
     X = np.random.default_rng(seed).uniform(0, 1, (n, len(features))).astype("float32")
     expected = {}
     for p in model_files:
-        b = lgb.Booster(model_file=str(p))
+        b = lgb.Booster(model_str=p.read_text(encoding="utf-8"))
         expected[p.name] = b.predict(X, num_threads=1).tolist()
     return {"features": features, "seed": seed, "X": X.tolist(), "expected": expected,
             "tolerance": TOL}
@@ -37,7 +37,7 @@ def check(package_dir: str | Path, sample_path: str = "consistency/sample.json")
     out = {"R1": True, "R2": True, "models": {}}
     for name, exp in s["expected"].items():
         try:
-            b = lgb.Booster(model_file=str(root / "models" / name))
+            b = lgb.Booster(model_str=(root / "models" / name).read_text(encoding="utf-8"))
         except Exception as e:  # a model that does not load fails R1
             out["R1"] = out["R2"] = False
             out["models"][name] = f"load failed: {type(e).__name__}"

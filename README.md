@@ -42,6 +42,10 @@ TemperQ 是一个在自己电脑上运行的 A 股量化建模工作台。不写
 
 ## 快速开始
 
+**不写代码的 Windows 用户**：便携候选包已构建（约 108MB，自带 Python 和 CPU 依赖）。发布后从 [Releases](https://github.com/Dear-Huang/temperq/releases) 下载 `TemperQ-windows-x64.zip`，完整解压后双击 `start.bat`，无需 Python、uv、git 或 Node。当前验收状态与发布步骤见 [便携版交付说明](docs/WINDOWS_PORTABLE.md)；候选包尚待上传。
+
+**从源码运行**：
+
 需要 Windows 10/11 或 Linux、Python 3.10+，以及 [uv](https://docs.astral.sh/uv/)。LightGBM 只用 CPU，不需要显卡，建议 16GB 以上内存。
 
 **Windows**
@@ -76,7 +80,7 @@ TemperQ 不提供行情数据，你需要自备获得授权的数据。三种方
 
 - **上传 CSV**：每行一只股票一天，含 `code, date, open, high, low, close, amount`，页面上有模板可下载。
 - **Tushare**：填写自己的 token 后自动下载。
-- **BaoStock（免费）**：不需要注册和积分，见 [使用手册 · 零成本数据路径](docs/使用手册.md#九零成本数据路径)。
+- **BaoStock（免费）**：训练页点击“一键下载免费数据”，无需注册、token 或积分。默认 40 股、2021 年至昨天；完成后继续训练。入门样本不代表全市场，见 [使用手册 · 零成本数据路径](docs/使用手册.md#九零成本数据路径)。
 
 建议至少 3 年、720 个交易日的数据。训练前页面会提示数据是否足够。
 

@@ -15,7 +15,7 @@ from . import experiments
 from .jobs import Store
 
 
-ACTIONS = {"train", "protocol", "bench", "compare"}
+ACTIONS = {"train", "protocol", "bench", "compare", "free_data"}
 
 
 def execute(ctx, config: dict, workdir: Path, *, echo=False) -> None:
@@ -26,7 +26,16 @@ def execute(ctx, config: dict, workdir: Path, *, echo=False) -> None:
         if echo:
             print(message, flush=True)
         ctx.check_cancel()
-    if action == "train":
+    if action == "free_data":
+        from .free_data import fetch
+        name = config["name"]
+        import re
+        if not re.fullmatch(r"[A-Za-z0-9_-]{1,40}", name):
+            raise ValueError("invalid dataset name")
+        result = fetch(workdir / "data" / name, start=config["start"], end=config["end"],
+                       log=log, progress=ctx.progress, check_cancel=ctx.check_cancel)
+        out = Path(result["snapshot"])
+    elif action == "train":
         from .pipeline import run
         for note in config.get("notes", []):
             log(note)

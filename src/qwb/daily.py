@@ -353,7 +353,8 @@ def run(P: dict, card: dict, cfg: dict, snapshot_id: str, tz: str, st=None,
             pred[s][te] = booster.predict(Xte, num_threads=cfg["lgbm"]["num_threads"])
             if model_dir is not None:
                 p = model_dir / f"lgbm_fold{i}_seed{s}.txt"
-                booster.save_model(str(p))
+                # Python handles Unicode Windows paths; the native fopen does not.
+                p.write_text(booster.model_to_string(), encoding="utf-8")
                 models.append(p.name)
     test_mask = np.isin(dates, dates[dates.year >= cfg["first_test_year"]])
     return {"dates": dates, "codes": P["close"].columns, "F": F,
@@ -396,7 +397,7 @@ def fit_final(P: dict, card: dict, cfg: dict, snapshot_id: str, tz: str, out_dir
             b, chosen = _fit_lgbm(X, t, names, cfg, s, selection)
             if chosen is not None:
                 choices.append(chosen)
-            b.save_model(str(out_dir / f"lgbm_seed{s}.txt"))
+            (out_dir / f"lgbm_seed{s}.txt").write_text(b.model_to_string(), encoding="utf-8")
             files.append(f"lgbm_seed{s}.txt")
     m = man.to_dict()
     log(f"final model: {len(t)} training rows up to {m['train_end']}")
@@ -410,7 +411,7 @@ def predict_rows(model_dir: Path, meta: dict, X: np.ndarray) -> np.ndarray:
         coef = np.asarray(json.loads((model_dir / "ridge.json").read_text("utf-8"))["coef"])
         return ridge_predict(coef, X)
     import lightgbm as lgb
-    preds = [lgb.Booster(model_file=str(model_dir / f)).predict(X, num_threads=4)
+    preds = [lgb.Booster(model_str=(model_dir / f).read_text(encoding="utf-8")).predict(X, num_threads=4)
              for f in meta["files"]]
     return np.mean(preds, axis=0)
 

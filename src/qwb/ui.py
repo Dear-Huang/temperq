@@ -462,7 +462,7 @@ def create_app(workdir: Path, task_dir: Path | None = None,
 
     def submit(kind: str, cfg: dict, fn=None) -> str:
         jid = store.submit(JobSpec(kind, cfg))
-        if cfg.get("action") in {"train", "protocol", "bench", "compare"}:
+        if cfg.get("action") in {"train", "protocol", "bench", "compare", "free_data"}:
             from . import worker
             if runner is default_runner:
                 try:
@@ -743,6 +743,24 @@ def create_app(workdir: Path, task_dir: Path | None = None,
             return oops(str(e))
         return RedirectResponse(f"/?ds={key}#step3", 303)
 
+    @app.post("/data/free")
+    async def data_free(req: Request):
+        form = dict((await req.form()).items())
+        guard(req, form.get("token"))
+        from . import free_data
+        name = "free_daily"
+        start = str(form.get("start", "2021-01-01"))
+        end = free_data.completed_day()
+        try:
+            a, b = free_data.dates(start, end)
+            if (b - a).days < 1095:
+                raise ValueError("入门训练请至少下载 3 年日线，建议保留默认的 2021 年起始日期")
+        except ValueError as exc:
+            return oops(str(exc))
+        jid = submit("fetch", {"action": "free_data", "name": name, "start": start, "end": end,
+                               "ui": {"name": "免费日线 · 40 股入门数据", "what": "free_data", "dataset": name}})
+        return RedirectResponse(f"/job/{jid}", 303)
+
     @app.post("/data/tushare")
     async def data_tushare(req: Request):
         form = dict((await req.form()).items())
@@ -803,6 +821,9 @@ def create_app(workdir: Path, task_dir: Path | None = None,
         if running and what == "fetch":
             parts.append('<p class="mut">下载 8 年全市场数据大约 1 小时。中途断了可以重新提交同名下载，'
                          '已下载的部分会直接复用。</p>')
+        if running and what == "free_data":
+            parts.append('<p class="mut">正在下载 40 只沪深股票的原始日线、复权因子和 ST 状态。'
+                         '可以关闭页面，任务会继续；断网或取消不会发布半份数据，失败后可重试。</p>')
         if st.get("error"):
             parts.append(f'<div class="box bad"><b>出错信息</b><pre class="plain">'
                          f'{html.escape(st["error"])}</pre></div>')
@@ -833,7 +854,10 @@ def create_app(workdir: Path, task_dir: Path | None = None,
                 parts.append(f'<p><a href="/experiments/{out_dir.name}">训练版本与独立 Bench</a></p>')
             parts.append(f'<p class="mut">结果文件夹：<code>{html.escape(str(out_dir))}</code>（模型文件、'
                          '每日预测表 predictions.parquet、报告 report.md）</p>')
-        if st["state"] == "succeeded" and what == "fetch":
+        if st["state"] == "succeeded" and what in ("fetch", "free_data"):
+            if what == "free_data":
+                parts.append('<p>这是今天选定的 40 股入门样本，用于走通训练流程；'
+                             '不能代表全市场表现，也不能用它证明未来收益。</p>')
             parts.append(f'<p><a class="btn" href="/?ds={html.escape(ui.get("dataset", ""))}#step3">'
                          '用这份数据继续 →</a></p>')
         parts.append(f'<details{" open" if st["state"] == "failed" else ""}><summary>运行日志</summary>'
@@ -1371,6 +1395,13 @@ INDEX = """
 </form>
 
 <section class="step" style="margin-top:-8px;border-top:0">
+<div class="box"><h3>没有数据？从免费日线开始</h3>
+<p>无需账号或 token。下载 40 只沪深股票，默认从 2021 年到昨天，包含原始价格、成交额、复权因子和 ST 状态。
+这是入门样本，不代表全市场；涨跌停价按规则估算，数据源可能延迟或中断。</p>
+<form method="post" action="/data/free"><input type="hidden" name="token" value="{token}">
+<details><summary>修改起始日期</summary><label class="f">从 <input type="date" name="start" value="2021-01-01" min="2005-01-01"></label></details>
+<button>一键下载免费数据（BaoStock）</button>
+<p class="mut">需要联网。再次点击只追加新日期；完成后点“用这份数据继续”，即进入参数确认。</p></form></div>
 <details><summary>添加数据 · 方式 A：上传 CSV 文件</summary><div class="sub">
 <p>每行是一只股票一天的数据。必填列：<code>code 代码</code> <code>date 日期</code> <code>open 开盘</code>
 <code>high 最高</code> <code>low 最低</code> <code>close 收盘</code> <code>amount 成交额（元）</code>；

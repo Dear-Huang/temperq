@@ -1,0 +1,41 @@
+name: Windows portable package
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  package:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: '0.11.24'
+      - name: Install independent Python runtime
+        shell: pwsh
+        run: |
+          uv python install 3.11.15
+          $runtimePython = uv python find --system --no-project --managed-python 3.11.15
+          "PORTABLE_PYTHON_HOME=$(Split-Path $runtimePython)" >> $env:GITHUB_ENV
+      - name: Build CPU package
+        shell: pwsh
+        run: |
+          uv run --no-project --python 3.11.15 --with pyyaml==6.0.3 python -X utf8 scripts/build_windows_portable.py artifacts/windows-portable --python-home "$env:PORTABLE_PYTHON_HOME"
+      - name: Relocate and test without network or development tools
+        shell: pwsh
+        run: |
+          & "$env:PORTABLE_PYTHON_HOME/python.exe" -X utf8 scripts/check_windows_portable.py artifacts/windows-portable/TemperQ-windows-x64.zip "artifacts/便携验收 test"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: TemperQ-windows-x64
+          path: |
+            artifacts/windows-portable/TemperQ-windows-x64.zip
+            artifacts/windows-portable/SHA256SUMS.txt
+            artifacts/便携验收 test/acceptance.json
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: portable-failure-logs
+          path: |
+            artifacts/便携验收 test/startup.log
+            artifacts/便携验收 test/TemperQ/runs/jobs/

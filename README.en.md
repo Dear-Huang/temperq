@@ -78,7 +78,7 @@ TemperQ does not ship market data; bring your own licensed data. Three options:
 
 - **CSV upload**: one row per stock per day with `code, date, open, high, low, close, amount`. A template is available on the page.
 - **Tushare**: downloads automatically with your own token.
-- **BaoStock (free)**: no registration or credits required. See the user manual (Chinese), section 9.
+- **BaoStock (free)**: use the one-click free-data button on the training page; no account, token or credits needed. The 40-stock onboarding sample starts in 2021 and ends yesterday. It is not a historical market universe; see the user manual (Chinese), section 9.
 
 At least 3 years (720 trading days) of data is recommended. The UI tells you before training whether your data is sufficient.
 
