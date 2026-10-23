@@ -27,7 +27,7 @@ import yaml
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
 
-from . import daily, dataset, runconfig, scenario
+from . import daily, dataset, experiments, runconfig, scenario
 from .jobs import JobSpec, Store
 
 NAME_RE = re.compile(r"^[A-Za-z0-9_-]{1,40}$")
@@ -123,6 +123,12 @@ def datasets(workdir: Path) -> dict[str, dict]:
     if local:
         paths.setdefault("local_snapshot", Path(local))
     for k, p in paths.items():
+        if (p / "current.json").is_file():
+            from .daily_data import current
+            try:
+                p = current(p)
+            except (ValueError, OSError):
+                continue
         s = _read_snapshot(p)
         if s is None:
             continue
@@ -347,7 +353,7 @@ def verdict(m: dict) -> list[tuple[str, str]]:
     if net:
         nt = net["net_excess_t"]
         if net["net_excess_ann"] > 0 and nt > 2:
-            out.append(("ok", f"扣掉交易成本后仍然显著赚钱：年化净超额 {net['net_excess_ann']:+.1%}（t={nt:.1f}）。"))
+            out.append(("ok", f"当前假设下，历史年化净超额为 {net['net_excess_ann']:+.1%}（t={nt:.1f}）；未作实盘认证。"))
         elif net["net_excess_ann"] > 0:
             out.append(("warn", f"扣掉交易成本后还剩年化 {net['net_excess_ann']:+.1%}，但统计上不显著（t={nt:.1f}），"
                                 f"不能确定是真本事还是运气。成本吃掉了 {net['cost_ann']:.1%}/年。"))
@@ -445,8 +451,17 @@ def create_app(workdir: Path, task_dir: Path | None = None,
         if not isinstance(tok, str) or not secrets.compare_digest(tok, token):
             raise HTTPException(403, "bad token")
 
-    def submit(kind: str, cfg: dict, fn) -> str:
+    def submit(kind: str, cfg: dict, fn=None) -> str:
         jid = store.submit(JobSpec(kind, cfg))
+        if cfg.get("action") in {"train", "protocol", "bench", "compare"}:
+            from . import worker
+            if runner is default_runner:
+                try:
+                    worker.launch(workdir, jid)
+                except OSError as exc:
+                    store._set(jid, "failed", str(exc))
+                return jid
+            fn = lambda ctx, payload: worker.execute(ctx, payload, workdir)
 
         def work():
             with lock:
@@ -514,18 +529,9 @@ def create_app(workdir: Path, task_dir: Path | None = None,
         cfg_path.write_text(yaml.safe_dump(cfg, allow_unicode=True, sort_keys=False),
                             encoding="utf-8")
 
-        def fn(ctx, _cfg):
-            from . import pipeline
-
-            def log(msg):
-                ctx.log(str(msg))
-                ctx.check_cancel()            # cancel takes effect between folds
-            for n in notes:
-                ctx.log(n)
-            s = pipeline.run(rc, workdir, log=log)
-            (ctx.artifacts / "output.txt").write_text(s["output"], encoding="utf-8")
-        jid = submit("train", {"ui": {"name": rc["name"], "config": str(cfg_path),
-                                      "what": "train"}, "config_hash": rc["config_hash"]}, fn)
+        jid = submit("train", {"action": "train", "resolved": rc, "notes": notes,
+                              "ui": {"name": rc["name"], "config": str(cfg_path),
+                                      "what": "train"}, "config_hash": rc["config_hash"]})
         return RedirectResponse(f"/job/{jid}", 303)
 
     @app.post("/data/csv")
@@ -669,7 +675,7 @@ def create_app(workdir: Path, task_dir: Path | None = None,
         guard(req, form.get("token"))
         path = _combined(dsid)
         sid = str(form.get("sid", ""))
-        if not re.fullmatch(r"s\d{1,4}", sid):
+        if not re.fullmatch(r"s(?:\d{1,4}|[0-9a-f]{16})", sid):
             raise HTTPException(400)
         dataset.remove(path, sid)
         return RedirectResponse(f"/data/{dsid}", 303)
@@ -736,6 +742,12 @@ def create_app(workdir: Path, task_dir: Path | None = None,
         if not JOB_RE.match(jid) or not (store.root / jid).is_dir():
             raise HTTPException(404)
         st, spec = store.status(jid), store.spec(jid)
+        if st["state"] == "running":
+            try:
+                store.recover(jid)
+            except ValueError:
+                pass
+            st = store.status(jid)
         ui = spec["config"].get("ui", {})
         name, what = ui.get("name", jid), ui.get("what", spec["kind"])
         ev = store.logs(jid)
@@ -746,7 +758,7 @@ def create_app(workdir: Path, task_dir: Path | None = None,
         head = {"queued": "排队中", "running": "正在运行…", "succeeded": "完成",
                 "failed": "失败", "cancelled": "已取消"}[st["state"]]
         parts = [f'<p><a href="/">← 返回首页</a></p>',
-                 f'<h2>{ {"train": "训练", "audit": "体检"}.get(what, "下载数据")}：{html.escape(name)}</h2>',
+                 f'<h2>{ {"train": "训练", "audit": "体检", "bench": "Bench", "compare": "版本比较", "protocol": "冻结协议"}.get(what, "下载数据")}：{html.escape(name)}</h2>',
                  f'<p class="state {st["state"]}">{head}</p>']
         if prog:
             p = prog[-1]
@@ -761,10 +773,19 @@ def create_app(workdir: Path, task_dir: Path | None = None,
         if st.get("error"):
             parts.append(f'<div class="box bad"><b>出错信息</b><pre class="plain">'
                          f'{html.escape(st["error"])}</pre></div>')
+        if st["state"] in ("failed", "cancelled") and spec["config"].get("action"):
+            parts.append(f'<form method="post" action="/job/{jid}/retry"><input type="hidden" '
+                         f'name="token" value="{token}"><button>重新运行</button></form>')
         if running:
             parts.append(f'<form method="post" action="/job/{jid}/cancel"><input type="hidden" '
                          f'name="token" value="{token}"><button class="secondary">取消</button></form>')
         out_file = store.root / jid / "artifacts" / "output.txt"
+        if what == "protocol" and st["state"] == "succeeded":
+            parts.append(f'<p><a href="/experiments/{html.escape(ui.get("run_id", ""))}">返回训练版本</a></p>')
+        if what in ("bench", "compare") and out_file.exists():
+            out_dir = Path(out_file.read_text(encoding="utf-8"))
+            link = f'/evaluations/{out_dir.name}' if what == "bench" else f'/comparisons/{out_dir.name}'
+            parts.append(f'<p><a class="btn" href="{link}">查看评价结果</a></p>')
         if st["state"] == "succeeded" and what in ("train", "audit") and out_file.exists():
             out_dir = Path(out_file.read_text(encoding="utf-8"))
             m = json.loads((out_dir / "metrics.json").read_text(encoding="utf-8"))
@@ -775,6 +796,8 @@ def create_app(workdir: Path, task_dir: Path | None = None,
             if (out_dir / "final_model" / "meta.json").is_file():
                 parts.append(f'<p><a class="btn" href="/models/{html.escape(out_dir.name)}">'
                              '用这个模型出今天的持仓清单 →</a></p>')
+            if (out_dir / "run.json").is_file():
+                parts.append(f'<p><a href="/experiments/{out_dir.name}">训练版本与独立 Bench</a></p>')
             parts.append(f'<p class="mut">结果文件夹：<code>{html.escape(str(out_dir))}</code>（模型文件、'
                          '每日预测表 predictions.parquet、报告 report.md）</p>')
         if st["state"] == "succeeded" and what == "fetch":
@@ -889,10 +912,13 @@ def create_app(workdir: Path, task_dir: Path | None = None,
     def _run_dir(run: str) -> Path:
         if not NAME_RE.match(run):
             raise HTTPException(404)
-        d = runs_root / run
+        d = experiments.run_dir(workdir, run) if experiments.ID_RE.fullmatch(run) else runs_root / run
         if not (d / "final_model" / "meta.json").is_file():
             raise HTTPException(404)
-        return d
+        try:
+            return experiments.frozen_source(d)
+        except (OSError, ValueError) as exc:
+            raise HTTPException(400, str(exc)) from None
 
     @app.get("/models", response_class=HTMLResponse)
     def models_page():
@@ -903,7 +929,7 @@ def create_app(workdir: Path, task_dir: Path | None = None,
             synth = x["meta"].get("snapshot_id") == "snap-synthetic"
             ok = (not synth) and x["m"].get("go") and net and net["net_excess_t"] > 2
             badge = ('<span class="tag">试运行</span>' if synth else
-                     '<span class="tag">通过检验</span>' if ok else '<span class="tag warnt">未通过检验</span>')
+                     '<span class="tag">历史诊断通过</span>' if ok else '<span class="tag warnt">未通过检验</span>')
             net_txt = "n/a" if not net else f"{net['net_excess_ann']:+.1%}（t={net['net_excess_t']:.1f}）"
             rows.append(
                 f'<tr><td><a href="/models/{html.escape(x["run"])}"><b>{html.escape(x["run"])}</b></a> {badge}</td>'
@@ -918,8 +944,7 @@ def create_app(workdir: Path, task_dir: Path | None = None,
             if rows else '<p class="mut">还没有训练好的模型。先在“训练模型”页面训练一个。</p>'
         body = ('<h2>使用模型</h2>'
                 '<p>选一个训练好的模型，它会用最新一天的数据给股票池里每只股票打分，给出明天开盘要持有的股票清单，'
-                '以及相对上一期的买入、卖出、继续持有。只有“通过检验”的模型才值得考虑真金白银使用；'
-                '其余的清单只用来看模型在做什么。</p>' + table)
+                '以及相对上一期的买入、卖出、继续持有。历史诊断和持仓清单仅用于研究，不代表可投入实盘。</p>' + table)
         return page("使用模型", body)
 
     def _picks_or_error(run: str, date: str, capital: str):
@@ -977,6 +1002,7 @@ def create_app(workdir: Path, task_dir: Path | None = None,
         cap_txt = scenario.fmt_yuan(r["capital"]) if r["capital"] else "未设定"
         cap_ph = f"{r['capital'] / 1e4:g}" if r["capital"] else ""
         body = (f'<p><a href="/models">← 全部模型</a></p><h2>{html.escape(run)}</h2>'
+                f'<p><a class="btn" href="/models/{html.escape(run)}/account">账户交易建议</a></p>'
                 f'<p class="mut">{html.escape(" · ".join(x for x in (sc.get("universe"), sc.get("horizon"), sc.get("model") or meta["model"]) if x))}'
                 f' · 训练数据到 {html.escape(meta.get("train_end", ""))}</p>'
                 + "".join(f'<div class="box bad">{html.escape(w)}</div>' for w in warn) +
@@ -990,7 +1016,8 @@ def create_app(workdir: Path, task_dir: Path | None = None,
                 f'每只约 {cap_txt if not r["per_name"] else scenario.fmt_yuan(r["per_name"])}，持有 {r["hold_days"]} 个交易日后按同样方法换仓。'
                 f'相对 {r["hold_days"]} 个交易日前的清单：买入 {n.get("买入", 0)} 只，卖出 {n.get("卖出", 0)} 只，'
                 f'继续持有 {n.get("继续持有", 0)} 只。</p>'
-                '<p class="mut">参考价是当天收盘价；股数按资金和参考价估算，取整到一手（科创板 200 股）。'
+                '<p class="mut">本页是模型参考清单，操作比较前后模型选股，不读取你的实际账户。'
+                '参考价是当天收盘价；股数只作估算，科创板应按 200 股起、其后 1 股递增。'
                 '实际成交价是明天开盘价，可能不同。</p></div>'
                 f'<p><a class="btn" href="/models/{html.escape(run)}/picks.csv?date={html.escape(date)}&capital={html.escape(capital)}">'
                 '下载持仓清单 CSV</a>　<a href="/models/' + html.escape(run) + f'/scores.csv?date={html.escape(date)}">'
@@ -1035,6 +1062,32 @@ def create_app(workdir: Path, task_dir: Path | None = None,
         store.cancel(jid)
         return RedirectResponse(f"/job/{jid}", 303)
 
+    @app.post("/job/{jid}/retry")
+    async def retry(req: Request, jid: str):
+        form = await req.form()
+        guard(req, form.get("token"))
+        if not JOB_RE.fullmatch(jid) or not (store.root / jid).is_dir():
+            raise HTTPException(404)
+        from . import worker
+        if store.spec(jid)["config"].get("action") not in worker.ACTIONS:
+            raise HTTPException(400, "此任务尚不支持后台重试")
+        try:
+            store.recover(jid)
+            store.retry(jid)
+            if runner is default_runner:
+                worker.launch(workdir, jid)
+            else:
+                runner(lambda: worker.run_job(workdir, jid))
+        except (OSError, ValueError) as exc:
+            raise HTTPException(400, str(exc)) from None
+        return RedirectResponse(f"/job/{jid}", 303)
+
+    from . import experiment_ui
+    experiment_ui.register(app, workdir, page=page, guard=guard, submit=submit,
+                           token=token, markdown=md_to_html)
+    from . import strategy_ui, paper_ui
+    strategy_ui.register(app, workdir, page=page, guard=guard, token=token, locate=_run_dir)
+    paper_ui.register(app, workdir, page=page, guard=guard, token=token)
     app.state.token = token
     app.state.store = store
     return app
@@ -1060,7 +1113,7 @@ def _job_rows(store: Store) -> str:
         ui = spec.get("config", {}).get("ui")
         if not ui:
             continue
-        kind = {"train": "训练", "audit": "体检外部模型"}.get(ui.get("what"), "下载数据")
+        kind = {"train": "训练", "audit": "体检外部模型", "bench": "Bench", "compare": "版本比较", "protocol": "冻结协议"}.get(ui.get("what"), "下载数据")
         rows.append(f'<tr><td><a href="/job/{j["job_id"]}">{html.escape(ui["name"])}</a></td>'
                     f'<td>{kind}</td><td>{label.get(j["state"], j["state"])}</td>'
                     f'<td>{_local_time(j["updated"])}</td></tr>')
@@ -1108,7 +1161,7 @@ LAYOUT = """<!doctype html><html lang="zh"><head><meta charset="utf-8">
 --acc:#8fb3d9;--accbg:#1f2a36;--ok:#8fc79a;--okbg:#1c2a1f;--warn:#e6c07a;--warnbg:#2c2618;--bad:#e8957a;--badbg:#2e1d17;--code:#262623}}
 *{box-sizing:border-box}body{background:var(--bg);color:var(--fg);font:15px/1.6 system-ui,"Microsoft YaHei",sans-serif;margin:0;padding:0 16px}
 main{max-width:920px;margin:0 auto;padding-block:20px 60px}a{color:var(--acc)}
-h1{font-size:22px;margin:0 0 4px}h2{font-size:19px}h3{font-size:16px}
+h1{font-size:22px;margin:0 0 4px}h2{font-size:19px}h3{font-size:16px}h1,h2,h3{overflow-wrap:anywhere}
 .step{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:16px 18px;margin:14px 0}
 .step>h2{margin:0 0 10px;font-size:17px}.num{display:inline-block;width:26px;height:26px;border-radius:50%;
 background:var(--acc);color:var(--card);text-align:center;line-height:26px;font-size:14px;margin-right:8px}
@@ -1118,25 +1171,28 @@ background:var(--acc);color:var(--card);text-align:center;line-height:26px;font-
 .q{margin:12px 0}.q>b{display:block;margin-bottom:4px}.opt{display:inline-block;margin:3px 16px 3px 0;cursor:pointer}.opt small,.card small{color:var(--mut);margin-left:6px}.off{opacity:.55;cursor:not-allowed}.tag{font-size:12px;border:1px solid var(--line);border-radius:4px;padding:0 5px;margin-left:6px;color:var(--mut)}textarea{font:inherit;width:100%;max-width:640px;margin-top:6px;border:1px solid var(--line);border-radius:6px;padding:6px;background:var(--card);color:var(--fg)}
 details{margin:10px 0}summary{cursor:pointer;color:var(--acc)}
 .sub{border:1px dashed var(--line);border-radius:8px;padding:10px 14px;margin:8px 0}
-label.f{display:inline-block;margin:6px 18px 6px 0}input,select,button{font:inherit;padding:6px 9px;max-width:100%;
+label.f{display:inline-block;margin:6px 18px 6px 0;max-width:calc(100% - 18px)}input,select,button{font:inherit;padding:6px 9px;max-width:100%;
 border:1px solid var(--line);border-radius:6px;background:var(--card);color:var(--fg)}
 input[type=number]{width:7.5em}input[type=radio]{margin-right:6px}
 button,.btn{background:var(--acc);color:var(--card);border:0;border-radius:8px;padding:9px 18px;cursor:pointer;
 text-decoration:none;display:inline-block}button.big{font-size:17px;padding:12px 28px}
 button.secondary{background:transparent;color:var(--acc);border:1px solid var(--acc)}
-.nav{margin:0 0 6px}.nav a{font-weight:600}.mut{color:var(--mut)}.warn{color:var(--warn)}.hw{font-size:13px;color:var(--mut)}
+.nav{margin:0 0 6px}.nav a{font-weight:600;display:inline-block;white-space:nowrap}.mut{color:var(--mut)}.warn{color:var(--warn)}.hw{font-size:13px;color:var(--mut)}
 .box{border-radius:10px;padding:12px 16px;margin:12px 0;background:var(--card);border:1px solid var(--line)}
 .box.ok{background:var(--okbg)}td.ok{color:var(--ok)}td.bad{color:var(--bad)}.warnt{color:var(--warn);border-color:var(--warn)}.box.bad{background:var(--badbg)}
 ul.verdict{padding-left:18px}ul.verdict li{margin:6px 0}li.ok{color:var(--ok)}li.warn{color:var(--warn)}li.bad{color:var(--bad)}
 .state{font-size:18px;font-weight:600}.state.succeeded{color:var(--ok)}.state.failed{color:var(--bad)}
 progress{width:260px;vertical-align:middle}
 .tw{overflow-x:auto}table{border-collapse:collapse;width:100%;font-size:14px}
+.evaluation-list{min-width:620px}.evaluation-list td,.evaluation-list th{white-space:nowrap}
+.identity{display:grid;grid-template-columns:90px minmax(0,1fr);gap:6px 12px}.identity dd{margin:0;overflow-wrap:anywhere}
+.identity code{word-break:break-all}.inline{display:inline}select{min-width:0}code{overflow-wrap:anywhere}
 td,th{border-bottom:1px solid var(--line);padding:6px 6px;text-align:left;vertical-align:top}
 pre.plain{white-space:pre-wrap;word-break:break-word;background:var(--code);padding:10px;border-radius:6px;font-size:13px}
 code{background:var(--code);padding:1px 5px;border-radius:4px;font-size:13px}
 </style></head><body><main>
 <h1>qwb 本地量化工作台</h1>
-<p class="nav"><a href="/">训练模型</a>　·　<a href="/models">使用模型</a>　·　<a href="/audit">体检外部模型</a></p>
+<p class="nav"><a href="/">训练模型</a>　·　<a href="/experiments">实验记录</a>　·　<a href="/models">使用模型</a>　·　<a href="/paper">模拟账户</a>　·　<a href="/audit">体检外部模型</a></p>
 <p class="mut">在自己电脑上训练选股模型。数据只在这台电脑上，不会上传。不构成投资建议。</p>
 {{body}}
 </main></body></html>"""

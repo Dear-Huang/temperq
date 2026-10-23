@@ -154,7 +154,12 @@ def picks(run_dir: Path, cwd: Path, date: str | None = None,
         shares = None
         if per_name and act != "卖出" and close[j] > 0:
             lot = _lot(code)
-            shares = int(math.floor(per_name / close[j] / lot) * lot)
+            if lot == 200:
+                shares = int(math.floor(per_name / close[j]))
+                if shares < 200:
+                    shares = 0
+            else:
+                shares = int(math.floor(per_name / close[j] / lot) * lot)
             if shares == 0:
                 note.append(f"按每只约 {scenario.fmt_yuan(per_name)} 买不到 1 手")
         rows.append({"code": code, "rank": rank_of.get(j),

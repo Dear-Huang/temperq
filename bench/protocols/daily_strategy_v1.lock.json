@@ -1,0 +1,8 @@
+{
+  "schema": "daily_strategy_protocol_lock_v1",
+  "frozen_on": "2026-10-23",
+  "source": "src/qwb/rules/daily_strategy_v1.yaml",
+  "protocol_hash": "sha256:2fbe2ff4dc51f9e71febc035ff5932e6665cfdb760d38c855ebbfe37b9673dc9",
+  "hash_method": "qwb.experiments.object_digest(parsed_yaml)",
+  "change_policy": "Create a new protocol version; do not replace this lock to improve results."
+}

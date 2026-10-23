@@ -138,6 +138,7 @@ def test_markdown_render_escapes_html():
 def test_combined_dataset_flow(tmp_path):
     pytest.importorskip("lightgbm")
     import pandas as pd
+    from qwb import dataset
     app, c = client(tmp_path)
     t = app.state.token
     b = pipeline.synth_bars(n_days=800, n_codes=40).drop(columns="up_limit")
@@ -159,7 +160,7 @@ def test_combined_dataset_flow(tmp_path):
                follow_redirects=False)
     assert r.status_code == 303
     page = c.get("/data/mine_plus").text
-    assert "flow" in page and "次日开盘后" in page
+    assert "flow" in page and "下一交易日决策时使用" in page
     assert "另加 1 个数据来源" in c.get("/").text
     bad = c.post("/data/mine_plus/source", data={"token": t, "kind": "factor", "rule": "announce"},
                  files={"file": ("g.csv", io.BytesIO(f.to_csv(index=False).encode()), "text/csv")})
@@ -169,7 +170,8 @@ def test_combined_dataset_flow(tmp_path):
     page = c.get(r.headers["location"]).text
     assert "完成" in page and "一句话结论" in page
     assert "12 天 × 12 项" not in page and "前视检查" in page
-    assert c.post("/data/mine_plus/remove", data={"token": t, "sid": "s1"},
+    sid = dataset.spec(tmp_path / "data" / "mine_plus")["sources"][0]["id"]
+    assert c.post("/data/mine_plus/remove", data={"token": t, "sid": sid},
                   follow_redirects=False).status_code == 303
     assert "还没有添加来源" in c.get("/data/mine_plus").text
     assert c.post("/data/mine_plus/tushare", data={"token": t, "api_token": "a" * 32}).text.count("至少勾选") == 1

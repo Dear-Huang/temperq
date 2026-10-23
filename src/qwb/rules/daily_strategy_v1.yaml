@@ -1,0 +1,31 @@
+schema: daily_strategy_v1
+market: cn_a
+decision: {day: 0, time: '15:30', timezone: Asia/Shanghai}
+execution: {day: 1, time: '09:30', price: open, lifetime: OPEN_IOC}
+label:
+  start: {day: 1, price: open}
+  end: {day: 6, price: open}
+  horizon_trading_days: 5
+universe:
+  default: all_ex_st
+  supported_boards: [main, chinext, star]
+  min_age_days: 60
+  min_amount_quantile: 0.05
+  user_configuration: frozen_per_strategy_and_separate_comparison_group
+portfolio: {top_share: 0.1, weighting: equal, rebalance_sessions: 5}
+fees:
+  commission_bp: 3.0
+  minimum_commission: 5.0
+  slippage_bp: 0.0
+stamp_tax_sell_bp:
+  - {from: '2008-09-19', until: '2023-08-27', bp: 10}
+  - {from: '2023-08-28', bp: 5}
+quantity_rules:
+  main: {buy_step: 100, minimum_buy: 100, sell_step: 100, minimum_sell: 1}
+  chinext: {buy_step: 100, minimum_buy: 100, sell_step: 100, minimum_sell: 1}
+  star: {buy_step: 1, minimum_buy: 200, sell_step: 1, minimum_sell: 200}
+  odd_lot_sell: whole_remaining_position
+account_input: [cash, holdings_csv]
+unsupported: [corporate_actions, bse, special_orders, existing_pending_orders, leverage]
+execution_scope: raw_share_daily_open_proxy_not_broker_fills
+research_scope: development_not_profit_certification
