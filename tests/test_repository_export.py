@@ -68,3 +68,26 @@ def test_release_ignores_sync_sidecars_created_during_copy(tmp_path, monkeypatch
     assert set(manifest["files_sha256"]) == {"README.md"}
     with zipfile.ZipFile(output / "temperq-source.zip") as archive:
         assert set(archive.namelist()) == {"temperq/README.md", "temperq/SOURCE_MANIFEST.json"}
+
+
+def test_portable_wheel_build_isolated_from_sync_sidecars_and_runtime(tmp_path, monkeypatch):
+    monkeypatch.syspath_prepend(str(SCRIPTS))
+    import build_windows_portable as portable
+    stage=tmp_path/'synced-release';stage.mkdir()
+    for name in ('LICENSE','LICENSE.baiduyun.uploading.cfg','src/qwb/static/deployment.js',
+                 'src/qwb/static/deployment.js.baiduyun.uploading.cfg','runtime/private.dll',
+                 'build/stale.py','src/temperq.egg-info/PKG-INFO'):
+        target=stage/name;target.parent.mkdir(parents=True,exist_ok=True);target.write_text('payload',encoding='utf-8')
+    observed=[]
+    def install(args,**kwargs):
+        source=Path(args[-2]);observed.append(source)
+        assert not source.is_relative_to(stage)
+        assert (source/'LICENSE').read_text(encoding='utf-8')=='payload'
+        assert (source/'src/qwb/static/deployment.js').is_file()
+        assert not list(source.rglob('*.baiduyun.uploading.cfg'))
+        assert not (source/'runtime').exists() and not (source/'build').exists()
+        assert not list(source.rglob('*.egg-info'))
+    monkeypatch.setattr(portable,'run',install)
+    portable.install_sources('python.exe',stage,'uv.exe')
+    assert observed and not observed[0].exists()
+    assert (stage/'LICENSE.baiduyun.uploading.cfg').is_file()  # leave sync state untouched

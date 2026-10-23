@@ -9,6 +9,7 @@ from pathlib import Path
 import shutil
 import subprocess
 import sys
+import tempfile
 import zipfile
 
 from repository_files import ROOT, source_files
@@ -50,6 +51,16 @@ Windows 10/11 x64；内含 Python 和 CPU 训练依赖，无需 Python、uv、gi
 
 def run(args, **kwargs):
     subprocess.run([str(a) for a in args], check=True, **kwargs)
+
+
+def install_sources(python, stage, uv):
+    # Cloud-sync daemons can create/remove sidecars while setuptools scans its
+    # automatic LICENSE* glob. Build outside the synced release directory.
+    with tempfile.TemporaryDirectory(prefix="temperq-wheel-") as temporary:
+        source = Path(temporary) / "source"
+        shutil.copytree(stage, source, ignore=shutil.ignore_patterns(
+            "runtime", "build", "*.egg-info", "__pycache__", "*.baiduyun.uploading.cfg"))
+        run([uv, "pip", "install", "--python", python, "--no-deps", source, source / "third_party/ashare-tcost"])
 
 
 def build(out: Path, python_home: Path, uv: str):
@@ -106,7 +117,7 @@ def build(out: Path, python_home: Path, uv: str):
     run([shutil.which("pwsh") or "powershell.exe", "-NoProfile", "-Command", signature_check],
         env=dict(os.environ, TEMPERQ_RUNTIME_PAYLOAD=str(microsoft)))
     run([uv, "pip", "install", "--python", python, "--only-binary", ":all:", "-r", ROOT / "requirements.lock"])
-    run([uv, "pip", "install", "--python", python, "--no-deps", stage, stage / "third_party/ashare-tcost"])
+    install_sources(python, stage, uv)
     packages = runtime / "Lib" / "site-packages"
     # Local build provenance contains machine paths; source identity is in our manifest.
     for item in packages.glob("*/direct_url.json"):
