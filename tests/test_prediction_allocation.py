@@ -21,6 +21,12 @@ import pandas as pd
 import pytest
 import yaml
 
+import importlib.util
+
+needs_torch = pytest.mark.skipif(
+    any(importlib.util.find_spec(m) is None for m in ("torch", "cvxpy", "cvxpylayers")),
+    reason="optional e2e extra (torch, cvxpy, cvxpylayers) not installed")
+
 
 def config():
     return {"schema_version": "prediction_allocation_v1", "risk": asdict(RiskRecipe(20, 10, .2)),
@@ -101,6 +107,7 @@ def test_missing_risk_asset_fails_without_shrinking_universe_or_inventing_liquid
                  cost=replace(CostRecipe(), available_at="2030-01-01T00:00:00+08:00"))
 
 
+@needs_torch
 def test_prediction_policy_uses_actual_state_and_preserves_full_account_path(tmp_path, monkeypatch):
     _, bundle, protocol, frame = fixture(tmp_path, monkeypatch)
     account, audit = prediction.replay(protocol, bundle, frame, config())
@@ -115,6 +122,7 @@ def test_prediction_policy_uses_actual_state_and_preserves_full_account_path(tmp
         assert row["actual_cost"] - row["intended_proxy_cost"] == pytest.approx(row["intent_to_fill_cost_gap"] + row["cost_model_gap"])
 
 
+@needs_torch
 def test_future_execution_cannot_change_prior_allocation_but_changes_actual_fills(tmp_path, monkeypatch):
     _, bundle, protocol, frame = fixture(tmp_path, monkeypatch)
     before, old_audit = prediction.replay(protocol, bundle, frame, config())
@@ -127,6 +135,7 @@ def test_future_execution_cannot_change_prior_allocation_but_changes_actual_fill
     assert before["states"][0]["after"]["positions"] and not after["states"][0]["after"]["positions"]
 
 
+@needs_torch
 def test_missing_prediction_is_explicit_failure_and_keeps_held_shares(tmp_path, monkeypatch):
     _, bundle, protocol, frame = fixture(tmp_path, monkeypatch)
     decision = frame["decision_time"].unique()[1]
@@ -138,6 +147,7 @@ def test_missing_prediction_is_explicit_failure_and_keeps_held_shares(tmp_path, 
     assert [p["quantity"] for p in account["states"][1]["before"]["positions"]] == [p["quantity"] for p in account["states"][1]["after"]["positions"]]
 
 
+@needs_torch
 def test_locked_account_and_receivable_define_bounds_and_budget(tmp_path, monkeypatch):
     _, bundle, protocol, frame = fixture(tmp_path, monkeypatch)
     s = protocol["sessions"][0]
@@ -167,6 +177,7 @@ def test_prediction_contract_rejects_ambiguous_inputs(tmp_path, monkeypatch, mut
         prediction.PredictionAllocator(bundle, frame, config(), model_version="test", fees=Fees())
 
 
+@needs_torch
 def test_verified_archive_cli_and_recomputation_detect_forged_policy_evidence(tmp_path, monkeypatch):
     path, bundle, protocol, _ = fixture(tmp_path, monkeypatch)
     raw = runconfig.load(path)
@@ -226,6 +237,7 @@ def test_disclosed_projection_preserves_constraints_and_rejects_material_repair(
         project(np.array([.4, .4]), np.zeros(2), np.full(2, .4), np.ones(2), budget=.5, max_turnover=2, tolerance=1e-6)
 
 
+@needs_torch
 def test_declared_projection_keeps_negative_boundary_raw_values_visible(tmp_path, monkeypatch):
     _, bundle, protocol, frame = fixture(tmp_path, monkeypatch)
     frame.loc[frame["code"] == frame["code"].iloc[0], "prediction"] = -.01
@@ -238,6 +250,7 @@ def test_declared_projection_keeps_negative_boundary_raw_values_visible(tmp_path
     assert all(row["allocation"]["postprocessed"] is False for row in audit["attempts"])
 
 
+@needs_torch
 def test_out_of_pool_holdings_have_zero_forecast_and_no_increased_intent(tmp_path, monkeypatch):
     _, bundle, protocol, frame = fixture(tmp_path, monkeypatch)
     s = protocol["sessions"][0]
@@ -254,6 +267,7 @@ def test_out_of_pool_holdings_have_zero_forecast_and_no_increased_intent(tmp_pat
     assert dict(target.weights)[assets[0]] <= position.quantity * position.mark / state.equity + 1e-9
 
 
+@needs_torch
 def test_implementation_and_source_file_changes_during_replay_fail(tmp_path, monkeypatch):
     _, bundle, protocol, frame = fixture(tmp_path, monkeypatch)
     changed = False
@@ -272,6 +286,7 @@ def test_implementation_and_source_file_changes_during_replay_fail(tmp_path, mon
         prediction.replay(protocol, bundle, frame, config(), on_attempt=change_input)
 
 
+@needs_torch
 def test_cancelled_allocation_keeps_plan_and_marks_unrun_decisions(tmp_path, monkeypatch):
     path, bundle, protocol, _ = fixture(tmp_path, monkeypatch)
     raw = runconfig.load(path)

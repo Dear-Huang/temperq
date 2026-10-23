@@ -1,45 +1,50 @@
+<div align="center">
+
 # TemperQ
 
-训练你自己的模型，看清你的每一笔持仓。对外品牌与命令为 **TemperQ / `temperq`**；现有主目录 `quant-workbench`、Python 模块 `qwb` 与旧命令保持兼容，已有模型和账户无需迁移。目前从源码或本地发布包安装，尚未发布到 PyPI。
+**训练你自己的模型，看清你的每一笔持仓。**
 
-本轮界面已完成，预览与发布前核对项见 [UI 核对说明](docs/UI_REVIEW_20261023.md)。本地工作台运行时不需要 Node，也不联网加载字体；官网构建需要 Node，构建后的站点由服务器直接提供。
+[English](README.en.md) · 中文
 
-让普通投资者在自己的电脑或服务器上，用数据训练、修改和比较 A 股模型，并逐步运行成每日可追踪的策略。工作台提供数据准备、训练、前视与成本检查、报告和模型分享；每日账户决策、自动更新与模拟运行仍在补齐，不能把现有参考选股清单视为完整账户交易系统。
+[![CI](https://github.com/Dear-Huang/temperq/actions/workflows/ci.yml/badge.svg)](https://github.com/Dear-Huang/temperq/actions/workflows/ci.yml)
+[![License: AGPL-3.0](https://img.shields.io/badge/license-AGPL--3.0-blue.svg)](LICENSE)
+![Python](https://img.shields.io/badge/python-3.10%2B-blue.svg)
+![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20Linux-lightgrey.svg)
 
-**当前方向（2026-10-23）**：B0 LightGBM/Ridge 为产品主线，B1 原始行情 GRU 为第二模型，B2 净效用训练保留实验地位并暂停扩展。先完成 B0 的每日策略闭环，再做共同真实数据上的模型对照和发布验收。见 [方向入口](docs/specs/README.md)、[实施 SPEC](docs/specs/PRODUCT_WORKFLOW_SPEC.md) 与 [竞品/文献核验](docs/research/PRODUCT_DIRECTION_REVIEW_20261023.md)。下文及历史研究记录中的已运行实验不代表整个产品已经一键可用或具有收益优势。
+</div>
 
-定位与长期取舍见 [PRODUCT_VISION.md](docs/PRODUCT_VISION.md)。用户主流程是 **训练 → 评价 → 纸面交易 → 模拟持仓**：点击已训练模型，选择跑基准或调参重训；评价后用虚拟资金开始纸面观察，再输入真实现金和持仓 CSV 模拟参考建议。操作和免费 BaoStock 路径见 [使用手册](docs/使用手册.md)。行情缺失时账本等待，不补造前向收益。
+TemperQ 是一个在自己电脑上运行的 A 股量化建模工作台。不写代码，也能用自己的数据训练选股模型，看到扣除交易成本后的真实结果，再把模型接到自己的持仓上，每天得到参考建议并记入模拟账本。
 
-2026-10-23 最小交付：账户建议与每日模拟软件链路已验收；全市场独立数据源已补至 2026-10-22，主力前向账户已接入。Windows 每天 17:30 先更新行情、核验截止日，再记账；更新失败会受阻并留痕，漏记/晚到补记在账户页显示。当前上午核验仍为 0 日真实前向记录，收盘后才开始积累；192 日补齐不算前向成绩。原研究快照与模型保留。执行实验 A 已复用同一预测做四种口径对照，见 [实验报告](docs/research/EXECUTION_A_20261023.md)；这是口径适配实验，不是运行 Qlib 引擎或平台胜负结论。外部试用、服务器与免费 BaoStock 联网路径仍待验收。各步骤状态见 [实施 SPEC](docs/specs/PRODUCT_WORKFLOW_SPEC.md)。
+多数量化工具从模型出发，回测就是终点。TemperQ 从账户出发：你现在持有什么，明天该买卖什么，成交后账户会变成什么样。
 
-成本库已并入本仓库，克隆后无需另找同级仓库。
+<p align="center">
+  <img src="docs/img/train.png" width="49%" alt="训练页">
+  <img src="docs/img/paper.png" width="49%" alt="纸面交易账户">
+</p>
 
-## 项目结构
+<p align="center"><sub>左：训练页。右：纸面账户（40 只股票的历史演示，不代表策略表现）。</sub></p>
 
-```text
-quant-workbench/
-  src/qwb/                  训练、数据、报告、CLI、本地 UI
-    bench/                  QW-Bench 评分、账户回放与证据检查
-  website/                  React + Vite + Three.js 网站前端
-  share_site/               FastAPI 模型社区、HF 登录和 SQLite 存储
-  bench/                    评价规格、协议、真实实验说明
-  third_party/ashare-tcost/  已纳入仓库的 STRUCT 成本库，独立 MIT 许可
-  examples/                 任务卡、训练配置与 CSV 模板
-  schemas/                  本地保留的 schema 目录（当前没有发布文件）
-  tests/                    主项目自动测试
-  scripts/                  数据准备、备份、检查与打包工具
-  deploy/                   Docker、Compose、Caddy HTTPS 配置
-  docs/                     用户手册、开发、整合与验证文档
-  .github/workflows/        Windows/Linux 测试、前端和镜像构建 CI
-  data/ models/ runs/        本地数据、权重、训练与 Bench 产物，不上传
-  third_party/Kronos/       可选外部模型源码，不上传
-  archives/                 旧发布目录与原成本库 Git 历史，不上传
-  artifacts/                新生成的源码包/用户发布包，不上传
-```
+## 为什么用 TemperQ
 
-## Windows 快速开始
+- **你自己的模型。** 用你的数据，在你的电脑上训练。数据和模型都不离开本机。
+- **自带审稿人。** 时点数据、前视检查、简单基准对照、扣成本检验默认开启。报告第一页先说明扣掉交易成本后还剩多少，而不是只给好看的预测指标。
+- **落到持仓。** T+1、整手、最低佣金、印花税、涨跌停、ST 从一开始就算在内。输入现金和持仓，得到按股数计算的买卖建议。
+- **持续迭代。** 每次修改都生成新版本，旧版本保留；评价结果会说明差异是否超出随机波动，换不换由你决定。
 
-源码安装需要 [uv](https://docs.astral.sh/uv/)。本地用户发布包已附带 Windows/Linux uv。
+## 四步流程
+
+| 步骤 | 你做什么 | 得到什么 |
+| --- | --- | --- |
+| 1 训练 | 选市场、持有期、股票范围和模型（LightGBM / Ridge） | 训练好的模型和一份报告 |
+| 2 评价 | 在独立基准上检验 | 预测能力、扣成本超额各自是否有证据 |
+| 3 纸面交易 | 用虚拟资金开一个前向账户 | 每天自动记账的净值、持仓、成交和费用 |
+| 4 模拟持仓 | 输入真实现金和持仓 CSV | 按你的账户计算的参考买卖清单 |
+
+## 快速开始
+
+需要 Windows 10/11 或 Linux、Python 3.10+，以及 [uv](https://docs.astral.sh/uv/)。LightGBM 只用 CPU，不需要显卡，建议 16GB 以上内存。
+
+**Windows**
 
 ```powershell
 git clone https://github.com/Dear-Huang/temperq.git
@@ -48,124 +53,53 @@ cd temperq
 .\start.bat
 ```
 
-本地工作台地址通常为 `http://127.0.0.1:8765`，端口占用时自动递增。先选合成数据试运行；真实训练须自行准备获授权的数据。
-
-开发者使用 PowerShell 安装测试和网站依赖：
-
-```powershell
-.\install.ps1 -Dev
-.venv\Scripts\python.exe -m pytest -q
-.venv\Scripts\python.exe -m pytest -q third_party/ashare-tcost/tests
-.venv\Scripts\python.exe scripts/check_repository.py
-```
-
-安装器会重建 `.venv`；已有开发环境只需更新依赖时，见 [开发说明](docs/DEVELOPMENT.md)。安装 CPU 版 LightGBM 不需要 GPU；Kronos/PyTorch 是可选扩展。
-
-## Linux 与服务器训练
+**Linux**
 
 ```bash
-cd /path/to/quant-workbench
-sh install.sh                 # 开发用 --dev；网站依赖用 --with-site
-sh start.sh --no-browser
+git clone https://github.com/Dear-Huang/temperq.git
+cd temperq
+sh install.sh
+sh start.sh
 ```
 
-训练 UI 仅监听回环地址。远程使用 `ssh -N -L 8765:127.0.0.1:8765 user@server`，再在本机打开该地址。Debian/Ubuntu 的 LightGBM 如缺运行库，安装 `libgomp1`。
+浏览器会打开 `http://127.0.0.1:8765`。先选"试运行数据"跑通一遍，几秒钟就能看到第一份报告。
 
-CLI 与网页使用同一训练链路：
+命令行与网页使用同一条训练链路：
 
 ```bash
 temperq run examples/run_smoke.yaml
-temperq run examples/run_cn_rank_5d.yaml --check
-temperq run examples/run_cn_rank_5d.yaml
 ```
 
-真实数据设置：复制 `config.example.yaml` 为 `config.local.yaml`，填写本机数据/缓存路径和 token **文件路径**。现有本机配置会保留，不会被整合覆盖。数据下载可运行 `python scripts/fetch_cn_daily.py`，或使用本地 UI 的 CSV/API 导入。完整步骤见 [使用手册.md](docs/使用手册.md)。
+## 数据
 
-## 网站与社区
+TemperQ 不提供行情数据，你需要自备获得授权的数据。三种方式：
 
-网站 `website/` 由 `share_site/` 提供页面、模型元信息、论坛与 Hugging Face OAuth。前端和后端部署在同一域名下。
+- **上传 CSV**：每行一只股票一天，含 `code, date, open, high, low, close, amount`，页面上有模板可下载。
+- **Tushare**：填写自己的 token 后自动下载。
+- **BaoStock（免费）**：不需要注册和积分，见 [使用手册 · 零成本数据路径](docs/使用手册.md#九零成本数据路径)。
 
-Windows 本地预览：
+建议至少 3 年、720 个交易日的数据。训练前页面会提示数据是否足够。
 
-```powershell
-.\install.ps1 -WithSite
-cd website
-npm ci
-npm run build
-cd ..
-powershell -ExecutionPolicy Bypass -File website/start.ps1
-```
+## 它不做什么
 
-预览地址由启动脚本输出，一般为 `http://127.0.0.1:8800`。Linux 本地预览：
+- 不托管资金，不连接券商，不自动下单。
+- 不荐股，不承诺收益，不做收益排名。
+- 模拟账本目前只计佣金和印花税，尚未计入买卖价差与冲击成本，结果偏乐观。
+- 历史检验通过只代表可以开始纸面观察，不代表能够实盘盈利。
 
-```bash
-sh install.sh --with-site
-npm --prefix website ci
-npm --prefix website run build
-TEMPERQ_SITE_DEV=1 .venv/bin/python -m uvicorn share_site.app:app --host 127.0.0.1 --port 8800
-```
+## 文档
 
-正式服务器部署使用 [deploy/README.md](deploy/README.md)：提供 Docker 多阶段构建、单进程后端、持久化数据库、健康检查和 Caddy 自动 HTTPS。部署前填写域名、HF OAuth 与随机会话密钥。**公开服务器不能启用 `TEMPERQ_SITE_DEV=1`。**
+- [使用手册](docs/使用手册.md)：安装、训练、读报告、纸面交易、数据准备
+- [产品理念](docs/PRODUCT_VISION.md)：为什么从持仓出发
+- [常见陷阱](docs/PITFALLS.md)：前视、隔夜跳空、把 IC 当收益等
+- [开发说明](docs/DEVELOPMENT.md)：项目结构、测试、网站与部署
 
-## 训练、分享、Bench 的衔接
+## 项目状态
 
-1. 训练：UI/`temperq run` 将每次尝试归档到 `runs/history/<run_id>/`；成功后刷新兼容入口 `runs/<名称>/`，保留同名重跑历史。
-2. 分享：用模型包与模型卡描述产物，在 HF 模型仓库保存可分发文件；网站读取固定提交的卡片与元信息，不下载执行模型代码。
-3. 评价：`temperq bench model` 读取运行目录/预测文件，在冻结的原始快照与参考模型上独立重算标签、诊断和研究账户。
-4. 追踪：本地“实验记录”关联训练版本、折预测、最终模型和独立 Bench，支持配对比较和导出不含数据/权重的研究摘要。训练与网页评价由持久化 worker 执行。
+早期版本（0.0.x），接口可能变化。已完成本地训练、独立评价、账户建议与每日模拟账本；真实前向记录刚开始积累，尚未经过外部用户试用。欢迎通过 [Issues](https://github.com/Dear-Huang/temperq/issues) 反馈问题。
 
-```bash
-temperq bench init runs/cn_rank_5d_lgbm --data-dir data/snapshots/cn_daily --output bench/protocols/my_development.yaml
-temperq bench model runs/cn_rank_5d_lgbm --protocol bench/protocols/my_development.yaml --output runs/bench/my_model_001
-temperq bench verify runs/bench/my_model_001 --inputs
-temperq bench traps --help
-```
+## 许可
 
-完整操作、后台任务、兼容与评价边界见 [研究闭环说明](docs/RESEARCH_WORKFLOW.md)。网站尚未自动接收模型并排队执行 Bench；本地工作台已支持冻结协议、运行 Bench 和比较。当前 Bench 是历史开发评价，不是实盘认证。已有 `bench/protocols/cn_rank_5d_development_v*.yaml` 固定原机器路径与数据哈希；换机器须按 [bench/README.md](bench/README.md) 建立新协议。原始行情和参考训练产物不随 GitHub 仓库分发。
+版权所有 © 2026 Dear-Huang。本项目以 [AGPL-3.0](LICENSE) 授权：可以自由使用、修改和再分发；修改后通过网络向他人提供服务，须同样公开修改后的源码。成本库 `third_party/ashare-tcost` 采用 MIT 许可，字体为 SIL OFL 1.1，详见 [NOTICE](NOTICE)。
 
-## GitHub 与发布
-
-上传前运行：
-
-```powershell
-.venv\Scripts\python.exe scripts/check_repository.py
-git status --short
-git diff --check
-```
-
-确认后使用现有 `main` 分支提交并配置自己的远程地址：
-
-```powershell
-git add .
-git commit -m "Consolidate workbench, cost library and deployment setup"
-git remote add origin https://github.com/YOUR_ACCOUNT/temperq.git
-git push -u origin main
-```
-
-已有 `origin` 时先 `git remote -v`，再按实际地址调整。不要强推。CI 会检查 Python、网站构建和服务器镜像。
-
-生成包含网站、部署文件、CI、成本库的完整源码包：
-
-```powershell
-.venv\Scripts\python.exe scripts/build_release.py --source-only
-```
-
-生成本地工作台用户包（不包含服务器网站）：
-
-```powershell
-.venv\Scripts\python.exe scripts/build_release.py --tools-dir archives/releases/qwb_release_1022e/qwb/tools
-```
-
-产物在 `artifacts/releases/<类型-时间>/`；后续可以将 uv 缓存在忽略的 `tools/`，再使用 `--tools-dir tools`。脚本包括尚未提交的新源码，并检查敏感文件和大文件，附 SHA-256 清单；不会覆盖历史输出。源码包用于传输源码，保留 Git 历史应使用 Git 推送。
-
-## 持续开发
-
-后续开发从 [产品方向入口](docs/specs/README.md) 和 [产品闭环实施 SPEC](docs/specs/PRODUCT_WORKFLOW_SPEC.md) 开始：先打通 B0 的账户状态、每日建议、数据更新、模拟记账和策略看板，再用共同真实数据评价 B1 与成熟配方。外部用户试用、硬件测量和服务器验收是发布要求。
-
-从 [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) 了解模块职责、测试、依赖锁和下一步路线；从 [docs/VALIDATION.md](docs/VALIDATION.md) 了解本次验证范围。网站设计与交互背景见 [website/DESIGN.md](website/DESIGN.md)，评价边界见 [bench/SPEC.md](bench/SPEC.md)。
-
-本轮 [竞品与文献核验](docs/research/PRODUCT_DIRECTION_REVIEW_20261023.md) 修正了部分旧评价，明确哪些是能力、哪些仍是目标。专业用户可在自己的框架训练后提交标准预测；默认模型不限制外部研究路径。
-
-原始行情序列、目标账户与 B2 的开发资料保留在 [研究实施记录](docs/E2E_IMPLEMENTATION.md)、[序列训练](docs/PIT_SEQUENCE_RUNS.md)、[目标 Bench](docs/TARGET_BENCH.md) 和 [实验效用训练](docs/UTILITY_TRAINING.md)。B2 暂停扩展，已有合成验证及未关闭问题保留，不作为产品已盈利或已部署的证据。
-
-版权所有 © 2026 Dear-Huang。本项目以 [AGPL-3.0](LICENSE) 授权：可以自由使用、修改和再分发；修改后通过网络向他人提供服务，须同样公开修改后的源码。成本库 `third_party/ashare-tcost` 保留其 [MIT 许可](third_party/ashare-tcost/LICENSE)，字体为 OFL 1.1，详见 [NOTICE](NOTICE)。数据和模型权重的授权需分别核对。项目用于研究与复现，不提供收益承诺或自动实盘交易。
+本项目用于研究与学习，不构成投资建议。
