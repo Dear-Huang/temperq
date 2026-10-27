@@ -16,16 +16,22 @@ MIN_OBS = 10
 
 
 def corwin_schultz(daily: pd.DataFrame) -> pd.Series:
-    """Two-day Corwin-Schultz (2012) estimator with overnight adjustment, bp, negatives -> 0."""
+    """Two-day Corwin-Schultz ending on each row, available after its close.
+
+    Input rows must be chronological within each security. The first observation
+    per security is unavailable; no following-day prices enter an estimate.
+    Values are in bp, with negative estimates clipped to zero.
+    """
     d = daily
     g = d.groupby("code", sort=False)
-    h1, l1, c0 = g["high"].shift(-1), g["low"].shift(-1), d["close"]
+    h0, l0, c0 = g["high"].shift(1), g["low"].shift(1), g["close"].shift(1)
+    h1, l1 = d["high"], d["low"]
     up, dn = (l1 > c0).fillna(False), (h1 < c0).fillna(False)
     ah1 = np.where(up, h1 - (l1 - c0), np.where(dn, h1 + (c0 - h1), h1))
     al1 = np.where(up, l1 - (l1 - c0), np.where(dn, l1 + (c0 - h1), l1))
     with np.errstate(divide="ignore", invalid="ignore"):
-        beta = np.log(d["high"] / d["low"]) ** 2 + np.log(ah1 / al1) ** 2
-        gam = np.log(np.maximum(d["high"], ah1) / np.minimum(d["low"], al1)) ** 2
+        beta = np.log(h0 / l0) ** 2 + np.log(ah1 / al1) ** 2
+        gam = np.log(np.maximum(h0, ah1) / np.minimum(l0, al1)) ** 2
         k = 3 - 2 * np.sqrt(2)
         alpha = (np.sqrt(2 * beta) - np.sqrt(beta)) / k - np.sqrt(gam / k)
         cs = 2 * (np.exp(alpha) - 1) / (1 + np.exp(alpha))
@@ -70,8 +76,10 @@ def monthly_features(daily: pd.DataFrame) -> pd.DataFrame:
         amount=("amount", "mean"), price=("close_raw", "mean"), vol=("vol21", "last"),
         cs_bp=("cs_bp", "mean"), amihud=("amihud", "mean"), zeros=("zeros", "mean"),
         vov=("vov", "mean")).reset_index()
-    # a month without a 21-day volatility (new listing) takes the cross-section median
-    m["vol"] = m["vol"].fillna(m["vol"].median()).clip(lower=1e-4)
+    # Impute only from the same source month's cross-section. A global median
+    # would let later months affect the inputs available for an early listing.
+    median = m.groupby("ym")["vol"].transform("median")
+    m["vol"] = m["vol"].fillna(median).clip(lower=1e-4)
     m["inv_price"] = 1 / m["price"]
     m["neg_log_amount"] = -np.log(m["amount"])
     return m
