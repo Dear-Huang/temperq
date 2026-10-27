@@ -52,6 +52,7 @@
     const states = {BLOCKED: '运行受阻，需要处理', WAITING_DATA: '等待完整行情', UP_TO_DATE: '检查完成，请核对最后记账日', NOT_STARTED: '先完成检验与启用'};
     $('desk-status').textContent = states[data.health.state] || '账户已启用，等待记录';
     $('desk-action').textContent = data.next_action;
+    $('desk-action').hidden = data.health.state !== 'BLOCKED' && !data.latest_violations.length;
     $('desk-health-message').textContent = data.health.message;
     $('desk-attention').dataset.state = data.health.state;
     $('desk-auto-state').textContent = data.runtime?.enabled ? '每日检查已开启' : '每日检查已关闭';

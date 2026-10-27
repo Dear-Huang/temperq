@@ -1,5 +1,50 @@
 // Progressive disclosure never disables submitted settings or changes their units.
 (() => {
+  const help = document.getElementById('workspace-help');
+  const helpButton = document.getElementById('open-workspace-help');
+  if (help && helpButton) {
+    helpButton.addEventListener('click', () => {
+      const path = location.pathname;
+      const section = path.startsWith('/signals') ? 'help-import' : path.endsWith('/dashboard') || path.endsWith('/deploy') ? 'help-deployment'
+        : path.includes('/configure') || path.endsWith('/edit') ? 'help-parameters'
+        : path.startsWith('/strategies/') && !path.endsWith('/new') ? 'help-evaluation'
+        : path === '/train' || path.startsWith('/data') ? 'help-data' : 'help-workflow';
+      for (const item of help.querySelectorAll('details')) item.open = item.id === section;
+      help.showModal();
+      help.scrollTop = 0;
+    });
+    document.getElementById('close-workspace-help').addEventListener('click', () => help.close());
+    help.addEventListener('close', () => helpButton.focus());
+    help.addEventListener('keydown', event => {
+      if (event.key !== 'Tab') return;
+      const focusable = [...help.querySelectorAll('button, a[href], summary, input, select, textarea, [tabindex]')]
+        .filter(element => !element.disabled && element.tabIndex >= 0 && element.getClientRects().length);
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      if (!first) { event.preventDefault(); return; }
+      if (!help.contains(document.activeElement) || (!event.shiftKey && document.activeElement === last)) {
+        event.preventDefault(); first.focus();
+      } else if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault(); last.focus();
+      }
+    });
+    help.addEventListener('click', event => {
+      const bounds = help.getBoundingClientRect();
+      if (event.target === help && (event.clientX < bounds.left || event.clientX > bounds.right
+          || event.clientY < bounds.top || event.clientY > bounds.bottom)) help.close();
+    });
+  }
+  const revealHash = () => {
+    let target = document.getElementById(location.hash.slice(1));
+    const anchor = target;
+    while (target) {
+      if (target.tagName === 'DETAILS') target.open = true;
+      target = target.parentElement;
+    }
+    if (anchor) anchor.scrollIntoView({block: 'start'});
+  };
+  if (location.hash) revealHash();
+  window.addEventListener('hashchange', revealHash);
   const presetData = document.getElementById('policy-presets');
   if (!presetData) return;
   const presets = JSON.parse(presetData.textContent);
@@ -28,7 +73,7 @@
     const submit = editor.querySelector('button:not([type])');
     const note = document.getElementById('capital-default-note');
     submit.disabled = true;
-    note.textContent = '正在根据现金和初始持仓计算默认值…';
+    note.textContent = '正在更新默认值…';
     try {
       const response = await fetch('/strategies/defaults', { method: 'POST', body: new FormData(editor) });
       const result = await response.json();
@@ -38,7 +83,7 @@
         for (const key of derivedKeys) preset.parameters[key] = result.capital_defaults.parameters[key];
       }
       for (const key of derivedKeys) if (!pinned.has(key)) input(key).value = presets[current].parameters[key];
-      note.textContent = `参考总权益 ${number(result.capital_defaults.equity)} 元，资金档位 ${result.capital_defaults.label}；默认 ${result.capital_defaults.n_hold} 只。手动改过的参数保留。流动性门槛仅为训练参考，不保证成交。`;
+      note.textContent = '';
       submit.disabled = false;
       syncPins(); update();
     } catch (error) {
@@ -68,12 +113,13 @@
       if (query && available) group.open = true;
     }
     const count = fields.filter(field => !field.hidden).length;
-    document.getElementById('policy-search-result').textContent = query ? `找到 ${count} 项当前生效参数` : '按中文名称或参数名查找；隐藏不改变已填值。';
+    document.getElementById('policy-search-result').textContent = query ? `${count} 项` : '';
   };
   const update = () => {
     const changes = differences();
     const base = presets[current];
-    document.getElementById('preset-help').textContent = base.description;
+    const warning = document.getElementById('policy-cost-warning');
+    warning.hidden = !costModel || costModel.value !== 'commission_only';
     const keys = ['cash', 'n_hold', 'hold_until_rank', 'max_weight', 'exposure_cap', 'cash_floor', 'adjustment_speed', 'target_volatility'];
     const valid = keys.every(key => input(key).value !== '' && input(key).validity.valid)
       && Number(input('hold_until_rank').value) >= Number(input('n_hold').value)
@@ -88,7 +134,7 @@
       const capacity = Math.min(Number(input('exposure_cap').value), 1 - Number(input('cash_floor').value));
       const speed = Number(input('adjustment_speed').value);
       const risk = mode.value === 'fixed' ? '固定仓位' : `${mode.value === 'ewma' ? 'EWMA 波动目标' : 'ML 风险辅助（实验）'}，目标年化波动 ${percent(input('target_volatility').value)}，不是亏损上限`;
-      summary.textContent = `以 ${number(cash)} 元可用现金起步，目标持有 ${input('n_hold').value} 只；单只目标最多 ${percent(input('max_weight').value)}，股票目标总仓位最多 ${percent(capacity)}。每 5 个交易日决策，${speed === 1 ? '直接靠近目标' : `每次靠近目标的 ${percent(speed)}`}，使用${risk}。`;
+      summary.textContent = `${number(cash)} 元 · ${input('n_hold').value} 只 · 单票上限 ${percent(input('max_weight').value)} · 总仓位上限 ${percent(capacity)} · 每 5 日${speed === 1 ? '直接调整' : `调整差距的 ${percent(speed)}`} · ${risk}`;
     }
     const list = document.getElementById('policy-change-list');
     list.replaceChildren();

@@ -1,0 +1,10 @@
+.timing-form{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px 20px;max-width:680px;margin-top:24px}
+.timing-form label.f{display:flex;flex-direction:column;gap:8px;margin:0;max-width:100%;font-size:13px}
+.timing-form input:not([type=checkbox]),.timing-form select{width:100%;min-width:0;box-sizing:border-box}
+.timing-form label:first-of-type,.timing-form>p,.timing-form>details,.timing-form>.timing-toggle{grid-column:1/-1}
+.timing-form label.timing-toggle{flex-direction:row;align-items:center;padding:8px 0}
+.timing-form>p{margin:0 0 8px}.timing-form>details{margin:8px 0}
+.timing-form>details label.f{margin:14px 0;max-width:440px}.timing-form>button{justify-self:start}
+.timing-metrics{min-width:580px}.timing-decisions{min-width:820px}
+.timing-metrics td,.timing-decisions td{white-space:nowrap}.timing-decisions td:nth-child(3){min-width:220px}
+@media(max-width:640px){.timing-form{grid-template-columns:minmax(0,1fr)}.timing-form label.f{grid-column:1}.timing-form>button{width:100%}}
