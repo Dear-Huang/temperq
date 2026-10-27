@@ -94,9 +94,11 @@ def signal_matrix(frame: pd.DataFrame, panel: dict) -> pd.DataFrame:
     return rows.pivot(index="date", columns="code", values="prediction").sort_index().sort_index(axis=1)
 
 
-def choose(scores: pd.Series, held: set[str], cfg: GovernanceConfig):
+def choose(scores: pd.Series, held: set[str], cfg: GovernanceConfig, *, allow_empty=False):
     ordered = scores.dropna().sort_index().sort_values(ascending=False, kind="stable")
     if not len(ordered):
+        if allow_empty:
+            return [], [{"code": code, "reason": "SELL_OUT_OF_BAND", "rank": None} for code in sorted(held)] + [{"reason": "NO_ELIGIBLE_CANDIDATES"}]
         raise ValueError("调仓日缺少有效信号")
     ranks = {str(code): i + 1 for i, code in enumerate(ordered.index)}
     retained = [code for code in ordered.index if code in held and ranks[code] <= cfg.hold_until_rank]
@@ -138,12 +140,13 @@ class RiskData:
         return value, self.dates[t + HORIZON + 1]
 
 
-def risk_samples(risk: RiskData, signals: pd.DataFrame, n_hold: int, check=lambda: None):
+def risk_samples(risk: RiskData, signals: pd.DataFrame, n_hold: int, check=lambda: None, *, allow_empty=False):
     rows = []
     cfg = GovernanceConfig(n_hold=n_hold, hold_until_rank=n_hold)
     for day, scores in signals.iterrows():
         check()
-        basket, _ = choose(scores, set(), cfg)
+        basket, _ = choose(scores, set(), cfg, allow_empty=allow_empty)
+        if not basket: continue
         features, label = risk.features(day, basket), risk.label(day, basket)
         if features is not None and label is not None:
             rows.append({"date": day, **dict(zip(FEATURES, features[0])),
@@ -183,7 +186,7 @@ class RiskHead:
 def replay(panel, signals, cfg, *, mode, start, end, initial_cash, snapshot_id, samples,
            check=lambda: None, log=lambda message: None, constant_exposure=None,
            initial_holdings=None, snapshot_ids=None, allow_single=False, trading_calendar=None,
-           cost_model="commission_only"):
+           cost_model="commission_only", allow_empty=False):
     if mode not in {"fixed", "ewma", "ml"}:
         raise ValueError("unknown risk control")
     if cost_model not in {"commission_only","struct_v1"}:raise ValueError("未知成本口径")
@@ -199,7 +202,8 @@ def replay(panel, signals, cfg, *, mode, start, end, initial_cash, snapshot_id, 
     if not np.isfinite(initial_cash) or initial_cash < 0 or (initial_cash==0 and not initial_holdings):
         raise ValueError("初始现金需非负，现金与持仓不能同时为空")
     identity = experiments.object_digest({"schema": SCHEMA, "config": asdict(cfg), "mode": mode,
-                                         "constant_exposure": constant_exposure,"cost_model":cost_model})
+                                         "constant_exposure": constant_exposure,"cost_model":cost_model,
+                                         "allow_empty": allow_empty})
     fees = Fees(cfg.commission_bp, cfg.minimum_commission, cfg.slippage_bp)
     cost_estimates=None
     if cost_model=="struct_v1":
@@ -262,9 +266,9 @@ def replay(panel, signals, cfg, *, mode, start, end, initial_cash, snapshot_id, 
         if i % 5 == 0:
             if day not in signals.index:
                 raise ValueError(f"{day:%Y-%m-%d} 调仓日缺少信号，不能跳过")
-            basket, reasons = choose(signals.loc[day], {p.asset_id for p in state.positions}, cfg)
+            basket, reasons = choose(signals.loc[day], {p.asset_id for p in state.positions}, cfg, allow_empty=allow_empty)
             variance, risk_reason = None, "FIXED_EXPOSURE"
-            if mode != "fixed":
+            if mode != "fixed" and basket:
                 f = risk.features(day, basket)
                 if f is None:
                     raise ValueError(f"{day:%Y-%m-%d} 风险估计需要所选股票连续 60 日有效历史")
@@ -291,12 +295,12 @@ def replay(panel, signals, cfg, *, mode, start, end, initial_cash, snapshot_id, 
                 reasons.append({"reason": "CAPPED_MAX_WEIGHT"})
             # Forecast quality is paired on a common decision-known basket;
             # allocation quality is measured on each arm's actual account.
-            reference, _ = choose(signals.loc[day], set(), cfg)
-            label = risk.label(day, reference)
+            reference, _ = choose(signals.loc[day], set(), cfg, allow_empty=allow_empty)
+            label = risk.label(day, reference) if reference else None
             if label is not None and label[1] > selected_days[-1]:
                 label = None
             score_variance = None
-            if mode != "fixed":
+            if mode != "fixed" and reference:
                 common = risk.features(day, reference)
                 if common is not None:
                     score_variance = common[1] if mode == "ewma" else head.predict(day, t, common[0], common[1])[0]
@@ -333,7 +337,7 @@ def replay(panel, signals, cfg, *, mode, start, end, initial_cash, snapshot_id, 
 
 def exposure_matched_control(panel, signals, cfg, reference, fixed, *, start, end,
         initial_cash, snapshot_id, samples, check=lambda: None, log=lambda message: None,
-        initial_holdings=None, trading_calendar=None, reference_arm="ml",cost_model="commission_only"):
+        initial_holdings=None, trading_calendar=None, reference_arm="ml",cost_model="commission_only", allow_empty=False):
     """Post-hoc explanation only: calibrate constant intent to actual ML exposure.
 
     Integer execution and policy feedback make the mapping discontinuous and not
@@ -353,7 +357,7 @@ def exposure_matched_control(panel, signals, cfg, reference, fixed, *, start, en
             arm = replay(panel, signals, cfg, mode="fixed", start=start, end=end,
                 initial_cash=initial_cash, snapshot_id=snapshot_id, samples=samples,
                 constant_exposure=candidate, check=check, initial_holdings=initial_holdings,
-                trading_calendar=trading_calendar,cost_model=cost_model)
+                trading_calendar=trading_calendar,cost_model=cost_model,allow_empty=allow_empty)
             actual = arm["metrics"]["mean_exposure"]
             trials.append({"constant_target": candidate, "actual_mean": actual})
             current = abs(actual-target)

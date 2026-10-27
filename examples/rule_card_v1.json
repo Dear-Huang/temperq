@@ -1,0 +1,9 @@
+{
+  "schema": "rule_card_v1",
+  "id": "my_reversal",
+  "name": "短期反转示例",
+  "rules": [
+    {"id": "reversal", "field": "close", "operator": "return", "window": 5, "value": 0, "weight": -1, "required": false, "origin": "user"},
+    {"id": "trend", "field": "close", "operator": "above_mean", "window": 20, "value": 0, "weight": 1, "required": true, "origin": "user"}
+  ]
+}

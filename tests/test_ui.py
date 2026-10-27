@@ -1,4 +1,5 @@
 import io
+import re
 from pathlib import Path
 
 import pytest
@@ -29,16 +30,36 @@ def form(app, **over):
     return f
 
 
-def test_index_shows_four_steps_scenario_and_hardware(tmp_path):
+def upload_csv(c, app, name, raw):
+    import pandas as pd
+    from qwb import csvimport
+    r=c.post('/data/csv',data={'token':app.state.token,'name':name},
+             files={'file':('data.csv',raw,'text/csv')},follow_redirects=False)
+    assert r.status_code==303
+    route=r.headers['location']
+    fields={'token':app.state.token,'name':name,'amount_unit':'yuan'}
+    for i,column in enumerate(pd.read_csv(io.BytesIO(raw),nrows=0).columns):
+        target=csvimport.ALIASES.get(column.lower(),column.lower())
+        fields['column_'+str(i)]=target if target in csvimport.FIELDS else ''
+    checked=c.post(route+'/check',data=fields)
+    if checked.status_code!=200:return checked
+    checked_hash=re.search(r'name="checked_hash" value="([^"]+)"',checked.text).group(1)
+    return c.post(route+'/save',data={'token':app.state.token,'checked_hash':checked_hash})
+
+
+def test_index_keeps_training_inputs_and_moves_explanations_to_help(tmp_path):
     _, c = client(tmp_path)
-    page = c.get("/").text
-    for s in ("要打造什么模型", "用什么数据", "由第 1 步推出", "开始训练"):
+    page = c.get("/train").text
+    for s in ("训练设置", "行情数据", "确认训练", "开始训练"):
         assert s in page
-    for s in ("用在哪个市场", "持有期", "在哪些股票里选", "打算投入多少资金", "用什么模型",
+    for s in ("用在哪个市场", "持有期", "在哪些股票里选", "资金规模",
               "0–30 万", "5 亿及以上", "沪深 300", "LightGBM", "Ridge", "Kronos", "规划中"):
         assert s in page, s
     assert 'value="kronos" form="main" disabled' in page          # planned: cannot be picked
-    assert "试运行数据" in page and "什么显卡" in page
+    assert "合成数据演示" in page and "使用 CPU" in page
+    assert 'aria-label="本页训练设置"' not in page
+    assert '<dialog id="workspace-help"' in page
+    assert 'name="dataset" form="main"' in page
     assert c.get("/template.csv").status_code == 200
 
 
@@ -99,7 +120,11 @@ def test_trial_run_end_to_end_with_verdict(tmp_path):
     assert "扣成本后" in page and "前视检查" in page and "num_boost_round = 40" in page
     saved = yaml.safe_load((tmp_path / "runs" / "ui_configs" / "ui_trial.yaml").read_text("utf-8"))
     assert saved["model"]["num_boost_round"] == 40
-    assert "ui_trial" in c.get("/").text
+    assert "ui_trial" in c.get("/train").text
+    assert '模型 · 训练完成' in c.get('/start').text
+    project=next((tmp_path/'runs/strategy_drafts').glob('*.json')).stem
+    model=c.get('/projects/'+project)
+    assert model.status_code==200 and '合成数据仅用于训练演示' in model.text
 
 
 def test_csv_upload_then_train(tmp_path):
@@ -107,16 +132,15 @@ def test_csv_upload_then_train(tmp_path):
     app, c = client(tmp_path)
     b = pipeline.synth_bars(n_days=800, n_codes=40).drop(columns="up_limit")
     raw = b.to_csv(index=False).encode()
-    r = c.post("/data/csv", data={"token": app.state.token, "name": "mine"},
-               files={"file": ("mine.csv", io.BytesIO(raw), "text/csv")})
-    assert "导入成功" in r.text and "40 只股票" in r.text
-    assert "数据名 mine" in c.get("/").text
-    bad = c.post("/data/csv", data={"token": app.state.token, "name": "bad"},
-                 files={"file": ("bad.csv", io.BytesIO(b"a,b\n1,2\n"), "text/csv")})
-    assert "缺少必填列" in bad.text
+    r = upload_csv(c,app,'mine',raw)
+    assert r.status_code==200 and 'value="mine"' in r.text
+    assert 'value="mine"' in c.get("/train").text
+    bad = upload_csv(c,app,'bad',b'a,b\n1,2\n')
+    assert '还缺：' in bad.text and '成交额' in bad.text
     r = c.post("/run", data=form(app, name="on_csv", dataset="mine"), follow_redirects=False)
     page = c.get(r.headers["location"]).text
     assert "完成" in page and "一句话结论" in page
+    assert '下一步：设置规则 →' in page
 
 
 def test_tushare_form_validates_before_any_request(tmp_path):
@@ -142,9 +166,8 @@ def test_combined_dataset_flow(tmp_path):
     app, c = client(tmp_path)
     t = app.state.token
     b = pipeline.synth_bars(n_days=800, n_codes=40).drop(columns="up_limit")
-    c.post("/data/csv", data={"token": t, "name": "mine"},
-           files={"file": ("mine.csv", io.BytesIO(b.to_csv(index=False).encode()), "text/csv")})
-    assert "加更多数据来源" in c.get("/").text
+    upload_csv(c,app,'mine',b.to_csv(index=False).encode())
+    assert 'href="/data/mine" title="管理数据来源"' in c.get("/train").text
     page = c.get("/data/mine").text
     assert "新建组合数据" in page
     assert c.post("/data/mine/combine", data={"token": "x", "name": "mine_plus"}).status_code == 403
@@ -161,7 +184,7 @@ def test_combined_dataset_flow(tmp_path):
     assert r.status_code == 303
     page = c.get("/data/mine_plus").text
     assert "flow" in page and "下一交易日决策时使用" in page
-    assert "另加 1 个来源" in c.get("/").text
+    assert "另加 1 个来源" in c.get("/train").text
     bad = c.post("/data/mine_plus/source", data={"token": t, "kind": "factor", "rule": "announce"},
                  files={"file": ("g.csv", io.BytesIO(f.to_csv(index=False).encode()), "text/csv")})
     assert "ann_date" in bad.text
@@ -182,7 +205,7 @@ def test_use_model_page_and_downloads(tmp_path):
     app, c = client(tmp_path)
     r = c.post("/run", data=form(app, name="m1", capital="30w_100w"), follow_redirects=False)
     job = c.get(r.headers["location"]).text
-    assert "下一步：评价模型 / 继续训练" in job
+    assert "评价模型 / 继续训练" in job and "查看模型检验" in job
     lst = c.get("/models").text
     assert "m1" in lst and "试运行" in lst
     page = c.get("/models/m1").text
@@ -215,9 +238,8 @@ def test_audit_external_predictions_page(tmp_path):
     app, c = client(tmp_path)
     t = app.state.token
     b = pipeline.synth_bars(n_days=800, n_codes=40).drop(columns="up_limit")
-    c.post("/data/csv", data={"token": t, "name": "mine"},
-           files={"file": ("mine.csv", io.BytesIO(b.to_csv(index=False).encode()), "text/csv")})
-    assert "体检外部模型" in c.get("/").text and "Qlib" in c.get("/audit").text
+    upload_csv(c,app,'mine',b.to_csv(index=False).encode())
+    assert 'href="/audit"' in c.get("/settings").text and "Qlib" in c.get("/audit").text
     b = b.sort_values(["code", "date"])
     b["score"] = -b.groupby("code")["close"].pct_change(5)
     last = sorted(b["date"].unique())[-300:]                 # last 300 days, every stock
@@ -246,8 +268,7 @@ def test_model_page_loads_real_data_in_background(tmp_path):
     app, c = client(tmp_path)
     t = app.state.token
     b = pipeline.synth_bars(n_days=800, n_codes=40).drop(columns="up_limit")
-    c.post("/data/csv", data={"token": t, "name": "mine"},
-           files={"file": ("mine.csv", io.BytesIO(b.to_csv(index=False).encode()), "text/csv")})
+    upload_csv(c,app,'mine',b.to_csv(index=False).encode())
     c.post("/run", data=form(app, name="real1", dataset="mine"), follow_redirects=False)
     picks_mod._CACHE.clear()
     first = c.get("/models/real1").text

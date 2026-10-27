@@ -20,8 +20,20 @@ def main():
     parser = argparse.ArgumentParser(__doc__)
     parser.add_argument('output', type=Path)
     parser.add_argument('--port', type=int, default=8784)
+    parser.add_argument('--resume', action='store_true', help='Resume an existing isolated synthetic QA workspace')
     args = parser.parse_args()
     workdir = args.output.resolve()
+    def serve():
+        def run(fn):
+            threading.Thread(target=fn, daemon=True).start()
+        print(f'QA workspace: {workdir}; synthetic data only', flush=True)
+        uvicorn.run(ui.create_app(workdir, port=args.port, runner=run), host='127.0.0.1', port=args.port, log_level='warning')
+    if args.resume:
+        from qwb import experiments as ex
+        snap=ex.read(daily_data.current(workdir/'data/qa_synthetic')/'snapshot.json')
+        if snap.get('source')!='synthetic_experience_only':raise SystemExit('Resume requires the synthetic QA fixture.')
+        serve()
+        return
     if workdir.exists():
         raise SystemExit('Choose a new output directory; previous attempts are retained.')
     (workdir / 'examples').mkdir(parents=True)
@@ -40,10 +52,7 @@ def main():
     daily_data.update(workdir / 'data/qa_synthetic', bars.to_csv(index=False).encode(),
         calendar.to_csv(index=False).encode(), source='synthetic_experience_only')
     # Same worker.execute code, isolated threaded job runner; no network/downloads.
-    def run(fn):
-        threading.Thread(target=fn, daemon=True).start()
-    print(f'QA workspace: {workdir}; synthetic data only', flush=True)
-    uvicorn.run(ui.create_app(workdir, port=args.port, runner=run), host='127.0.0.1', port=args.port, log_level='warning')
+    serve()
 
 
 if __name__ == '__main__':

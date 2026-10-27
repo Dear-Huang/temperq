@@ -138,13 +138,13 @@ def test_ui_free_download_persistent_worker_and_selection(tmp_path, monkeypatch)
     monkeypatch.setattr(free_data, "fetch", fake)
     app = ui.create_app(tmp_path, runner=lambda fn: fn())
     client = TestClient(app)
-    assert "一键下载免费数据（BaoStock）" in client.get("/").text
+    assert "一键下载免费数据（BaoStock）" in client.get("/train").text
     assert client.post("/data/free", data={"token": "bad"}).status_code == 403
     assert "至少下载 3 年" in client.post("/data/free", data={"token": app.state.token, "start": "2026-01-01"}).text
     response = client.post("/data/free", data={"token": app.state.token}, follow_redirects=False)
     assert response.status_code == 303
     page = client.get(response.headers["location"]).text
-    assert "完成" in page and "/?ds=free_daily#step3" in page
+    assert "完成" in page and "/train?ds=free_daily#step3" in page
     assert "不能代表全市场表现" in page
     job_id = response.headers["location"].split("/")[-1]
     assert app.state.store.spec(job_id)["config"]["action"] == "free_data"

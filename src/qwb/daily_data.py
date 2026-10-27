@@ -26,7 +26,7 @@ def current(feed):
     return target
 
 
-def update(feed, raw, calendar_raw, *, source="user_csv"):
+def update(feed, raw, calendar_raw, *, source="user_csv", dry_run=False):
     """Updates may append; historical revisions or symbol changes need a new feed."""
     feed = Path(feed).resolve()
     feed.mkdir(parents=True, exist_ok=True)
@@ -34,9 +34,11 @@ def update(feed, raw, calendar_raw, *, source="user_csv"):
         incoming = csvimport.read(io.BytesIO(raw))
         incoming["code"] = incoming["code"].map(csvimport._suffix)
         incoming["date"] = pd.to_datetime(incoming["date"], format="mixed", errors="raise").dt.strftime("%Y-%m-%d")
-        for column in [*csvimport.REQUIRED[2:], "adj_factor", "is_st", "up_limit", "down_limit"]:
+        # Use the same round-trip conversion for both sides of exact revision checks.
+        numeric=[*csvimport.REQUIRED[2:], "adj_factor", "is_st", "up_limit", "down_limit", "volume"]
+        for column in numeric:
             if column in incoming:
-                incoming[column] = pd.to_numeric(incoming[column], errors="raise")
+                incoming[column] = incoming[column].astype(float)
         if incoming.duplicated(["code", "date"]).any():
             raise ValueError("更新 CSV 存在重复证券日期")
         if "adj_factor" not in incoming:
@@ -47,7 +49,9 @@ def update(feed, raw, calendar_raw, *, source="user_csv"):
         added = len(incoming)
         if (feed / "current.json").is_file():
             previous = current(feed)
-            old = pd.read_csv(previous / "source.csv", dtype={"code": str})
+            old = pd.read_csv(previous / "source.csv", dtype=str)
+            for column in numeric:
+                if column in old:old[column]=old[column].astype(float)
             if set(old.columns) != set(incoming.columns) or set(old["code"]) != set(incoming["code"]):
                 raise ValueError("更新不得改变股票集合或 CSV 列；请另建数据源")
             keys = ["code", "date"]
@@ -99,6 +103,10 @@ def update(feed, raw, calendar_raw, *, source="user_csv"):
             "calendar": experiments.object_digest(calendar.to_dict("records"))})
         name = identity.removeprefix("sha256:")
         destination = feed / "snapshots" / name
+        if dry_run:
+            return {"snapshot":str(destination),"data_snapshot_id":identity,"added_rows":added,
+                    "start":incoming['date'].min(),"end":incoming['date'].max(),
+                    "codes":int(incoming.code.nunique()),"rows":len(bars),"notes":notes}
         destination.parent.mkdir(exist_ok=True)
         if not destination.exists():
             temporary = Path(tempfile.mkdtemp(prefix=".updating-", dir=destination.parent))

@@ -27,6 +27,18 @@ def test_disjoint_stock_histories_do_not_supply_cross_section():
     assert data_readiness.assess(snap)["blocked"]
 
 
+def test_compact_readiness_keeps_blockers_open_and_missing_inputs_in_summary():
+    report = data_readiness.assess({'start': '2023-01-01', 'end': '2025-01-02', 'codes': 4,
+                                  'trading_days': 500})
+    rendered = data_readiness.render(report, compact=True)
+    assert ' open>' in rendered and '不足 20 只' in rendered
+    report = data_readiness.assess({'start': '2018-01-01', 'end': '2025-12-31', 'codes': 40,
+                                  'trading_days': 1900, 'readiness': {'provided_columns': []}})
+    rendered = data_readiness.render(report, compact=True)
+    summary = rendered.split('</summary>')[0]
+    assert '缺少复权因子' in summary and '缺少 ST 标记' in summary
+
+
 def test_import_profile_identifies_missing_adj_and_test_days(tmp_path):
     from test_csvimport import synth_csv
     raw = pd.read_csv(io.BytesIO(synth_csv(n_days=800, chinese=False))).drop(columns=["adj_factor", "is_st"])
@@ -42,10 +54,10 @@ def test_import_profile_identifies_missing_adj_and_test_days(tmp_path):
 
 def test_upload_requirements_and_preflight_before_spending_training_time(tmp_path):
     app, c = client(tmp_path)
-    page = c.get("/").text
+    page = c.get("/train").text
     for text in ("720", "5–8 年", "calendar.csv", "adj_factor", "amount", "20 只", "1–2 年"):
         assert text in page
-    assert "流程演示" in c.get("/data-readiness?dataset_id=_trial").text
+    assert "合成数据 · 仅供演示" in c.get("/data-readiness?dataset_id=_trial").text
     assert c.get("/data-readiness?dataset_id=no_such_data").status_code == 400
     assert c.get("/data-readiness?dataset_id=_trial&horizon=999").status_code == 400
     ds = ui.datasets(tmp_path)

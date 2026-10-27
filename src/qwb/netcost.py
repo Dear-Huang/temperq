@@ -42,8 +42,13 @@ def struct_half_spread_bp(P: dict) -> pd.DataFrame:
                          "price": px_m.stack(future_stack=True),
                          "vol": vol_m.stack(future_stack=True)})
     spread = tc.struct_spread(long).unstack()
-    spread = spread.reindex(index=amt_m.index, columns=P["close"].columns).shift(1)  # month m-1
+    # Shift exactly one calendar month, including missing months. A row shift on
+    # sparse observed months would silently reuse stale features across a gap.
+    calendar = pd.period_range(amt_m.index.min(), amt_m.index.max(), freq="M")
+    spread = spread.reindex(index=calendar, columns=P["close"].columns).shift(1)
     out = spread.reindex(month).set_axis(dates) / 2.0
+    out.attrs.update(struct_calibration_id=tc.CALIBRATION_ID, struct_beta=tc.DEFAULT_BETA.tolist(),
+                     feature_lag_months=1, struct_library_version=tc.__version__)
     return out
 
 

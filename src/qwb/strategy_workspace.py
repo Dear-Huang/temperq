@@ -14,7 +14,7 @@ import shutil
 import sqlite3
 import uuid
 
-from . import daily, daily_data, experiments as ex, governance as g, pipeline, strategy, external_signals
+from . import daily, daily_data, experiments as ex, governance as g, pipeline, strategy, external_signals, experience_playbooks, rule_signals
 from .policy import Policy, resolve
 
 import numpy as np
@@ -43,6 +43,7 @@ def implementation():
         Path(__file__).parent/"portfolio/reference.py",Path(__file__).parent/"portfolio/struct_reference.py",
         Path(__file__).with_name("struct_costs.py"),Path(__file__).with_name("netcost.py"),
         Path(external_signals.__file__),
+        Path(rule_signals.__file__), Path(__file__).with_name("rule_cards.py"), Path(__file__).with_name("experience_rules.py"),
         Path(cost_model.__file__),
         Path(__file__).parent/"rules/cn_a.yaml")})
 
@@ -73,6 +74,7 @@ def inputs(workdir, root, spec):
     snapshot = daily_data.current(spec["data_feed"])
     meta = ex.read(root/"final_model/meta.json")
     if meta.get("model")=="external_scores":external_signals.validate_meta(meta)
+    if meta.get("model")=="rule_card":rule_signals.validate_model(meta)
     meta["dir"] = root/"final_model"
     panel, snapshot_id, st, members = pipeline.load_data(
         {"data":{"source":"snapshot","dir":str(snapshot)},"cfg":meta["cfg"]},Path(workdir))
@@ -92,7 +94,13 @@ def inputs(workdir, root, spec):
 
 
 def history(root,panel):
-    return g.signal_matrix(pd.read_parquet(root/"predictions.parquet"),panel)
+    meta = ex.read(root/"final_model/meta.json")
+    rows = pd.read_parquet(root/"predictions.parquet")
+    signals = (pd.DataFrame(columns=panel["close"].columns, dtype=float)
+               if rows.empty and meta.get("model") == "rule_card" else g.signal_matrix(rows,panel))
+    if meta.get("model") == "rule_card":
+        signals = signals.reindex(pd.to_datetime(ex.read(root/"final_model/signal_dates.json")["dates"]))
+    return signals
 
 
 def config(spec):
@@ -122,7 +130,7 @@ def capital_context(run_dir,feed,cash,holdings):
 
 
 def create(workdir, run_dir, feed, *, name, cash, preset="direct", overrides=None, mode=None,
-           holdings=None, sid=None,cost_model="struct_v1",template_origin=None):
+           holdings=None, sid=None,cost_model="struct_v1",template_origin=None,experience_notes="",playbook_id=""):
     if not name.strip() or len(name)>80 or isinstance(cash,bool) or not np.isfinite(cash) or cash<0:
         raise ValueError("请填写策略名称与非负现金")
     run_dir,feed=Path(run_dir).resolve(),Path(feed).resolve()
@@ -130,10 +138,17 @@ def create(workdir, run_dir, feed, *, name, cash, preset="direct", overrides=Non
         feed=feed.parent.parent
     meta=ex.read(run_dir/"final_model/meta.json")
     if meta.get("model")=="external_scores":external_signals.validate_meta(meta)
+    elif meta.get("model")=="rule_card":rule_signals.validate_model(meta)
     else:strategy.locked_recipe(meta)
     holdings=strategy.read_holdings(pd.DataFrame(holdings or [],columns=sorted(strategy.HOLDING_COLUMNS)).to_csv(index=False).encode())
     if cash==0 and not holdings:raise ValueError("现金与初始持仓不能同时为空")
-    resolved=resolve(preset,overrides,mode,capital=capital_context(run_dir,feed,cash,holdings),cost_model=cost_model)
+    capital = capital_context(run_dir,feed,cash,holdings)
+    resolved=(experience_playbooks.resolve(playbook_id, capital=capital, overrides=overrides)
+              if playbook_id else resolve(preset,overrides,mode,capital=capital,cost_model=cost_model))
+    if playbook_id:
+        resolved["policy"]["mode"] = mode or resolved["policy"]["mode"]
+        resolved["policy"]["cost_model"] = cost_model
+        resolved["playbook_notes"] = str(experience_notes)[:4000]
     if template_origin:resolved['source_template']=template_origin
     sid=sid or uuid.uuid4().hex
     family=location(workdir,sid)
@@ -150,9 +165,9 @@ def create(workdir, run_dir, feed, *, name, cash, preset="direct", overrides=Non
         shutil.copytree(run_dir/"final_model",temporary/"final_model")
         shutil.copy2(run_dir/"predictions.parquet",temporary/"predictions.parquet")
         spec={"schema":"strategy_workspace_v1","sid":sid,"vid":vid,"name":name,"created_at":ex.now(),
-              "cash":float(cash),"holdings":holdings,"data_feed":str(feed),"resolved":resolved,
+              "cash":float(cash),"holdings":holdings,"experience_notes":str(experience_notes)[:4000],"data_feed":str(feed),"resolved":resolved,
               "signal":{"source":str(run_dir),"model_hash":strategy.model_identity(temporary/"final_model"),
-                        "kind":"external_scores" if meta.get("model")=="external_scores" else "local_model",
+                        "kind":meta["model"] if meta.get("model") in {"external_scores", "rule_card"} else "local_model",
                         "predictions_hash":ex.digest(temporary/"predictions.parquet"),"task":meta["card"],
                         "final_model_data_end":meta["data_end"]},
               "protocol":strategy.protocol()[0],"implementation_hash":implementation()}
@@ -172,12 +187,13 @@ def replay(root,spec,panel,signals,snapshot_id,*,start,end,cfg=None,mode=None,sn
            calendar=None,check=lambda:None):
     chosen,control=config(spec)
     chosen=cfg or chosen
-    samples=(g.risk_samples(g.RiskData(panel),signals,chosen.n_hold,check)
+    allow_empty=spec["signal"]["kind"]=="rule_card"
+    samples=(g.risk_samples(g.RiskData(panel),signals,chosen.n_hold,check,allow_empty=allow_empty)
              if (mode or control)=="ml" else pd.DataFrame(columns=["date",*g.FEATURES,"variance","label_end"]))
     return g.replay(panel,signals,chosen,mode=mode or control,start=start,end=end,
         initial_cash=spec["cash"],initial_holdings=spec["holdings"],snapshot_id=snapshot_id,
         samples=samples,snapshot_ids=snapshot_ids,allow_single=allow_single,trading_calendar=calendar,check=check,
-        cost_model=Policy.model_validate(spec["resolved"]["policy"]).cost_model)
+        cost_model=Policy.model_validate(spec["resolved"]["policy"]).cost_model,allow_empty=allow_empty)
 
 
 def evaluate(workdir,sid,vid,*,start,end,check=lambda:None,log=lambda x:None):
@@ -206,7 +222,8 @@ def evaluate(workdir,sid,vid,*,start,end,check=lambda:None,log=lambda x:None):
             start=start,end=end,initial_cash=spec["cash"],initial_holdings=spec["holdings"],
             snapshot_id=snapshot_id,samples=pd.DataFrame(),trading_calendar=calendar,
             reference_arm="selected",check=check,log=log,
-            cost_model=Policy.model_validate(spec["resolved"]["policy"]).cost_model)
+            cost_model=Policy.model_validate(spec["resolved"]["policy"]).cost_model,
+            allow_empty=spec["signal"]["kind"]=="rule_card")
         arms={"selected":selected,"immediate":immediate,"exposure_matched":matched}
         for key,arm in arms.items():
             ex.write(out/(key+".json"),arm)
@@ -254,7 +271,7 @@ def preflight(workdir,sid,vid):
     signals=history(root,panel)
     day=signals.index[-1]
     cfg,_=config(spec)
-    if signals.loc[day].notna().sum()<cfg.n_hold:
+    if meta.get("model") != "rule_card" and signals.loc[day].notna().sum()<cfg.n_hold:
         raise ValueError("信号股票数不足，请减少持仓数")
     arm=replay(root,spec,panel,signals,snap,start=day,end=day,allow_single=True,calendar=calendar)
     intent=arm["decisions"][0]["weights"]
@@ -339,6 +356,7 @@ def start(workdir,sid,vid,*,historical_start=None,now=None):
 
 def _live_scores(meta,panel,st,members,days,*,now=None):
     if meta.get("model")=="external_scores":return external_signals.live_scores(meta,panel,days,now=now)
+    if meta.get("model")=="rule_card":return rule_signals.live_scores(meta,panel,st,members,days)
     features=daily.selected_features(panel,meta["cfg"])
     if daily.feature_names(features)!=meta["features"]:raise ValueError("新数据特征与冻结模型不一致")
     universe=daily.universe(panel,meta["cfg"],st,members)

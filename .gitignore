@@ -38,3 +38,7 @@ build/
 *.baiduyun.uploading.cfg
 *.tmp
 docs/INTEGRATION.md
+
+# Downloaded papers and scraped pages used for research; third-party content, kept local.
+docs/research/*/evidence/
+docs/research/*/__pycache__/

@@ -36,23 +36,24 @@ try {
   await page.goto(`${url}/strategies/new?source=baostock_onboarding_20261023`);
   await page.locator('select[name="dataset"]').selectOption("free_daily");
   await capture("signal-desktop");
-  await page.getByRole("button", { name: "下一步：配置政策" }).click();
+  await page.getByRole("button", { name: "下一步" }).click();
+  await page.getByRole('link', { name: '下一步：设置规则 →', exact: true }).click();
   await page.locator('input[name="name"]').fill("浏览器验收 · 分步调整");
   await page.locator('select[name="preset"]').selectOption("patient");
   await capture("policy-simple-desktop");
-  await page.locator("#advanced summary").click();
+  await page.locator("#advanced > summary").click();
   if (await page.locator('[data-field="target_volatility"]').isVisible())
     throw Error("Inactive fixed-mode volatility target is visible");
   await page.locator('select[name="mode"]').selectOption("ewma");
   if (!await page.locator('[data-field="target_volatility"]').isVisible())
     throw Error("Active EWMA target missing");
-  await page.getByRole("button", { name: "恢复该预设" }).click();
+  await page.getByRole("button", { name: "恢复模板默认值" }).click();
   if (await page.locator('select[name="mode"]').inputValue() !== "fixed") throw Error("Preset reset failed");
   await page.locator('input[name="n_hold"]').fill("4");
   await page.locator('input[name="hold_until_rank"]').fill("6");
   await page.locator('input[name="max_weight"]').fill("0.3");
   await capture("policy-advanced-desktop");
-  await page.getByRole("button", { name: "冻结设置，进入检验" }).click();
+  await page.getByRole("button", { name: "保存并继续" }).click();
   await page.waitForURL(/\/strategies\/[0-9a-f]{32}\/[0-9a-f]{32}$/);
   const base = page.url();
   const config = await (await page.request.get(`${base}/config.json`)).json();
@@ -61,17 +62,18 @@ try {
   if (!config.data_feed.replaceAll("\\", "/").endsWith("/data/free_daily")) throw Error("Bound static snapshot instead of feed");
   await page.locator('input[name="start"]').fill("2026-10-09");
   await page.locator('input[name="end"]').fill("2026-10-22");
-  await page.getByRole("button", { name: "记录尝试并检验" }).click();
+  await page.getByRole("button", { name: "开始检验" }).click();
   await finishJob();
-  if (await page.locator("svg polyline").count() !== 2) throw Error("Missing policy comparison");
+  if (await page.locator("svg polyline").count() !== 3) throw Error("Missing three-arm policy comparison");
   await capture("evidence-desktop");
   await page.getByRole("link", { name: "逐日决策与成交" }).click();
   await page.locator("main details summary").first().click();
   await capture("decisions-desktop");
-  await page.goto(base);
+  await page.goto(base+'/deploy');
   await page.getByText("高级：用历史演示运行流程", { exact: true }).click();
   await page.locator('input[name="historical_start"]').fill("2026-10-09");
   await page.getByRole("button", { name: "开启历史演示", exact: true }).click();
+  await page.goto(base);
   await page.getByRole("button", { name: "检查新行情并记账" }).click();
   await finishJob();
   const before = await (await page.request.get(`${base}/records.csv`)).text();
@@ -82,16 +84,18 @@ try {
   if (after !== before) throw Error("Retry changed ledger");
   await capture("running-desktop");
   await page.getByRole("link", { name: "修改并建立新版本" }).click();
-  await page.locator("#advanced summary").click();
+  await page.locator("#advanced > summary").click();
   await page.locator('input[name="adjustment_speed"]').fill("0.8");
-  await page.getByRole("button", { name: "冻结设置，进入检验" }).click();
+  await page.getByRole("button", { name: "保存并继续" }).click();
   const next = page.url();
   if (next === base) throw Error("Version overwritten");
   await page.locator('input[name="start"]').fill("2026-10-09");
   await page.locator('input[name="end"]').fill("2026-10-22");
-  await page.getByRole("button", { name: "记录尝试并检验" }).click();
+  await page.getByRole("button", { name: "开始检验" }).click();
   await finishJob();
-  await page.getByRole("button", { name: "开启纸面观察", exact: true }).click();
+  await page.getByRole('link', { name: '下一步：部署纸面账户 →', exact: true }).click();
+  await page.getByRole("button", { name: "开启纸面账户", exact: true }).click();
+  await page.goto(next);
   await page.getByRole("button", { name: "检查新行情并记账" }).click();
   await finishJob();
   const live = await (await page.request.get(`${next}/records.csv`)).text();
@@ -107,7 +111,7 @@ try {
       await capture(`${name}-${width}`);
     }
     await page.goto(`${base}/edit`);
-    await page.locator("#advanced summary").click();
+    await page.locator("#advanced > summary").click();
     await capture(`editor-${width}`);
   }
   if (errors.length) throw Error(errors.join("\n"));

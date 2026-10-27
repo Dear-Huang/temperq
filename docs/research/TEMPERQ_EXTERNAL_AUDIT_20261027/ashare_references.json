@@ -1,0 +1,145 @@
+[
+  {
+    "doi": "10.1609/aaai.v35i1.16083",
+    "title": "Universal Trading for Order Execution with Oracle Policy Distillation",
+    "authors": [
+      {
+        "given": "Yuchen",
+        "family": "Fang"
+      },
+      {
+        "given": "Kan",
+        "family": "Ren"
+      },
+      {
+        "given": "Weiqing",
+        "family": "Liu"
+      },
+      {
+        "given": "Dong",
+        "family": "Zhou"
+      },
+      {
+        "given": "Weinan",
+        "family": "Zhang"
+      },
+      {
+        "given": "Jiang",
+        "family": "Bian"
+      },
+      {
+        "given": "Yong",
+        "family": "Yu"
+      },
+      {
+        "given": "Tie-Yan",
+        "family": "Liu"
+      }
+    ],
+    "container_title": [
+      "Proceedings of the AAAI Conference on Artificial Intelligence"
+    ],
+    "issued": {
+      "date-parts": [
+        [
+          2021,
+          5,
+          18
+        ]
+      ]
+    },
+    "source": "Crossref",
+    "scope": "A-share execution simulation; arXiv full text read",
+    "evidence_file": "evidence/ashare_round/doi_opd.json"
+  },
+  {
+    "doi": "10.1016/j.jfineco.2019.03.008",
+    "title": "Size and value in China",
+    "authors": [
+      {
+        "given": "Jianan",
+        "family": "Liu"
+      },
+      {
+        "given": "Robert F.",
+        "family": "Stambaugh"
+      },
+      {
+        "given": "Yu",
+        "family": "Yuan"
+      }
+    ],
+    "container_title": [
+      "Journal of Financial Economics"
+    ],
+    "issued": {
+      "date-parts": [
+        [
+          2019,
+          10
+        ]
+      ]
+    },
+    "source": "Crossref",
+    "scope": "Published journal metadata verified; working-paper full text read",
+    "evidence_file": "evidence/ashare_round/doi_sizevalue.json"
+  },
+  {
+    "doi": "10.3386/w24458",
+    "title": "Size and Value in China",
+    "authors": [
+      {
+        "given": "Jianan",
+        "family": "Liu"
+      },
+      {
+        "given": "Robert",
+        "family": "Stambaugh"
+      },
+      {
+        "given": "Yu",
+        "family": "Yuan"
+      }
+    ],
+    "container_title": [],
+    "issued": {
+      "date-parts": [
+        [
+          2018,
+          3
+        ]
+      ]
+    },
+    "source": "Crossref",
+    "scope": "Working paper full text read; same research as journal version",
+    "evidence_file": "evidence/ashare_round/doi_sizevalue_nber.json"
+  },
+  {
+    "doi": "10.24963/ijcai.2020/627",
+    "title": "An End-to-End Optimal Trade Execution Framework based on Proximal Policy Optimization",
+    "authors": [
+      {
+        "given": "Siyu",
+        "family": "Lin"
+      },
+      {
+        "given": "Peter A.",
+        "family": "Beling"
+      }
+    ],
+    "container_title": [
+      "Proceedings of the Twenty-Ninth International Joint Conference on Artificial Intelligence"
+    ],
+    "issued": {
+      "date-parts": [
+        [
+          2020,
+          7
+        ]
+      ]
+    },
+    "source": "Crossref",
+    "scope": "US NYSE experiment, not A-share empirical evidence",
+    "evidence_file": "evidence/ashare_round/doi_ppo.json"
+  }
+]

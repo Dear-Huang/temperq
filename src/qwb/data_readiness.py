@@ -70,7 +70,20 @@ def assess(snap, *, horizon=5, synthetic=False):
     return {"label": "先补数据" if blocked else "训练前数据提示", "blocked": blocked, "messages": messages}
 
 
-def render(value):
+def render(value, *, compact=False):
+    if compact:
+        title = '先补数据' if value['blocked'] else '数据检查详情'
+        warnings = [('缺少 adj_factor', '缺少复权因子'), ('缺少历史 is_st', '缺少 ST 标记'),
+                    ('历史偏短', '历史偏短'), ('检验日期偏少', '检验日期偏少'),
+                    ('少于建议的 30 只', '股票数量偏少'), ('当前每日纸面交易只支持', '此期限仅支持研究')]
+        notices = [label for prefix, label in warnings if any(message.startswith(prefix) for message in value['messages'])]
+        if notices and not value['blocked']:
+            title = ' · '.join(notices)
+        if value['label'] == '流程演示':
+            title = '合成数据 · 仅供演示'
+        items = ''.join('<li>' + html.escape(message) + '</li>' for message in value['messages'])
+        return (f'<details class="data-readiness{" warn" if value["blocked"] or notices else ""}"'
+                f'{" open" if value["blocked"] else ""}><summary>{title}</summary><ul>{items}</ul></details>')
     return ('<div class="notice" role="status"><h3>' + html.escape(value["label"]) +
             '</h3><ul>' + ''.join('<li>' + html.escape(message) + '</li>' for message in value["messages"]) + '</ul></div>')
 

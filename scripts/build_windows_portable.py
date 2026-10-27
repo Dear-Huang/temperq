@@ -33,8 +33,8 @@ README = """# TemperQ · Windows 下载即用版
 
 1. 将整个 ZIP 解压到可写文件夹（不要直接在压缩包里运行）。
 2. 双击 start.bat，保留命令窗口，浏览器会打开本机工作台。
-3. 点击“一键下载免费数据（BaoStock）”，完成后选“用这份数据继续”，开始训练。
-4. 训练或选入门模型 → 配置政策 → 历史检验 → 纸面运行，按页面指引继续。
+3. 首页进入治理诊断，导入预测、持仓、参考价格与规则；可先载入合成示例。
+4. 比较方案、确认后导出参考计划。原训练与运行账户通过“我的策略”继续，不自动改动。
 
 Windows 10/11 x64；内含 Python 和 CPU 训练依赖，无需 Python、uv、git、Node 或显卡。
 启动及合成数据训练可离线；下载行情需要联网，免费服务可能中断。
@@ -81,7 +81,7 @@ def build(out: Path, python_home: Path, uv: str):
     stage.mkdir(parents=True)
     # Keep the corresponding source, examples and manuals; no site or private data.
     prefixes = ("src/", "examples/", "bench/", "third_party/ashare-tcost/", "docs/", "scripts/")
-    roots = {"pyproject.toml", "requirements.lock", "LICENSE", "config.example.yaml"}
+    roots = {"pyproject.toml", "requirements.lock", "LICENSE", "config.example.yaml", "AGENTS.md"}
     for name in files:
         if name not in roots and not name.startswith(prefixes):
             continue

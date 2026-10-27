@@ -3,16 +3,29 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+from html.parser import HTMLParser
 import json
 import os
 from pathlib import Path
-import re
 import socket
 import subprocess
 import time
 import urllib.parse
 import urllib.request
 import zipfile
+
+
+class Inputs(HTMLParser):
+    def __init__(self, markup):
+        super().__init__()
+        self.fields=[]
+        self.feed(markup)
+
+    def handle_starttag(self, tag, attrs):
+        if tag=='input':self.fields.append(dict(attrs))
+
+    def value(self,name):
+        return next(item['value'] for item in self.fields if item.get('name')==name)
 
 
 def check(archive: Path, destination: Path):
@@ -95,17 +108,28 @@ print(json.dumps(loaded,ensure_ascii=False))
                     time.sleep(0.5)
             else:
                 raise TimeoutError("Portable startup timed out")
-            assert "TemperQ" in page and "一键下载免费数据（BaoStock）" in page
+            assert "TemperQ" in page and "选择起步模板" in page
+            assert "选择起步模板" in get('/start')
+            assert "低波稳健" in get('/playbooks')
             assert "使用入门模型" in get("/strategies/new")
             assert len(opener.open(base + "/static/dm-sans.ttf").read()) > 1000
             assert len(get("/static/deployment.js")) > 1000
             assert len(get("/static/deployment.css")) > 1000
-            token = re.search('name="token" value="([^"]+)"', page)[1]
+            assert len(get('/static/rule-editor.js')) > 1000
+            rule_check = subprocess.run([str(app/'runtime/python.exe'),'-E','-s','-X','utf8','-m','qwb.cli',
+                'rule','validate','examples/rule_card_v1.json','--json'],cwd=app,env=env,
+                capture_output=True,encoding='utf-8',timeout=30)
+            assert rule_check.returncode==0 and json.loads(rule_check.stdout)['valid'],rule_check.stderr
+            assert (app/'AGENTS.md').is_file()
+            page = get('/train')
+            assert "一键下载免费数据（BaoStock）" in page
+            inputs=Inputs(page)
+            token = inputs.value('token')
             fields = dict(token=token, name="portable_acceptance", market="cn_a", horizon="5",
                           universe="all", capital="lt30w", model="lightgbm", dataset="__synthetic__",
                           num_boost_round="40", n_seeds="1")
             # Use the actual synthetic dataset value rendered by this version.
-            fields["dataset"] = re.findall('name="dataset" value="([^"]+)"', page)[0]
+            fields["dataset"] = inputs.value('dataset')
             with post("/run", fields) as response:
                 job_url = response.url
                 body = response.read().decode()
@@ -128,6 +152,7 @@ print(json.dumps(loaded,ensure_ascii=False))
                       "detached_training_job": job_id, "elapsed_seconds": round(time.monotonic() - started, 2),
                       "bundled_starter": "installed package files verified; visible in model selection",
                       "deployment_assets": "local dashboard script and styles served from relocated app",
+                      "rule_interface": "four templates, editor asset, bundled example, read-only CLI, AGENTS.md",
                       "limit": "Same Windows host; fresh-machine CI and nondeveloper trials remain separate acceptance."}
             (destination / "acceptance.json").write_text(json.dumps(output, ensure_ascii=False, indent=2), encoding="utf-8")
             print(json.dumps(output, ensure_ascii=False, indent=2), flush=True)

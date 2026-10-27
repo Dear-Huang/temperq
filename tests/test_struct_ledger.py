@@ -38,6 +38,7 @@ def test_struct_prices_are_lagged_and_missing_estimate_blocks_instead_of_free_tr
     arm=w.replay(loc,spec,panel,signals,'fixture',start='2026-10-09',end='2026-10-22')
     assert arm['metrics']['struct_spread']>0
     assert all(f['cost_inputs_month']=='2026-09' for f in arm['fills'])
+    assert all(f['cost_calibration_id']=='struct_lagged_2021_2023_v1' for f in arm['fills'])
     before=struct_costs.estimates(panel)
     altered={k:v.copy() for k,v in panel.items()}
     altered['close'].loc['2026-10-01':]*=100

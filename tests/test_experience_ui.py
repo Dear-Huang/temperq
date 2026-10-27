@@ -10,15 +10,19 @@ def test_empty_workspace_has_actionable_start_and_no_fake_official_model(tmp_pat
     client = TestClient(app)
     page = client.get('/start')
     assert page.status_code == 200
-    assert '准备数据并训练' in page.text and '先试运行演示' in page.text
-    assert 'href="/#free-data"' in page.text
+    assert '开始训练' in page.text and '用现成的模型' in page.text
+    assert 'href="/train#free-data"' in page.text
+    assert page.text.index('自己训练一个模型') < page.text.index('下载免费日线')
+    assert '全部策略 →' not in page.text
     assert '统一插件安装仍在规划' in page.text
     signal = client.get('/strategies/new').text
-    assert '先准备兼容的五日模型' in signal
+    assert '需要兼容的五日模型' in signal
     assert '<button disabled>下一步' in signal
     assert '还没有兼容模型' in signal and '还没有行情数据' in signal
     assert client.get('/static/experience.js').status_code == 200
     assert client.get('/static/experience.css').status_code == 200
+    assert '<dialog id="workspace-help"' in page.text
+    assert '每一步都能深入' not in page.text
 
 
 def test_metadata_discovery_respects_hidden_and_incompatible_models(tmp_path, monkeypatch):
@@ -60,8 +64,18 @@ def test_corrupt_project_does_not_block_other_onboarding(tmp_path):
 def test_flow_has_one_current_step_and_no_unavailable_future_link():
     value = experience_ui.flow(3, '/strategies/a/b')
     assert value.count('aria-current="step"') == 1
-    assert 'href="/strategies/a/b/edit"' in value
+    assert 'href="/strategies/a/b/rules"' in value
     assert 'href="/strategies/a/b#running"' not in value
+    assert '<small>' not in value
+
+
+def test_model_stage_uses_recorded_signal_evidence_not_account_returns():
+    value=experience_ui.signal_report({'model_key':'ridge','signal_screen':{'status':'NOT_ESTABLISHED'},
+        'ic':{'ridge':{'final_test':{'mean':.02,'t':.5,'n':100}}},
+        'net_of_cost':{'signals':{'ridge':{'net_excess_ann':.9}}},'ledger':{'views':5}})
+    assert '排序能力 · 暂不能判断' in value and '+0.020' in value
+    assert '本地测试期查看 5 次' in value
+    assert '净超额' not in value and '90%' not in value
 
 
 def test_running_old_version_remains_reachable_beside_new_draft(tmp_path):

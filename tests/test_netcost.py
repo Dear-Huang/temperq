@@ -73,3 +73,35 @@ def test_struct_half_spread_uses_previous_month():
     # flat January price 10 -> zero volatility, so the tick floor binds: 100/10 = 10bp,
     # half-spread 5bp. February's own price (2) would give 25bp.
     assert hs[feb].iloc[0, 0] == pytest.approx(5.0)
+
+
+def test_struct_calendar_gap_is_not_filled_with_a_stale_observed_month():
+    import pandas as pd
+    P = panel(n_days=75, n_codes=1)
+    keep = P['close'].index.month != 2
+    P = {k: frame.loc[keep] for k, frame in P.items()}
+    hs = netcost.struct_half_spread_bp(P)
+    assert hs.loc[hs.index.month == 3].isna().all().all()
+    assert hs.loc[hs.index.month == 4].notna().all().all()
+    assert hs.attrs['struct_calibration_id'] == 'struct_lagged_2021_2023_v1'
+    assert hs.attrs['feature_lag_months'] == 1
+
+
+def test_struct_default_full_model_uses_one_month_lagged_liquidity_inputs():
+    import pandas as pd
+    P = panel(n_days=70, n_codes=1)
+    index = P['close'].index
+    # Large enough price / low enough liquidity for the liquidity component to bind.
+    P['close'].iloc[:, 0] = 200 * np.exp(.04*np.sin(np.arange(len(index))))
+    P['amount'].iloc[:, 0] = 5e6
+    source = P['close'].loc[index.month == 1].iloc[:, 0]
+    vol = P['close'].pct_change(fill_method=None).rolling(21, min_periods=10).std().loc[index.month == 1].iloc[-1, 0]
+    expected = max(100/source.mean(), np.exp(10.4316-.3758*np.log(5e6)+.4983*np.log(vol)+.1689*np.log(source.mean()))) / 2
+    before = netcost.struct_half_spread_bp(P)
+    assert before.loc[index.month == 2].iloc[0, 0] == pytest.approx(expected)
+    changed = {k: v.copy() for k, v in P.items()}
+    changed['close'].loc['2024-02-01':] *= 100
+    changed['amount'].loc['2024-02-01':] *= 1000
+    after = netcost.struct_half_spread_bp(changed)
+    # Mutating all February information cannot affect February's quoted costs.
+    np.testing.assert_allclose(before.loc[index.month == 2], after.loc[index.month == 2])

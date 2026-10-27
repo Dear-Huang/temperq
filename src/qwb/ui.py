@@ -28,7 +28,7 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
-from . import daily, data_readiness, dataset, experiments, runconfig, scenario, experience_ui
+from . import daily, data_readiness, dataset, experiments, runconfig, scenario, experience_ui, strategy_projects
 from .jobs import JobSpec, Store
 
 NAME_RE = re.compile(r"^[A-Za-z0-9_-]{1,40}$")
@@ -413,26 +413,23 @@ def step1_html() -> str:
         (planned_cards if off else cards).append(
             f'<label class="card{" off" if off else ""}"><input type="radio" name="model" '
             f'value="{k}" form="main"{" checked" if k == scenario.DEFAULT_MODEL else ""}'
-            f'{" disabled" if off else ""}><b>{html.escape(v["label"])}</b>'
+            f'{" disabled" if off else ""}><b>{html.escape({"lightgbm": "LightGBM", "ridge": "Ridge"}.get(k, v["label"]))}</b>'
             f'{"<span class=tag>规划中</span>" if off else ""}'
-            f'<span>{html.escape(v["note"])}</span></label>')
+            '</label>')
     return (
-        f'<div class="q"><b>打算投入多少资金</b><div><select name="capital" form="main" id="capital">{cap}</select></div>'
+        f'<div class="q"><b>资金规模</b><div><select name="capital" form="main" id="capital">{cap}</select></div>'
         '<small class="mut" id="capnote"></small></div>'
-        f'<div class="q"><b>用什么模型</b><div class="model-choices">{"".join(cards)}</div></div>'
-        '<p class="mut">默认：A 股、只做多、5 日预测。先按默认完成，再展开研究设置微调。</p>'
-        '<details id="training-scope"><summary>研究设置 · 股票池、预测期限和市场</summary><div class="scenario-grid">'
+        f'<div class="q"><b>模型</b><div class="model-choices">{"".join(cards)}</div></div>'
+        '<details id="training-scope"><summary>研究设置</summary><div class="scenario-grid">'
         f'<div class="q"><b>用在哪个市场</b><div>{"".join(mk)}</div></div>'
         f'<div class="q"><b>多久调一次仓（持有期）</b><div>{"".join(hz)}</div>'
-        '<small class="mut">每天收盘后选股，第二天开盘买入，持有到期后开盘卖出。</small></div>'
+        '</div>'
         f'<div class="q"><b>在哪些股票里选</b><div><select name="universe" form="main" id="universe">{uv}</select></div>'
         '<div id="listbox" hidden><textarea name="universe_list" form="main" rows="3" '
         'placeholder="填股票代码，空格、逗号或换行分隔，例如 000001 600000.SH ……至少 30 只"></textarea></div>'
-        '<small class="mut">指数成分股按每个历史时点当时的成分取，不用今天的名单回看过去。</small></div>'
+        '</div>'
         f'<div class="q"><b>交易方式</b><div>{"".join(dr)}</div></div></div>'
-        '</details>'
-        '<div class="q">'
-        f'<details><summary>规划中的模型</summary>{"".join(planned_cards)}</details></div>')
+        f'<details><summary>规划中的模型</summary>{"".join(planned_cards)}</details></details>')
 
 
 # ----------------------------------------------------------------- app
@@ -481,26 +478,36 @@ def create_app(workdir: Path, task_dir: Path | None = None,
         runner(work)
         return jid
 
-    def page(title: str, body: str, refresh: bool = False) -> HTMLResponse:
+    def page(title: str, body: str, refresh: bool = False, *, help_body=None, navigation=None) -> HTMLResponse:
         return HTMLResponse(LAYOUT.replace("{{title}}", html.escape(title))
                             .replace("{{refresh}}", '<meta http-equiv="refresh" content="4">'
                                      if refresh else "")
-                            .replace("{{body}}", body))
+                            .replace("{{help}}", experience_ui.help_panel() if help_body is None else help_body)
+                            .replace('{{navigation}}', navigation or AUDIT_NAV).replace("{{body}}", body))
 
     def oops(msg: str, back: str = "/") -> HTMLResponse:
         return page("出错了", f'<div class="box bad"><pre class="plain">{html.escape(msg)}</pre></div>'
                               f'<p><a class="btn" href="{back}">返回修改</a></p>')
 
     # ---------------------------------------------------------------- pages
-    @app.get("/", response_class=HTMLResponse)
-    def index(ds: str = "", next_signal: str = ""):
+    @app.get("/train", response_class=HTMLResponse)
+    def index(ds: str = "", next_signal: str = "", project: str = ""):
+        if project:
+            try:
+                draft=strategy_projects.resolved(workdir,project)
+                ds=ds or draft.get('dataset','')
+            except (ValueError,OSError,KeyError) as exc:return oops(str(exc),'/start')
         avail = datasets(workdir)
         sel_ds = ds if ds in avail else (next((k for k in avail if k != SYNTHETIC), SYNTHETIC))
         ds_html = "".join(
-            f'<label class="row"><input type="radio" name="dataset" value="{html.escape(k)}"'
-            f'{" checked" if k == sel_ds else ""}> {html.escape(v["label"])}'
+            f'<label class="row"><input type="radio" name="dataset" form="main" value="{html.escape(k)}"'
+            f'{" checked" if k == sel_ds else ""}> '
+            + ("合成数据演示" if k == SYNTHETIC else html.escape(k)
+               + f' <span class="mut">· {html.escape(str(v["snap"].get("codes", "?")))} 只 · {html.escape(str(v["snap"]["start"]))} 至 {html.escape(str(v["snap"]["end"]))}'
+               + (' · 合成行情' if str(v['snap'].get('source', '')).startswith('synthetic') else '')
+               + (f' · 另加 {v["sources"]} 个来源' if v.get('sources') else '') + '</span>')
             + ("" if k == SYNTHETIC else
-               f' <a href="/data/{html.escape(k)}">{"管理数据来源" if v.get("combined") else "加更多数据来源"}</a>')
+               f' <a href="/data/{html.escape(k)}" title="管理数据来源">管理</a>')
             + '</label>' for k, v in avail.items())
         D = daily.DEFAULTS
         gpu = "、".join(hw["gpus"]) or "未检测到"
@@ -511,8 +518,8 @@ def create_app(workdir: Path, task_dir: Path | None = None,
                        .replace("__PART__", str(scenario.PARTICIPATION))
         body = INDEX.format(
             token=token, step1=step1_html(), datasets=ds_html,
-            data_requirements=data_readiness.REQUIREMENTS,
-            data_check=data_readiness.render(data_readiness.assess(avail[sel_ds]["snap"], synthetic=sel_ds == SYNTHETIC)),
+            free_open='' if any(k != SYNTHETIC for k in avail) else ' open',
+            data_check=data_readiness.render(data_readiness.assess(avail[sel_ds]["snap"], synthetic=sel_ds == SYNTHETIC), compact=True),
             name=f"model_{datetime.now():%m%d_%H%M}",
             rounds=D["num_boost_round"], leaves=D["lgbm"]["num_leaves"],
             lr=D["lgbm"]["learning_rate"], seeds=len(D["seeds"]), alpha=D["ridge_alpha"],
@@ -522,6 +529,9 @@ def create_app(workdir: Path, task_dir: Path | None = None,
             if low_mem else "",
             jobs=_job_rows(store)) + script
         from . import starter_models
+        if project:
+            body=body.replace('name="token" value="'+token+'">','name="token" value="'+token+'"><input type="hidden" name="project" value="'+project+'">')
+            body='<p class="policy-meta">'+html.escape(draft['name'])+' · 模型</p>'+body
         if next_signal in {'starter_'+key for key in starter_models.catalog()}:
             body=body.replace('<form method="post" action="/data/free">',
                 '<form method="post" action="/data/free"><input type="hidden" name="next_signal" value="'+html.escape(next_signal,quote=True)+'">')
@@ -537,8 +547,8 @@ def create_app(workdir: Path, task_dir: Path | None = None,
         model_links = ''.join(f'<li><a href="/workflow/{html.escape(x["run"])}">{html.escape(x["display"])}</a></li>'
                               for x in trained_models()[:6])
         if model_links:
-            body += '<section class="data-section"><h2>已训练模型</h2><ul>' + model_links + '</ul><a href="/models">查看全部模型</a></section>'
-        return page("训练模型", experience_ui.flow(1) + '<div class="training-context"><small>当前在第 1 步：建立给股票打分的模型。下面是本页的训练设置；完成后继续配置政策。</small></div>' + body)
+            body += '<details class="data-section"><summary>已训练模型</summary><ul>' + model_links + '</ul><a href="/models">全部模型</a></details>'
+        return page("训练模型", experience_ui.flow(1) + body)
 
     @app.get("/data-readiness", response_class=HTMLResponse)
     def data_check(dataset_id: str, horizon: int = 5):
@@ -546,7 +556,7 @@ def create_app(workdir: Path, task_dir: Path | None = None,
         if dataset_id not in avail or horizon not in scenario.HORIZONS:
             raise HTTPException(400, "数据或持有期无效")
         return HTMLResponse(data_readiness.render(data_readiness.assess(
-            avail[dataset_id]["snap"], horizon=horizon, synthetic=dataset_id == SYNTHETIC)))
+            avail[dataset_id]["snap"], horizon=horizon, synthetic=dataset_id == SYNTHETIC), compact=True))
 
     @app.get("/template.csv")
     def template():
@@ -557,12 +567,21 @@ def create_app(workdir: Path, task_dir: Path | None = None,
     async def run(req: Request):
         form = dict((await req.form()).items())
         guard(req, form.get("token"))
+        project=str(form.get('project',''))
+        if project:
+            try:
+                draft=strategy_projects.resolved(workdir,project)
+                if draft.get('data_job_status') in {'queued','running'}:return RedirectResponse('/job/'+draft['data_job'],303)
+                if draft.get('job_status') in {'queued','running'}:return RedirectResponse('/job/'+draft['job'],303)
+                if draft.get('version'):raise ValueError('此草稿已保存，请从策略中建立新版本')
+            except (ValueError,OSError,KeyError) as exc:return oops(str(exc),'/start')
         cfg, err, notes = build_config(form, datasets(workdir))
         if cfg is None:
             return oops(err)
         rc, rep = runconfig.resolve(cfg, workdir)
         if rc is None:
             return oops(str(rep))
+        if not project:project=strategy_projects.create(workdir)
         cfg_dir.mkdir(parents=True, exist_ok=True)
         cfg_path = cfg_dir / f"{rc['name']}.yaml"
         cfg_path.write_text(yaml.safe_dump(cfg, allow_unicode=True, sort_keys=False),
@@ -570,10 +589,11 @@ def create_app(workdir: Path, task_dir: Path | None = None,
 
         jid = submit("train", {"action": "train", "resolved": rc, "notes": notes,
                               "ui": {"name": rc["name"], "config": str(cfg_path),
-                                      "what": "train"}, "config_hash": rc["config_hash"]})
+                                      "what": "train", "project":project}, "config_hash": rc["config_hash"]})
+        if project:strategy_projects.update(workdir,project,job=jid,job_root=str(store.root),dataset=str(form['dataset']),data_job=None,stage='model')
         return RedirectResponse(f"/job/{jid}", 303)
 
-    @app.post("/data/csv")
+    @app.post("/data/csv/direct")
     async def data_csv(req: Request):
         form = await req.form()
         guard(req, form.get("token"))
@@ -594,7 +614,7 @@ def create_app(workdir: Path, task_dir: Path | None = None,
                                 f'{snap["codes"]} 只股票，{snap["rows"]:,} 行。</p>'
                                 + (f"<p>提示：</p><ul>{notes}</ul>" if notes else "") +
                                 f'</div>' + data_readiness.render(data_readiness.assess(snap)) +
-                                f'<p><a class="btn" href="/?ds={html.escape(name)}#step2">'
+                                f'<p><a class="btn" href="/train?ds={html.escape(name)}#step2">'
                                 f'用这份数据继续 →</a></p>')
 
     @app.get("/data/{dsid}", response_class=HTMLResponse)
@@ -638,7 +658,7 @@ def create_app(workdir: Path, task_dir: Path | None = None,
         table = ('<div class="tw"><table><tr><th>来源</th><th>是什么</th><th>指标列（会作为模型特征）</th>'
                  '<th>什么时候能用</th><th>行数</th><th></th></tr>' + "".join(rows) + '</table></div>') \
             if rows else '<p class="mut">还没有添加来源。</p>'
-        body = (f'<p><a href="/?ds={html.escape(dsid)}#step2">← 返回首页（已选中这份数据）</a></p>'
+        body = (f'<p><a href="/train?ds={html.escape(dsid)}#step2">← 返回训练页（已选中这份数据）</a></p>'
                 f'<h2>组合数据：{html.escape(dsid)}</h2>'
                 f'<p class="mut">基础行情：{html.escape(str(base))}</p>{table}'
                 '<div class="box"><h3>方式 1：上传 CSV</h3>'
@@ -745,10 +765,13 @@ def create_app(workdir: Path, task_dir: Path | None = None,
         form = dict((await req.form()).items())
         guard(req, form.get("token"))
         try:
+            project=str(form.get('project',''))
+            if project:strategy_projects.read(workdir,project)
             key = register_folder(workdir, str(form.get("path", "")))
+            if project:strategy_projects.update(workdir,project,dataset=key)
         except (ValueError, OSError) as e:
             return oops(str(e))
-        return RedirectResponse(f"/?ds={key}#step3", 303)
+        return RedirectResponse(f"/train?ds={key}"+('&project='+project if project else '')+'#step3', 303)
 
     @app.post("/data/free")
     async def data_free(req: Request):
@@ -767,9 +790,14 @@ def create_app(workdir: Path, task_dir: Path | None = None,
         from . import starter_models
         next_signal=str(form.get('next_signal',''))
         if next_signal not in {'starter_'+key for key in starter_models.catalog()}:next_signal=''
+        project=str(form.get('project',''))
+        if project:
+            try:strategy_projects.read(workdir,project)
+            except (ValueError,OSError,KeyError) as exc:return oops(str(exc),'/start')
         jid = submit("fetch", {"action": "free_data", "name": name, "start": start, "end": end,
                                "ui": {"name": "免费日线 · 40 股入门数据", "what": "free_data", "dataset": name,
-                                      "next_signal":next_signal}})
+                                      "next_signal":next_signal,"project":project}})
+        if project:strategy_projects.update(workdir,project,data_job=jid,job_root=str(store.root),dataset=name,next_signal=next_signal)
         return RedirectResponse(f"/job/{jid}", 303)
 
     @app.post("/data/tushare")
@@ -779,6 +807,10 @@ def create_app(workdir: Path, task_dir: Path | None = None,
         name = str(form.get("name", "")).strip()
         api_token = str(form.get("api_token", "")).strip()
         url = str(form.get("url", "")).strip() or "http://api.tushare.pro"
+        project=str(form.get('project',''))
+        if project:
+            try:strategy_projects.read(workdir,project)
+            except (ValueError,OSError,KeyError) as exc:return oops(str(exc),'/start')
         if not NAME_RE.match(name):
             return oops("数据名称只能用字母、数字、下划线、连字符")
         if (data_root / name).exists():
@@ -795,8 +827,9 @@ def create_app(workdir: Path, task_dir: Path | None = None,
             return oops("年份范围至少 3 年，起始年不早于 2005")
         from . import fetch
         job = fetch.make_job(api_token, url, data_root / "_cache", data_root / name)
-        jid = submit("fetch", {"ui": {"name": name, "what": "fetch", "dataset": name},
+        jid = submit("fetch", {"ui": {"name": name, "what": "fetch", "dataset": name,"project":project},
                                "start": f"{y0}-01-01", "end": f"{y1}-12-31", "url": url}, job)
+        if project:strategy_projects.update(workdir,project,data_job=jid,job_root=str(store.root),dataset=name,next_signal='')
         return RedirectResponse(f"/job/{jid}", 303)
 
     @app.get("/job/{jid}", response_class=HTMLResponse)
@@ -849,6 +882,12 @@ def create_app(workdir: Path, task_dir: Path | None = None,
             suffix='/dashboard' if ui.get('return_to')=='dashboard' else ''
             label='返回部署看板' if suffix else '返回策略与检验结果'
             parts.append(f'<p><a class="btn" href="/strategies/{html.escape(ui["sid"])}/{html.escape(ui["vid"])}{suffix}">{label}</a></p>')
+        if ui.get('project'):
+            parts.insert(0,experience_ui.flow(1))
+            direct_rules=st['state']=='succeeded' and what=='train' and strategy_projects.read(workdir,ui['project']).get('dataset')!=SYNTHETIC
+            target='/projects/'+html.escape(ui['project'])+('/rules' if direct_rules else '')
+            label='下一步：设置规则 →' if direct_rules else '查看模型检验 →' if st['state']=='succeeded' and what=='train' else '返回策略'
+            parts.append(f'<p><a class="btn primary" href="{target}">{label}</a></p>')
         if what == "governance" and st["state"] == "succeeded" and out_file.exists():
             attempt = Path(out_file.read_text(encoding="utf-8")).name
             parts.append(f'<p><a class="btn" href="/governance/{html.escape(attempt)}">查看治理对照与决策回放</a></p>')
@@ -862,35 +901,36 @@ def create_app(workdir: Path, task_dir: Path | None = None,
             out_dir = Path(out_file.read_text(encoding="utf-8"))
             m = json.loads((out_dir / "metrics.json").read_text(encoding="utf-8"))
             items = "".join(f'<li class="{lv}">{html.escape(s)}</li>' for lv, s in verdict(m))
-            parts.append(f'<div class="box"><h3>一句话结论</h3><ul class="verdict">{items}</ul></div>')
+            parts.append('<div class="box"><h3>一句话结论</h3>'+experience_ui.signal_report(m)+'</div>' if what=='train' and ui.get('project') else f'<div class="box"><h3>一句话结论</h3><ul class="verdict">{items}</ul></div>')
             if (out_dir / "final_model" / "meta.json").is_file():
                 from . import strategy as signal_strategy
                 try:
                     signal_strategy.locked_recipe(json.loads((out_dir / "final_model" / "meta.json").read_text(encoding="utf-8")))
-                    parts.append(f'<section class="policy-next"><h2>模型已训练，下一步定怎么用它</h2><p>训练给出股票排名；政策决定买多少、何时调整。先用默认政策，再按自己的纪律修改。</p><a class="btn primary" href="/strategies/new?source={html.escape(out_dir.name)}">下一步：配置我的政策 →</a></section>')
+                    if not ui.get('project'):parts.append(f'<section class="policy-next"><a class="btn primary" href="/strategies/new?source={html.escape(out_dir.name)}">配置账户规则 →</a></section>')
                 except (ValueError, KeyError, TypeError):
                     parts.append('<p class="mut">当前模型可继续研究；每日治理闭环暂只支持五日、次日开盘执行的任务。</p>')
             parts.append(f'<details><summary>完整报告</summary>'
                          f'{md_to_html((out_dir / "report.md").read_text(encoding="utf-8"))}</details>')
+            parts.append('<details><summary>模型文件与研究工具</summary>')
             if (out_dir / "final_model" / "meta.json").is_file():
-                parts.append(f'<p><a class="btn" href="/strategies/new?source={html.escape(out_dir.name)}">用这个模型建立策略 →</a></p>')
-                parts.append(f'<p><a class="btn" href="/workflow/{html.escape(out_dir.name)}">'
-                             '下一步：评价模型 / 继续训练 →</a></p>')
+                parts.append(f'<p><a href="/workflow/{html.escape(out_dir.name)}">评价模型 / 继续训练 →</a></p>')
             if (out_dir / "run.json").is_file():
                 parts.append(f'<p><a href="/experiments/{out_dir.name}">训练版本与独立 Bench</a></p>')
             parts.append(f'<p class="mut">结果文件夹：<code>{html.escape(str(out_dir))}</code>（模型文件、'
-                         '每日预测表 predictions.parquet、报告 report.md）</p>')
+                         '每日预测表 predictions.parquet、报告 report.md）</p></details>')
         if st["state"] == "succeeded" and what in ("fetch", "free_data"):
             if what == "free_data":
                 parts.append('<p>这是今天选定的 40 股入门样本，用于走通训练流程；'
                              '不能代表全市场表现，也不能用它证明未来收益。</p>')
             from . import starter_models
             next_signal=ui.get('next_signal','')
-            if what=='free_data' and next_signal in {'starter_'+key for key in starter_models.catalog()}:
-                parts.append(f'<p><a class="btn" href="/strategies/new?source={html.escape(next_signal)}&amp;dataset=free_daily">'
+            if ui.get('project') and strategy_projects.read(workdir,ui['project']).get('route')=='rules':
+                parts.append(f'<p><a class="btn" href="/projects/{html.escape(ui["project"])}">用这份数据继续 →</a></p>')
+            elif what=='free_data' and next_signal in {'starter_'+key for key in starter_models.catalog()}:
+                parts.append(f'<p><a class="btn" href="/strategies/new?source={html.escape(next_signal)}&amp;dataset=free_daily'+('&amp;project='+html.escape(ui['project']) if ui.get('project') else '')+'">'
                              '数据已准备，继续配置政策 →</a></p>')
             else:
-                parts.append(f'<p><a class="btn" href="/?ds={html.escape(ui.get("dataset", ""))}#step3">'
+                parts.append(f'<p><a class="btn" href="/train?ds={html.escape(ui.get("dataset", ""))}'+('&amp;project='+html.escape(ui['project']) if ui.get('project') else '')+'#step3">'
                              '用这份数据继续 →</a></p>')
         parts.append(f'<details{" open" if st["state"] == "failed" else ""}><summary>运行日志</summary>'
                      f'<pre class="plain">{html.escape(log_txt) or "（暂无）"}</pre></details>')
@@ -1062,15 +1102,19 @@ def create_app(workdir: Path, task_dir: Path | None = None,
                 f'<div class="metric"><span>测试期 IC</span><strong>{x["ic"]["mean"]:+.3f}</strong>'
                 f'<small>t={x["ic"]["t"]:.2f}</small></div></div><p class="evidence-note">{note}</p>'
                 f'<div class="card-meta"><span>数据截止 {html.escape(x["meta"].get("data_end", "未知"))}</span></div>'
-                f'<a class="card-link" href="/workflow/{name}">评价 / 继续训练</a></article>')
+                f'<div class="policy-actions"><a href="/strategies/new?source={name}">用于新策略 →</a><a href="/workflow/{name}">评价 / 继续训练</a></div></article>')
+        trained={x['run'] for x in trained_models()}
+        for source,info in experience_ui.signal_options(workdir).items():
+            if source in trained:continue
+            cards.append('<article class="account-card"><h2>'+html.escape(info['name'])+'</h2><p class="mut">'+html.escape(info['model'])+' · 数据截止 '+html.escape(info['data_end'])+'</p><a href="/strategies/new?source='+html.escape(source)+'">用于新策略 →</a></article>')
         table = '<div class="account-grid">' + ''.join(cards) + '</div>' if cards else (
-            '<div class="empty-state"><h3>还没有训练好的模型</h3><a class="btn" href="/">训练第一个模型</a></div>')
-        body = ('<div class="page-heading"><div><h1>评价模型</h1>'
-                f'<p class="mut">{len(cards)} 个模型 · 选择一个版本，跑基准或继续训练</p></div>'
-                '<a class="btn" href="/">新建训练</a></div>'
+            '<div class="empty-state"><h3>还没有训练好的模型</h3><a class="btn" href="/train">训练第一个模型</a></div>')
+        body = ('<div class="page-heading"><div><h1>模型库</h1>'
+                f'<p class="mut">{len(cards)} 个训练模型</p></div>'
+                '<a class="btn" href="/strategies/new">使用模型</a></div>'
                 '<p class="notice">先评价，再做纸面验证；历史诊断不代表可投入实盘。</p>' + table +
                 '<p><a href="/models?deleted=true">查看已删除模型并恢复</a> · <a href="/experiments">实验记录与版本比较</a></p>')
-        return page("评价模型", body)
+        return page("模型库", body)
 
     def _picks_or_error(run: str, date: str, capital: str):
         from . import picks
@@ -1225,13 +1269,29 @@ def create_app(workdir: Path, task_dir: Path | None = None,
                            submit=submit, datasets=datasets)
     from . import workflow_ui
     workflow_ui.register(app, workdir, page=page, guard=guard, token=token, locate=_run_dir, submit=submit)
+    from . import governance_timing_ui
+    governance_timing_ui.register(app,workdir,page=page,guard=guard,token=token)
     from . import strategy_workspace_ui
     strategy_workspace_ui.register(app,workdir,page=page,guard=guard,token=token,locate=_run_dir,submit=submit,datasets=datasets)
-    experience_ui.register(app, workdir, page=page, datasets=datasets)
+    from . import rule_ui
+    rule_ui.register(app,workdir,page=page,guard=guard,token=token,datasets=datasets)
+    experience_ui.register(app, workdir, page=page, datasets=datasets,token=token)
+    from . import csv_import_ui
+    csv_import_ui.register(app,workdir,page=page,guard=guard,token=token,data_root=data_root,datasets=datasets)
     from . import external_signals_ui
     external_signals_ui.register(app,workdir,page=page,guard=guard,token=token)
     from . import deployment_ui
     deployment_ui.register(app,workdir,page=page,guard=guard,token=token,submit=submit)
+    from . import governance_review_ui, strategy_audit_ui
+
+    def audit_page(title, body, refresh=False, *, identity='', tab='governance'):
+        if '/static/strategy-audit.css' not in body:
+            body = '<link rel="stylesheet" href="/static/strategy-audit.css">' + body
+        return page(title, body, refresh, help_body=strategy_audit_ui.help_panel(),
+                    navigation=strategy_audit_ui.navigation(workdir, identity, tab))
+
+    governance_review_ui.register(app, workdir, page=audit_page, guard=guard, token=token)
+    strategy_audit_ui.register(app, workdir, page=audit_page, guard=guard, token=token)
     app.state.token = token
     app.state.store = store
     return app
@@ -1258,6 +1318,8 @@ def _job_rows(store: Store) -> str:
         if not ui:
             continue
         kind = {"train": "训练", "audit": "体检外部模型", "bench": "基准评价", "compare": "版本比较", "protocol": "冻结协议", "governance": "治理实验"}.get(ui.get("what"), "下载数据")
+        if ui.get('what') == 'strategy':
+            kind = '历史检验' if spec['config'].get('action') == 'strategy_evaluate' else '纸面记账'
         name = ui["name"]
         if ui.get("what") == "bench" and re.fullmatch(r"[0-9a-f]{12,32}", name or ""):
             # Older records stored the run id; show the model name it belongs to.
@@ -1298,15 +1360,19 @@ def serve(workdir: Path, port: int = 8765, open_browser: bool = True) -> None:
     app = create_app(workdir, port=port)
     if open_browser:
         import webbrowser
-        threading.Timer(1.5, lambda: webbrowser.open(f"http://127.0.0.1:{port}/start")).start()
+        threading.Timer(1.5, lambda: webbrowser.open(f"http://127.0.0.1:{port}/")).start()
     print(f"TemperQ 工作台已启动：http://127.0.0.1:{port}  （关闭这个窗口即退出）", flush=True)
     uvicorn.run(app, host="127.0.0.1", port=port, log_level="warning")
 
 
+AUDIT_NAV = ('<nav class="nav" aria-label="主导航"><a href="/strategy-governance">策略治理</a>'
+             '<a href="/strategy-attribution">盈亏归因</a><a href="/strategy-comparison">效果验证</a>'
+             '<a href="/settings" aria-label="设置">⚙</a></nav>'
+             '<div class="strategy-actions"><a href="/strategy-audits">我的策略</a><a href="/strategy-audits/new">策略导入</a></div>')
+
 LAYOUT = """<!doctype html><html lang="zh"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1"><title>{{title}} · TemperQ</title>{{refresh}}
 <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
-<link rel="stylesheet" href="/static/experience.css">
 <script src="/static/experience.js" defer></script>
 <style>
 @font-face{font-family:"DM Sans";src:url("/static/dm-sans.ttf") format("truetype");font-weight:100 1000;font-display:swap}
@@ -1399,89 +1465,82 @@ svg{max-width:100%}
 .foot{max-width:1040px;margin:0 auto;padding:18px 0 28px;border-top:1px solid var(--line);color:var(--mut);font-size:12px}
 @media(max-width:640px){.top-in{gap:8px;padding-block:8px}.nav a{padding:6px 9px;font-size:13px}.step{padding:22px 0}main{padding-block:18px 48px}h1{font-size:22px}}
 @media(prefers-reduced-motion:reduce){*{transition:none!important}}
-</style></head><body>
+</style><link rel="stylesheet" href="/static/experience.css"><link rel="stylesheet" href="/static/governance-review.css"></head><body>
 <header class="top"><div class="top-in">
-<a class="brand" href="/start" aria-label="TemperQ 首页"><img src="/static/favicon.svg" alt=""><span>TemperQ</span></a>
-<nav class="nav" aria-label="主导航"><a href="/start">工作台</a><a href="/strategies">我的策略</a><a href="/">训练模型</a><details><summary>更多工具</summary><div class="tool-links"><a href="/models">模型评价</a><a href="/paper">原纸面账户</a><a href="/holdings">模拟持仓</a><a href="/governance">治理实验</a></div></details></nav>
+<a class="brand" href="/strategy-governance" aria-label="TemperQ 首页"><img src="/static/favicon.svg" alt=""><span>TemperQ</span></a>
+{{navigation}}
+<button type="button" id="open-workspace-help" class="help-trigger" aria-label="帮助与说明" title="帮助与说明" aria-haspopup="dialog">?</button>
 </div></header>
 <main>
-<p class="workspace-caption">本地工作台 / A 股 <span style="float:right"><a href="/experiments">实验记录</a> · <a href="/audit">体检外部模型</a></span></p>
 {{body}}
 </main>
-<footer class="foot">本地运行 · 127.0.0.1 · 结果只说明在给定数据和假设下得到了什么，不代表未来收益。</footer>
-<script>(function(){var p=location.pathname,best=null;if(p.indexOf('/workflow')===0||p.indexOf('/evaluations')===0)p='/models';document.querySelectorAll(".nav a").forEach(function(a){var h=a.getAttribute("href");
+<footer class="foot">本地运行 · A 股日频 · 纸面交易 · 不构成投资建议</footer>
+{{help}}
+<script>(function(){var p=location.pathname,best=null;if(p==='/'||['strategies','projects','train','job'].includes(p.split('/')[1]))p='/start';if(p.indexOf('/workflow')===0||p.indexOf('/evaluations')===0)p='/models';document.querySelectorAll(".nav a").forEach(function(a){var h=a.getAttribute("href");
 var hit=h==="/"?(p==="/"||p.indexOf("/job")===0||p.indexOf("/data")===0):p.indexOf(h)===0;
 if(hit&&(!best||h.length>best.getAttribute("href").length))best=a});
 if(best){best.classList.add("on");best.setAttribute("aria-current","page")}})();</script>
 </body></html>"""
 
 INDEX = """
-<div class="page-heading"><div><h1>训练模型</h1></div><a href="/models">已有模型</a></div>
-<nav class="training-steps" aria-label="本页训练设置"><a href="#step1">训练目标</a><a href="#step2">选择数据</a><a href="#step3">参数确认</a><a href="#step4">开始训练</a></nav>
+<div class="page-heading"><h1>训练模型</h1><a href="/models">模型库</a></div>
 <details class="hw-details"><summary>本机资源 · {mem} 内存 · CPU 训练</summary>
-<p class="hw">本机：{cpu}；内存 {mem}；显卡 {gpu}。<b>LightGBM 和 Ridge 只用 CPU，什么显卡（含 AMD、核显、没有显卡）都不影响。</b>树模型做的是排序和比大小，CPU 本来就擅长；只有神经网络底座（如 Kronos）才需要 NVIDIA 显卡。</p>
+<p class="hw">{cpu} · 内存 {mem} · 显卡 {gpu}</p>
 </details>
 {memwarn}
-<form method="post" action="/run" id="main">
+<div class="training-workspace"><form method="post" action="/run" id="main">
 <input type="hidden" name="token" value="{token}">
 
-<section class="step" id="step1"><h2><span class="num">1</span>要打造什么模型：用在哪</h2>
-<p class="mut">先说清楚模型要用在什么地方。后面的数据要求和参数都由这里决定。灰色的是规划中、暂时不能选。</p>
+<section class="step" id="step1"><h2>训练设置</h2>
 {step1}
-</section>
-
-<section class="step" id="step2"><h2><span class="num">2</span>用什么数据</h2>
-{data_requirements}
-{datasets}
-<div id="data-check" aria-live="polite">{data_check}</div>
-<p class="mut">还没有数据？用下面任意一种方式添加，添加后会出现在上面的列表里。
-一份数据还可以叠加多个来源（本地 CSV 和 API 混用）：点数据后面的“加更多数据来源”。</p>
 </section>
 </form>
 
+<div class="training-data">
+<section class="step" id="step2"><h2>行情数据</h2>
+{datasets}
+<div id="data-check" aria-live="polite">{data_check}</div>
+</section>
+
 <section class="step" style="margin-top:-8px;border-top:0">
-<div class="box" id="free-data"><h3>没有数据？从免费日线开始</h3>
-<p>无需账号或 token。下载 40 只沪深股票，默认从 2021 年到昨天，包含原始价格、成交额、复权因子和 ST 状态。
-这是入门样本，不代表全市场；涨跌停价按规则估算，数据源可能延迟或中断。</p>
+<details id="free-data"{free_open}><summary>下载免费日线</summary>
+<p class="mut">BaoStock · 无需账号 · 40 股入门样本，非历史全市场</p>
 <form method="post" action="/data/free"><input type="hidden" name="token" value="{token}">
 <details><summary>修改起始日期</summary><label class="f">从 <input type="date" name="start" value="2021-01-01" min="2005-01-01"></label></details>
-<button>一键下载免费数据（BaoStock）</button>
-<p class="mut">需要联网。再次点击只追加新日期；完成后点“用这份数据继续”，即进入参数确认。</p></form></div>
-<details><summary>添加数据 · 方式 A：上传 CSV 文件</summary><div class="sub">
-<p>每行是一只股票一天的数据。必填列：<code>code 代码</code> <code>date 日期</code> <code>open 开盘</code>
-<code>high 最高</code> <code>low 最低</code> <code>close 收盘</code> <code>amount 成交额（元）</code>；
-建议提供：<code>adj_factor 复权因子</code> <code>is_st 是否ST（0/1）</code>。导入至少跨 3 个年份；训练建议约 3 整年，推荐 5–8 年。
-<a href="/template.csv">下载模板</a></p>
+<button>一键下载免费数据（BaoStock）</button></form></details>
+<details class="data-imports"><summary>导入其他数据</summary>
+<section><h3>CSV 文件</h3><p><a href="/template.csv">下载模板</a></p>
 <form method="post" action="/data/csv" enctype="multipart/form-data">
 <input type="hidden" name="token" value="{token}">
 <label class="f">数据名称 <input name="name" required pattern="[A-Za-z0-9_\\-]{{1,40}}" placeholder="my_data"></label>
 <label class="f">文件 <input type="file" name="file" accept=".csv" required></label>
-<button>上传并检查</button></form></div></details>
+<button>上传并检查</button></form></section>
 
-<details><summary>添加数据 · 方式 B：用 Tushare 账号自动下载（约 1 小时）</summary><div class="sub">
+<section><h3>Tushare</h3>
 <p class="mut">需要能调用 daily、adj_factor、stk_limit、suspend_d、stock_st、trade_cal 这几个接口的 Tushare 账号或兼容服务（积分要求以 Tushare 官网为准）。token 只在本次下载中使用，不会保存到磁盘。</p>
 <form method="post" action="/data/tushare">
 <input type="hidden" name="token" value="{token}">
 <label class="f">数据名称 <input name="name" required pattern="[A-Za-z0-9_\\-]{{1,40}}" value="cn_daily"></label>
 <label class="f">Tushare token <input name="api_token" type="password" required size="30" autocomplete="off"></label><br>
 <label class="f">接口地址 <input name="url" value="http://api.tushare.pro" size="30"></label>
-<span class="mut">（用兼容服务时改成服务商给的地址）</span><br>
+<br>
 <label class="f">从 <input type="number" name="start_year" value="2018" min="2005"> 年</label>
 <label class="f">到 <input type="number" name="end_year" value="2025"> 年</label>
-<button>开始下载</button></form></div></details>
+<button>开始下载</button></form></section>
 
-<details><summary>添加数据 · 方式 C：使用电脑上已有的 TemperQ 数据文件夹</summary><div class="sub">
+<section><h3>本地数据文件夹</h3>
 <form method="post" action="/data/folder">
 <input type="hidden" name="token" value="{token}">
 <label class="f">文件夹路径 <input name="path" size="40" placeholder="例如 E:\\data\\temperq_data" required></label>
-<button>添加</button></form></div></details>
+<button>添加</button></form></section></details>
 </section>
+</div></div>
 
-<section class="step" id="step3"><h2><span class="num">3</span>参数（由第 1 步推出，可以不改）</h2>
-<label class="f">给这次训练起个名字 <input form="main" name="name" value="{name}" required
+<section class="step" id="step3"><h2>确认训练</h2>
+<label class="f">模型名称 <input form="main" name="name" value="{name}" required
  pattern="[A-Za-z0-9_\\-]{{1,40}}"></label>
 <div class="derived-summary" id="derived"></div>
-<details><summary>修改参数（不填就用上面的值；改过的会写在报告首页）</summary><div class="sub">
+<details><summary>高级参数</summary><div class="sub">
 <p><b>持仓与成本</b></p>
 <label class="f">持股只数 <input form="main" type="number" name="n_hold" id="n_hold" min="1" max="500"></label>
 <label class="f">佣金（万分之几，单边） <input form="main" type="number" name="commission_bp" placeholder="{comm}" step="0.5" min="0"></label>
@@ -1490,21 +1549,19 @@ INDEX = """
 <label class="f">叶子数 <input form="main" type="number" name="num_leaves" placeholder="{leaves}" min="2" max="1024"></label>
 <label class="f">学习率 <input form="main" type="number" name="learning_rate" placeholder="{lr}" step="0.005" min="0.001" max="1"></label>
 <label class="f">重复训练次数（种子） <input form="main" type="number" name="n_seeds" placeholder="{seeds}" min="1" max="10"></label>
-<p class="mut">叶子越多、树越多，模型越复杂，越容易记住历史噪声。</p></div>
+</div>
 <div class="pm pm-ridge" hidden><p><b>Ridge 参数</b></p>
 <label class="f">正则强度 <input form="main" type="number" name="ridge_alpha" placeholder="{alpha}" step="0.1" min="0.01"></label>
-<p class="mut">越大越保守。Ridge 每次结果相同，不需要重复训练。</p></div>
-<p class="mut">训练和测试年份按数据自动设定：最后两年作为最终测试期（数据少于 5 年时用最后一年）。</p>
+</div>
 </div></details>
 </section>
 
-<section class="step" id="step4"><h2><span class="num">4</span>开始</h2>
+<section class="training-submit" id="step4">
 <button class="big" form="main">开始训练</button>
-<span class="mut">　训练在本机进行，完成后自动给出报告和一句话结论。</span>
 </section>
 
-<h3>运行记录</h3>
-<div class="tw"><table><tr><th>名称</th><th>类型</th><th>状态</th><th>更新时间</th></tr>{jobs}</table></div>
+<details class="training-jobs"><summary>运行记录</summary>
+<div class="tw"><table><tr><th>名称</th><th>类型</th><th>状态</th><th>更新时间</th></tr>{jobs}</table></div></details>
 """
 
 
@@ -1521,17 +1578,12 @@ SCRIPT = """<script>
     nh.placeholder = t.n_hold;
     var floor = t.capital / n / PART, model = val("model") || "lightgbm";
     document.getElementById("capnote").textContent =
-      "按 " + t.label + " 计：默认持有 " + t.n_hold + " 只，每只约 " + wan(t.capital / t.n_hold) + "。";
+      "默认 " + t.n_hold + " 只 · 单只约 " + wan(t.capital / t.n_hold);
     var u = document.getElementById("universe");
     document.getElementById("listbox").hidden = u.value !== "list";
     document.getElementById("derived").innerHTML =
-      "<b>因为你在第 1 步的选择，默认这样训练：</b><ul>" +
-      "<li>标签：第二天开盘买入，" + HZ[val("horizon") || "5"] + "。</li>" +
-      "<li>持仓：" + n + " 只等权（资金 " + t.label + "）。</li>" +
-      "<li>只选近 20 日日均成交额 ≥ " + wan(floor) + "元的股票，按单只目标金额占该成交额的 " +
-      (PART * 100) + "% 筛选；实际成交仍受申报数量、停牌和涨跌停影响。</li>" +
-      "<li>股票池：" + u.options[u.selectedIndex].text + "。</li>" +
-      "<li>模型：" + (model === "ridge" ? "Ridge 线性回归，训练 1 次" : "LightGBM，按年滚动重训") + "。</li></ul>";
+      (model === "ridge" ? "Ridge" : "LightGBM") + " · " + (val("horizon") || "5") +
+      " 日预测 · " + n + " 只等权 · 日均成交额 ≥ " + wan(floor) + "元";
     document.querySelectorAll(".pm").forEach(function (b) { b.hidden = !b.classList.contains("pm-" + model); });
   }
   document.querySelectorAll("[form=main], #main input").forEach(function (e) { e.addEventListener("change", upd); });

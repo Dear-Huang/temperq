@@ -228,6 +228,8 @@ def _jobs(args) -> int:
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(prog="temperq")
     sub = ap.add_subparsers(dest="cmd", required=True)
+    from . import rule_cli
+    rule_cli.add_parser(sub)
     from . import paper_cli
     paper_cli.add_parser(sub)
     from . import governance_cli
@@ -337,6 +339,8 @@ def main(argv: list[str] | None = None) -> int:
                         help="check stored hashes/bindings only, without protocol acceptance or arithmetic")
 
     args = ap.parse_args(argv)
+    if args.cmd == "rule":
+        return rule_cli.run(args)
     if args.cmd == "governance":
         return governance_cli.run(args)
     if args.cmd == "paper":

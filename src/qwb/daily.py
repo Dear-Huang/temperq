@@ -16,7 +16,7 @@ import pandas as pd
 from . import folds as foldlib
 
 FIELDS = ["open", "high", "low", "close", "amount", "adj_factor", "up_limit"]
-OPTIONAL_FIELDS = ["down_limit"]   # used by the net-of-cost check when present
+OPTIONAL_FIELDS = ["down_limit", "volume"]
 INDEX_CODES = {"csi300": "000300.SH", "csi500": "000905.SH", "csi1000": "000852.SH"}
 MODELS = ("lightgbm", "ridge")
 FEATURES = ["r1", "r5", "r20", "r60", "vol20", "amt20", "amt_ratio", "gap", "range",

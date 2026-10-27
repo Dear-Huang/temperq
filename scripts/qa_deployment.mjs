@@ -91,7 +91,7 @@ try {
   // A new, unstarted policy opens an honest empty terminal, never the old curve.
   await page.getByRole('link', {name: '修改并建立新版本 ↗', exact: true}).click();
   await page.locator('input[name="name"]').fill('部署验收 · 等待启用');
-  await page.getByRole('button', {name: '冻结设置，进入检验', exact: true}).click();
+  await page.getByRole('button', {name: '保存并继续', exact: true}).click();
   await page.waitForURL(/\/strategies\/[0-9a-f]{32}\/[0-9a-f]{32}$/);
   await page.goto(page.url()+'/dashboard');
   await expect(page.locator('#metric-equity')).toHaveText('—');

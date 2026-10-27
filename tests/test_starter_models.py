@@ -46,7 +46,7 @@ def test_starter_data_download_returns_to_selected_model_not_training(tmp_path,m
     source='starter_public40_lgbm_v1'
     page=client.get('/strategies/new',params={'source':source}).text
     assert '?next_signal='+source+'#free-data' in page
-    assert 'name="next_signal"' in client.get('/',params={'next_signal':source}).text
+    assert 'name="next_signal"' in client.get('/train',params={'next_signal':source}).text
     response=client.post('/data/free',data={'token':app.state.token,'next_signal':source},follow_redirects=False)
     completed=html.unescape(client.get(response.headers['location']).text)
     assert '/strategies/new?source='+source+'&dataset=free_daily' in completed

@@ -1,0 +1,207 @@
+[
+  {
+    "id": "R01",
+    "doi": "10.1561/2400000023",
+    "expected_title": "Multi-Period Trading via Convex Optimization"
+  },
+  {
+    "id": "R02",
+    "doi": "10.1111/jofi.12080",
+    "expected_title": "Dynamic Trading with Predictable Returns and Transaction Costs"
+  },
+  {
+    "id": "R03",
+    "doi": "10.1111/1540-6261.00580",
+    "expected_title": "Risk Reduction in Large Portfolios: Why Imposing the Wrong Constraints Helps"
+  },
+  {
+    "id": "R04",
+    "doi": "10.1111/jofi.12824",
+    "expected_title": "A Note on Risk Reduction in Large Portfolios"
+  },
+  {
+    "id": "R05",
+    "doi": "10.1093/rfs/hhm075",
+    "expected_title": "Optimal Versus Naive Diversification"
+  },
+  {
+    "id": "R06",
+    "doi": "10.1016/j.jempfin.2024.101517",
+    "expected_title": "Non-standard errors in asset pricing: Mind your sorts"
+  },
+  {
+    "id": "R07",
+    "doi": "10.1093/rfs/hhv063",
+    "expected_title": "A Taxonomy of Anomalies and Their Trading Costs"
+  },
+  {
+    "id": "R08",
+    "doi": "10.1080/0015198X.2018.1547057",
+    "expected_title": "Comparing Cost-Mitigation Techniques"
+  },
+  {
+    "id": "R09",
+    "doi": "10.1111/jofi.13225",
+    "expected_title": "Model Comparison with Transaction Costs"
+  },
+  {
+    "id": "R10",
+    "doi": "10.1093/rfs/hhag022",
+    "expected_title": "Machine Learning and the Implementable Efficient Frontier"
+  },
+  {
+    "id": "R11",
+    "doi": "10.3905/jpm.1988.409150",
+    "expected_title": "The implementation shortfall"
+  },
+  {
+    "id": "R12",
+    "doi": "10.21314/jor.2001.041",
+    "expected_title": "Optimal execution of portfolio transactions"
+  },
+  {
+    "id": "R13",
+    "doi": "10.2469/faj.v58.n5.2468",
+    "expected_title": "Portfolio Constraints and the Fundamental Law of Active Management"
+  },
+  {
+    "id": "R14",
+    "doi": "10.2469/faj.v42.n4.39",
+    "expected_title": "Determinants of Portfolio Performance"
+  },
+  {
+    "id": "R15",
+    "doi": "10.2469/faj.v60.n4.2638",
+    "expected_title": "Multiperiod Arithmetic Attribution"
+  },
+  {
+    "id": "R16",
+    "doi": "10.2469/faj.v58.n4.2453",
+    "expected_title": "The Statistics of Sharpe Ratios"
+  },
+  {
+    "id": "R17",
+    "doi": "10.3905/jpm.2014.40.5.094",
+    "expected_title": "The Deflated Sharpe Ratio"
+  },
+  {
+    "id": "R18",
+    "doi": "10.3905/jpm.2026.070",
+    "expected_title": "The Deflated Sharpe Ratio: A Unified Framework for Search-Adjusted Performance Inference"
+  },
+  {
+    "id": "R19",
+    "doi": "10.21314/jcf.2016.322",
+    "expected_title": "The probability of backtest overfitting"
+  },
+  {
+    "id": "R20",
+    "doi": "10.1111/1468-0262.00152",
+    "expected_title": "A Reality Check for Data Snooping"
+  },
+  {
+    "id": "R21",
+    "doi": "10.1198/073500105000000063",
+    "expected_title": "A Test for Superior Predictive Ability"
+  },
+  {
+    "id": "R22",
+    "doi": "10.3982/ECTA5771",
+    "expected_title": "The Model Confidence Set"
+  },
+  {
+    "id": "R23",
+    "doi": "10.1093/rfs/hhv059",
+    "expected_title": "and the Cross-Section of Expected Returns"
+  },
+  {
+    "id": "R24",
+    "doi": "10.1111/j.1540-6261.2009.01527.x",
+    "expected_title": "False Discoveries in Mutual Fund Performance"
+  },
+  {
+    "id": "R25",
+    "doi": "10.1111/jofi.12784",
+    "expected_title": "Reassessing False Discoveries in Mutual Fund Performance"
+  },
+  {
+    "id": "R26",
+    "doi": "10.37214/jofweb.2",
+    "expected_title": "Reassessing False Discoveries in Mutual Fund Performance: A Reply"
+  },
+  {
+    "id": "R27",
+    "doi": "10.1093/rfs/hhy131",
+    "expected_title": "Replicating Anomalies"
+  },
+  {
+    "id": "R28",
+    "doi": "10.1561/104.00000112",
+    "expected_title": "Open Source Cross-Sectional Asset Pricing"
+  },
+  {
+    "id": "R29",
+    "doi": "10.1111/jofi.13249",
+    "expected_title": "Is There a Replication Crisis in Finance"
+  },
+  {
+    "id": "R30",
+    "doi": "10.1214/20-AOS1991",
+    "expected_title": "Time-uniform, nonparametric, nonasymptotic confidence sequences"
+  },
+  {
+    "id": "R31",
+    "doi": "10.1016/j.artint.2021.103502",
+    "expected_title": "Explaining individual predictions when features are dependent"
+  },
+  {
+    "id": "R32",
+    "doi": "10.2139/ssrn.3229719",
+    "expected_title": "Trading Costs"
+  },
+  {
+    "id": "R33",
+    "doi": "10.1016/j.pacfin.2025.102681",
+    "expected_title": "High-frequency liquidity in the Chinese stock market"
+  },
+  {
+    "id": "R34",
+    "doi": "10.1111/j.1540-6261.2012.01729.x",
+    "expected_title": "A Simple Way to Estimate Bid-Ask Spreads from Daily High and Low Prices"
+  },
+  {
+    "id": "R35",
+    "doi": "10.1016/S0047-259X(03)00096-4",
+    "expected_title": "A well-conditioned estimator for large-dimensional covariance matrices"
+  },
+  {
+    "id": "R36",
+    "doi": "10.2307/1913610",
+    "expected_title": "A Simple, Positive Semi-definite, Heteroskedasticity and Autocorrelation Consistent Covariance Matrix"
+  },
+  {
+    "id": "R37",
+    "doi": "10.1017/CBO9780511804441",
+    "expected_title": "Convex Optimization"
+  },
+  {
+    "id": "R38",
+    "doi": "10.2139/ssrn.4338007",
+    "expected_title": "Assaying Anomalies"
+  },
+  {
+    "id": "R39",
+    "doi": "10.1111/jofi.12365",
+    "expected_title": "Does Academic Research Destroy Stock Return Predictability"
+  },
+  {
+    "id": "R40",
+    "doi": "10.2139/ssrn.1823628",
+    "expected_title": "Pitfalls in Risk Attribution"
+  },
+  {
+    "id": "R41",
+    "doi": "10.1287/mnsc.2016.2497",
+    "expected_title": "Optimal and Naive Diversification in Currency Markets"
+  }
+]
