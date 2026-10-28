@@ -43,10 +43,26 @@ def _tick_card(tick):
         break_even = f"现有净盈亏只够覆盖约 {fraction:.0%} 的价差情景，相当于每边约 {bp * fraction:.1f}bp"
     else:
         break_even = f"扣除价差情景后仍盈利；实际价差要到每边约 {bp * fraction:.0f}bp 才会吃掉全部盈利"
+    already = total.get("already_charged") or 0.
+    if already > .5:
+        basis = (f"按最小价位估计，价差下限合计约 {_yuan(total['tick_floor_cost'])}；{tick.get('slippage_note', '原回测已计滑点')}，"
+                 f"其中约 {_yuan(already)} 已含在成交价里，只补差额 {_yuan(cost)}（每边约 {bp:.1f}bp）。")
+    else:
+        basis = (f"按最小价位估计，每边价差约 {bp:.1f}bp（按成交额加权），合计约 {_yuan(cost)}；"
+                 f"{tick.get('slippage_note', '代码里没有设置滑点')}。")
+    if cost < .5 and already > .5:
+        return {
+            "id": "tick_floor", "state": "hold", "title": "回测收益能否覆盖买卖价差",
+            "finding": f"回测净盈亏 {_yuan(net)}。" + basis,
+            "headline": "原回测设置的滑点已经不低于最小价位价差，这一项不用再扣",
+            "options": [{"label": "维持原样", "effect": "滑点设置已覆盖价差下限"}],
+            "saving": "无", "sacrifice": "无", "net": f"维持 {_yuan(net)}",
+            "evidence": "recomputed",
+            "basis": "交易所最小报价单位是规则；滑点按代码里的设置换算为每边成本",
+            "overturn": "实际成交价差明显大于最小价位，例如成交清淡或单笔金额大。"}
     return {
         "id": "tick_floor", "state": "act" if not covers else "hold", "title": "回测收益能否覆盖买卖价差",
-        "finding": f"回测净盈亏 {_yuan(net)}；按最小价位 0.01 元估计，每边价差约 {bp:.1f}bp（按成交额加权），"
-                   f"合计约 {_yuan(cost)}。若原回测未计价差或滑点，扣除后约 {_yuan(after)}。",
+        "finding": f"回测净盈亏 {_yuan(net)}。" + basis + f"扣除后约 {_yuan(after)}。",
         "headline": break_even,
         "options": options,
         "saving": "价差无法省掉，只能通过少交易、避开低价股来减少",
@@ -109,7 +125,8 @@ def _fee_card(fees, edits):
         "edits": edits.get("fees", []),
         "options": [{"label": "维持原样", "effect": "保守的费用不会让结果虚高"},
                     {"label": "按券商实际费率改费用设置后回原平台重测",
-                     "effect": "原因见上方『改代码哪里』：佣金率偏高，或卖出仍按 2023-08-28 之前的 10bp 印花税" if more else "检查是否漏算印花税或最低佣金"}],
+                     "effect": "原因见上方『改代码哪里』：佣金率偏高，或卖出仍按 2023-08-28 之前的 10bp 印花税" if more
+                               else "回测佣金低于审计默认值时，先按券商合同确认哪边对，再改回测或审计设置"}],
         "saving": "不改变实际交易成本，只让回测结果更接近实盘",
         "sacrifice": "无",
         "net": f"回测净盈亏约{'低估' if more else '高估'} {_yuan(abs(gap))}",
@@ -127,7 +144,7 @@ def _minimum_card(fees, edits):
         "id": "minimum_commission", "state": "review" if premium >= 500 else "hold", "title": "小额订单的最低佣金",
         "finding": f"{count} 笔订单金额低于最低佣金拐点，因最低佣金多付约 {_yuan(premium)}。",
         "headline": "金额小，影响有限" if premium < 500 else "小单最低佣金值得处理",
-        "edits": edits.get("order_floor", []),
+        "edits": edits.get("order_floor", []) if premium >= 500 else [],
         "options": [{"label": "维持原样", "effect": "金额不大时可以不改"},
                     {"label": "设置最低新增买入金额", "effect": "可在下方『按审计发现修改代码』生成改法"}],
         "saving": f"最多约 {_yuan(premium)}",
@@ -165,6 +182,55 @@ def _price_card(holding, tick, edits):
     }
 
 
+def _cash_buffer_card(signals, edits):
+    if not signals or signals.get("cash_short_orders", 0) < 3:
+        return None
+    ex = signals["cash_short_examples"][0]
+    return {
+        "id": "cash_buffer", "state": "act", "title": "全仓下单没留费用余量",
+        "finding": f"有 {signals['cash_short_orders']} 笔买单因“可用资金不足”被拒，差额最多 {_yuan(signals['cash_short_gap'])}："
+                   f"例如 {ex['date']} 有 {_yuan(ex['available'])}，下单需要 {_yuan(ex['required'])}。"
+                   f"策略用全部现金下单，佣金和滑点一加就超了，结果这 {signals['cash_short_days']} 天账户空仓，没有持有信号选中的标的。",
+        "headline": f"下单金额留出约 1% 余量，{signals['cash_short_days']} 天的空仓就不会发生",
+        "edits": edits.get("cash_buffer", []),
+        "options": [{"label": "维持原样", "effect": "空仓天数由当天价格碰巧决定，回测结果含这部分偶然"},
+                    {"label": "下单金额乘 0.99", "effect": "留出佣金和滑点，买单不再被拒"}],
+        "saving": "不省钱：修的是本该持仓却空仓的天数",
+        "sacrifice": "每次少买约 1% 的金额，现金略多",
+        "net": "空仓这些天的涨跌原回测没有吃到，改后结果可能更好也可能更差，需回原平台重跑",
+        "evidence": "recomputed",
+        "basis": "委托详情里平台给出的拒单原因和金额",
+        "overturn": "这些天恰好是下跌日，空仓反而躲过了亏损；重跑后对比即可看出。",
+    }
+
+
+def _churn_card(signals, edits):
+    if not signals or not signals["switches"]:
+        return None
+    avoided, switches = signals["avoided_switches"], signals["switches"]
+    worth = avoided >= max(3, .2 * switches)
+    missed = signals["days"] - signals["followed_days"]
+    reasons = "、".join(f"{k} {v} 天" for k, v in signals["missed_reasons"].items())
+    return {
+        "id": "rank_churn", "state": "review" if worth else "hold", "title": "排名一变就换仓",
+        "finding": f"按策略自己的每日排名，{signals['days']} 个交易日里第一名换了 {switches} 次，平均每 {signals['average_hold_days']:.0f} 天换一次；"
+                   f"每次换仓的费用和价差约 {_yuan(signals['cost_per_round_trip'])}。"
+                   f"有 {signals['whipsaw_lots']} 笔卖出后 5 天内又排回第一，这些交易付出约 {_yuan(signals['whipsaw_cost'])}。"
+                   + (f"另有 {missed} 天没有持有选中的目标（{reasons}）。" if missed else "持仓每天都跟上了信号。"),
+        "headline": (f"排进前 {signals['buffer_rank']} 就不卖，可少换 {avoided} 次，省费用和价差约 {_yuan(signals['avoided_cost'])}"
+                     if worth else f"保留带只能少换 {avoided} 次，暂不改"),
+        "edits": edits.get("buffer", []),
+        "options": [{"label": "维持原样", "effect": "信号每天都更新，换仓跟得最紧"},
+                    {"label": f"加保留带：持有的标的排进前 {signals['buffer_rank']} 就继续持有", "effect": "排名小幅波动不换仓"}],
+        "saving": f"少换 {avoided} 次，费用和价差约 {_yuan(signals['avoided_cost'])}",
+        "sacrifice": "持有的标的掉到第二时不换，会错过新第一名这几天的涨幅；是赚是亏要重跑才知道",
+        "net": "需回原平台重跑，用效果验证比较",
+        "evidence": "scenario",
+        "basis": "用策略导出的每日排名回放换仓次数；每次换仓成本取已平仓交易的平均费用和价差",
+        "overturn": "重跑后加保留带的净收益低于原规则：说明第一名的切换本身在赚钱。",
+    }
+
+
 def cards(result, bundle=None):
     """Action cards; with the bundle, each card also points at the code lines to change."""
     from . import audit_levers
@@ -177,11 +243,15 @@ def cards(result, bundle=None):
         edits = {"holding": audit_levers.holding(levers, platform),
                  "price": audit_levers.price_floor(levers, platform),
                  "order_floor": audit_levers.order_floor(levers, platform, fees_module.get("breakpoint_notional") or 0),
-                 "fees": audit_levers.fees(levers, bundle, more, (result.get("settings") or {}).get("commission_bp"))}
+                 "fees": audit_levers.fees(levers, bundle, more, (result.get("settings") or {}).get("commission_bp")),
+                 "buffer": audit_levers.buffer(levers, (modules.get("signal_mapping") or {}).get("buffer_rank", 2)),
+                 "cash_buffer": audit_levers.cash_buffer(levers)}
     out = [_tick_card(modules.get("tick_analysis") or {}),
            _holding_card(modules.get("holding_analysis") or {}, edits),
            _price_card(modules.get("holding_analysis") or {}, modules.get("tick_analysis") or {}, edits),
            _fee_card(fees_module, edits),
-           _minimum_card(fees_module, edits)]
+           _minimum_card(fees_module, edits),
+           _churn_card(modules.get("signal_mapping"), edits),
+           _cash_buffer_card(modules.get("signal_mapping"), edits)]
     order = {"act": 0, "review": 1, "hold": 2}
     return sorted((c for c in out if c), key=lambda c: order[c["state"]])

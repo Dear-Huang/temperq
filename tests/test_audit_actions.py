@@ -97,3 +97,11 @@ def test_cards_point_at_code_lines_when_the_bundle_is_given():
     card = audit_actions.cards(result(holding_analysis=holding), bundle)[0]
     assert [(e["line"], e["change"][:11]) for e in card["edits"]] == [(3, "run_monthly")]
     assert audit_actions.cards(result(holding_analysis=holding))[0]["edits"] == []
+
+
+def test_cost_card_when_declared_slippage_already_covers_the_floor():
+    tick = {**TICK, "accounted_intervals": {**TICK["accounted_intervals"], "tick_scenario_cost": 0.,
+                                            "tick_floor_cost": 600., "already_charged": 600.}}
+    card = audit_actions.cards(result(tick_analysis=tick))[0]
+    assert card["state"] == "hold" and "不用再扣" in card["headline"]
+    assert card["evidence"] in audit_actions.EVIDENCE and card["options"][0]["label"] == "维持原样"

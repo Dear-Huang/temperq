@@ -9,6 +9,7 @@ MATERIALS = {
     'positions': ('每日持仓', '导出完整逐日持仓；BigQuant保留总资产和现金汇总行，聚宽保留Cash行。'),
     'snapshots': ('账户汇总', '每个交易日的总权益与现金，与持仓和成交保持同次回测。'),
     'logs': ('运行日志', '保留原始时间、级别和内容。普通日志不能替代完整订单生命周期。'),
+    'orders': ('委托详情', '每笔委托的提交、成交与撤单；用于解释信号选中却没买到的原因。'),
     'scores': ('每日打分', '覆盖每日候选池，不只填最终入选股票；available_at为当时实际可用时间。'),
     'quote_observations': ('日均报价价差', '仅用于量级核对，不是实际成交成本；measurement_scope填daily_quote_mean。'),
 }
@@ -104,6 +105,9 @@ def material_kind(source):
         ('positions', {'合约代码', '仓位', '最新价'}),
         ('snapshots', {'账户类型', '可用资金', '总权益'}),
         ('scores', {'date', 'code', 'score'}),
+        ('scores', {'datetime', 'rank', 'order_book_id'}),
+        ('orders', {'event', 'order_id', 'status', 'filled_quantity'}),
+        ('scores', {'date', 'code', 'rank'}),
         ('quote_observations', {'date', 'code', 'quoted_spread_bp', 'sample_count', 'measurement_scope'}),
     ):
         if required <= fields:

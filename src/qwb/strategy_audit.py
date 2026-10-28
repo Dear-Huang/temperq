@@ -43,7 +43,9 @@ def accounting(bundle):
         notional = 0
         for f in fills[day]:
             sign = 1 if f["side"] == "buy" else -1
-            check("fill_notional", f["quantity"] * f["price"] - f["notional"], day, f["code"], f["ref"])
+            rounding = f["quantity"] * .0005 if f.get("notional_source") == "account_cash" else 0
+            check("fill_notional", f["quantity"] * f["price"] - f["notional"], day, f["code"], f["ref"],
+                  tolerance=TOLERANCE + rounding)
             flow[f["code"]] += sign * f["notional"]
             fees[f["code"]] += f["fee"]
             notional += f["notional"]
@@ -192,6 +194,10 @@ def analyze(bundle, settings=None, *, policy=None):
     context["trading_behavior"] = trading_behavior(bundle)
     context["tick_analysis"] = tick_analysis(bundle, context["accounting"])
     context["holding_analysis"] = holding_analysis(bundle, context["accounting"], context["tick_analysis"])
+    from . import audit_signals
+    signals = audit_signals.analyze(bundle, context)
+    if signals:
+        context["signal_mapping"] = signals
     result = {"schema_version": VERSION, "input_digest": ex.object_digest(bundle),
               "settings": settings, "modules": context, "coverage_version": "audit_coverage_v3",
               'input_review': input_review, 'mode': 'full',

@@ -160,7 +160,7 @@ def overview(identity, bundle, token):
     fill_label = '条持仓净变动（由持仓推算）' if review['fills_inferred'] else '笔成交'
     body += f'<p class="review-meta">{period} · {len(days)} 个账户快照 · {len(bundle["fills"])} {fill_label}</p>'
     body += '<section class="review-section"><h2>01 · 材料核对</h2><div class="tw"><table><tr><th>文件</th><th>识别类型</th><th>行数</th></tr>'
-    labels = {"fills": "交易", "positions": "持仓与账户汇总", "snapshots": "账户汇总", "logs": "日志", "code": "策略代码", "external_attribution": "平台归因（待核口径）", "quote_observations": "日均报价价差（核对用途）", 'scores': '每日打分', 'platform_returns': '平台收益表（核对用途）'}
+    labels = {"fills": "交易", "positions": "持仓与账户汇总", "snapshots": "账户汇总", "logs": "日志", "code": "策略代码", "external_attribution": "平台归因（待核口径）", "quote_observations": "日均报价价差（核对用途）", 'scores': '每日打分', 'platform_returns': '平台收益表（核对用途）', 'orders': '委托详情'}
     for source in bundle["sources"]:
         body += f'<tr><td>{esc(source["name"])}</td><td>{labels[source["kind"]]} · {esc(source.get("encoding", "历史记录"))}</td><td>{source["rows"]}</td></tr>'
     body += '</table></div>'
@@ -346,7 +346,7 @@ def action_cards(result, bundle=None):
         if card.get("edits"):
             body += '<div class="action-edits"><b>改代码哪里</b>'
             for edit in card["edits"]:
-                where = f'第 {edit["line"]} 行' if edit["line"] else '回测设置'
+                where = (f'原策略第 {edit["line"]} 行' if edit.get("embedded") else f'第 {edit["line"]} 行') if edit["line"] else '回测设置'
                 now = f'<code class="edit-now">{esc(edit["code"])}</code>' if edit["code"] else ''
                 body += (f'<div class="action-edit"><span class="edit-line">{where}</span>{now}'
                          f'<code class="edit-new">→ {esc(edit["change"])}</code>'

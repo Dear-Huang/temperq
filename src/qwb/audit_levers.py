@@ -95,6 +95,16 @@ def locate(bundle):
                 add("holding_count", node.lineno, name=name, value=value)
             elif isinstance(value, int) and (name in INTERVAL_NAMES or INTERVAL_PATTERN.search(name)) and 1 <= value <= 120:
                 add("rebalance", node.lineno, name=name, value=value)
+            elif name == "__config__" and isinstance(node.value, ast.Dict):
+                rates = {}
+                for sub in ast.walk(node.value):
+                    if isinstance(sub, ast.Dict):
+                        for k, v in zip(sub.keys, sub.values):
+                            if isinstance(k, ast.Constant) and k.value in {"commission_rate", "stock_commission_multiplier",
+                                                                           "tax_multiplier", "min_commission"}:
+                                rates[k.value] = _literal(v)
+                if rates:
+                    add("fee_setting", node.lineno, call="rq_config", values=rates)
             elif name == "FILTERS" and isinstance(node.value, ast.List):
                 add("price_filter", node.lineno, name=name)
             elif name == "target_position_value" and value is None:
@@ -129,14 +139,62 @@ def locate(bundle):
                         function=fn)
             if (call == "order_value" and len(node.args) == 2 and isinstance(node.args[1], ast.Name)):
                 add("order_size", node.lineno, name=node.args[1].id)
+        if isinstance(node, ast.If) and isinstance(node.test, ast.Compare) and len(node.test.ops) == 1 \
+                and isinstance(node.test.ops[0], ast.NotIn) and isinstance(node.test.comparators[0], ast.Name) \
+                and any(isinstance(c, ast.Call) and _call_name(c) in ORDER_CALLS for c in ast.walk(node)):
+            target = node.test.comparators[0].id
+            source_expr = next((a.value for a in ast.walk(tree) if isinstance(a, ast.Assign) and len(a.targets) == 1
+                                and isinstance(a.targets[0], ast.Name) and a.targets[0].id == target), None)
+            add("sell_condition", node.lineno, name=target, item=ast.unparse(node.test.left),
+                source=ast.unparse(source_expr) if source_expr is not None else "")
     for items in found.values():
         items.sort(key=lambda item: item["line"])
+    if not found.get("sell_condition"):
+        # Wrappers (e.g. a local RQAlpha bridge) keep the original strategy as a string.
+        for node in ast.walk(tree):
+            if (isinstance(node, ast.Assign) and len(node.targets) == 1 and isinstance(node.targets[0], ast.Name)
+                    and node.targets[0].id.upper() == "SOURCE" and isinstance(node.value, ast.Constant)
+                    and isinstance(node.value.value, str) and "\n" in node.value.value):
+                inner = locate({"code": {"source": node.value.value}})
+                for kind, items in inner.items():
+                    if kind in ("sell_condition", "order_size"):
+                        found[kind] = [{**item, "embedded": True} for item in items]
+                break
     return found
 
 
 def _period(bundle):
     days = sorted({row["date"] for key in ("snapshots", "fills", "positions") for row in bundle.get(key, []) if row.get("date")})
     return (days[0], days[-1]) if days else (None, None)
+
+
+def cash_buffer(levers):
+    """All-in order sizes: leave room for commission and slippage."""
+    out = []
+    for lever in levers.get("order_size", []):
+        if lever["name"] != "value" or "available_cash" not in lever["code"] and "cash" not in lever["code"]:
+            continue
+        code = lever["code"].split("#")[0].rstrip()
+        out.append({**lever, "change": f"{code} * 0.99",
+                    "note": ("在原策略代码里；" if lever.get("embedded") else "") + "留出约 1% 给佣金和滑点，买单不再因资金差几元被拒"})
+    return out
+
+
+def buffer(levers, keep_rank):
+    """Sell only when a holding drops out of the top `keep_rank`, not when it is merely not first."""
+    out = []
+    for lever in levers.get("sell_condition", []):
+        src = lever.get("source", "")
+        keep = f"{lever['name']}_keep"
+        match = re.match(r"^(.*)\[:\s*(\w+)\s*\]$", src)
+        if match:
+            line = f"{keep} = {match[1]}[:{match[2]} + {keep_rank - 1}]"
+        else:
+            line = f"{keep} = <排名列表>[:{keep_rank}]"
+        out.append({**lever, "change": f"上一行加 {line}，这一行改为 if {lever['item']} not in {keep}:",
+                    "note": ("在原策略代码里（上传文件把原策略嵌在 SOURCE 字符串中）；" if lever.get("embedded") else "")
+                            + f"买入仍按第一名，卖出要等持有的标的跌出前 {keep_rank}"})
+    return out
 
 
 def _set_value(code, old, new):
@@ -240,6 +298,15 @@ def fees(levers, bundle, more, commission_bp=None):
             out.append({**lever, "change": lever["code"].replace(f"close_tax={values['close_tax']}", "close_tax=0.0005", 1),
                         "note": (f"回测跨越 {STAMP_TAX_CUT}，单一税率无法两段都对；改后 {STAMP_TAX_CUT} 前偏乐观，只用于看近期" if spans
                                  else f"{STAMP_TAX_CUT} 起印花税为 5bp")})
+    low = charged is not None and commission_bp and charged < commission_bp * .8
+    if not out and not more and low:
+        where = next((f"第 {l['line']} 行" for l in levers.get("fee_setting", [])), None)
+        out.append({"line": where and levers["fee_setting"][0]["line"],
+                    "code": levers["fee_setting"][0]["code"] if where else "",
+                    "change": f"先确认券商实际佣金：是 {charged:.1f}bp，就到『审计设置』把佣金改成 {charged:.1f}bp 重新审计；"
+                              f"不是，就把回测佣金调到实际费率",
+                    "note": f"回测买入实收约 {charged:.1f}bp（买入不含印花税），低于审计默认的 {commission_bp:g}bp；"
+                            "两边哪个对，取决于你的券商合同"})
     if not out and more and not levers.get("fee_setting"):
         where = {"ricequant_v1": "米筐回测页的『交易设置』", "bigquant_v1": "BigQuant 回测模块的费用参数",
                  "joinquant_v1": "代码里加 set_order_cost(..., type='stock')"}.get(bundle.get("adapter"), "回测平台的费用设置")

@@ -50,6 +50,64 @@ def table(source):
     return header, [(i, dict(zip(header, r))) for i, r in data], encoding, repaired
 
 
+def _receivable_dividends(result):
+    """A rise in 应收股息 is a dividend the account recorded on its ex-date. The amount is a fact;
+    only its split across names held the day before is estimated, by market value."""
+    held = defaultdict(dict)
+    for p in result['positions']:
+        held[p['date']][p['code']] = p['market_value']
+    snaps = result['snapshots']
+    booked = 0
+    for prev, snap in zip(snaps, snaps[1:]):
+        rise = snap.get('receivable_dividend', 0) - prev.get('receivable_dividend', 0)
+        names = held.get(prev['date'], {})
+        total = sum(names.values())
+        if rise <= .005 or total <= 0:
+            continue
+        for code, value in sorted(names.items()):
+            result['actions'].append({'date': snap['date'], 'code': code, 'quantity_change': 0,
+                'cash': rise * value / total, 'kind': 'cash_dividend', 'source': 'receivable_dividend',
+                'evidence': f"应收股息由 {prev.get('receivable_dividend', 0):g} 增至 {snap['receivable_dividend']:g}",
+                'ref': snap['ref']})
+        booked += 1
+    if booked:
+        result['quality']['receivable_dividend_days'] = booked
+
+
+def _settle_rounded_prices(result):
+    """RiceQuant prints fill prices rounded after slippage. When a day's only unexplained cash
+    gap is within the rounding of that day's prices, book the fills at the amount actually paid."""
+    by_day = defaultdict(list)
+    for fill in result['fills']:
+        by_day[fill['date']].append(fill)
+    snaps = result['snapshots']
+    adjusted = 0
+    for prev, snap in zip(snaps, snaps[1:]):
+        fills = by_day.get(snap['date'])
+        if not fills:
+            continue
+        flow = sum(f['notional'] * (1 if f['side'] == 'buy' else -1) + f['fee'] for f in fills)
+        flow -= sum(x['cash'] for x in result['actions'] if x['date'] == snap['date'])
+        gap = (prev['cash'] - flow) - snap['cash']          # positive: less cash than the prices imply
+        # Half of the last printed decimal on every share traded bounds the rounding.
+        bound = sum(f['quantity'] * .5 * 10 ** -_decimals(f['price']) for f in fills)
+        if not 1e-6 < abs(gap) <= bound + .01:
+            continue
+        traded = sum(f['quantity'] for f in fills)
+        for f in fills:
+            share = gap * f['quantity'] / traded
+            f['notional'] += share if f['side'] == 'buy' else -share
+            f['notional_source'] = 'account_cash'
+        adjusted += len(fills)
+    if adjusted:
+        result['quality']['rounded_price_fills'] = adjusted
+
+
+def _decimals(price):
+    text = f"{price:.6f}".rstrip('0')
+    return len(text.split('.')[1]) if '.' in text else 0
+
+
 def detect_adapter(files):
     found = set()
     generic_account = False
@@ -63,7 +121,8 @@ def detect_adapter(files):
         if {'标的', '多空', '数量'} <= fields or {'标的', '交易类型', '成交数量', '手续费'} <= fields:
             found.add('joinquant')
         elif ({'合约代码', '仓位', '最新价'} <= fields or {'账户类型', '可用资金', '总权益'} <= fields
-              or {'合约代码', '买/卖', '成交量', '成交价'} <= fields):
+              or {'合约代码', '买/卖', '成交量', '成交价'} <= fields
+              or {'event', 'order_id', 'status', 'filled_quantity'} <= fields):
             found.add('ricequant')
         elif {'买/卖', '成交价'} <= fields or {'持仓均价', '持仓市值'} <= fields:
             found.add('bigquant')
@@ -213,8 +272,11 @@ def other_platform(files, *, adapter, name, opening_cash=None):
                 for index, row in rows:
                     equity = numeric(row['总权益'], '总权益')
                     current_cash = numeric(row['可用资金'], '可用资金', nonnegative=False)
+                    # Local RQAlpha adds dividends declared but not yet paid; they are cash owed to the account.
+                    receivable = numeric(row.get('应收股息', '') or '0', '应收股息')
                     result['snapshots'].append({'date': date_value(row['日期'], '账户日期'),
-                        'equity': equity, 'cash': current_cash, 'market_value': equity - current_cash,
+                        'equity': equity, 'cash': current_cash + receivable, 'market_value': equity - current_cash - receivable,
+                        'receivable_dividend': receivable,
                         'reported_day_fee': numeric(row.get('费用', '') or '0', '费用'), 'ref': _ref(kind, index)})
             elif {'date', 'code', 'quantity', 'side', 'price', 'fee'} <= fields:
                 kind = 'fills'
@@ -244,6 +306,42 @@ def other_platform(files, *, adapter, name, opening_cash=None):
                     equity, current_cash = numeric(row['equity'], '权益'), numeric(row['cash'], '现金', nonnegative=False)
                     result['snapshots'].append({'date': date_value(row['date'], '账户日期'),
                         'equity': equity, 'cash': current_cash, 'market_value': equity - current_cash, 'ref': _ref(kind, index)})
+            elif {'event', 'order_id', 'status', 'filled_quantity'} <= fields:
+                # RQAlpha 委托详情: one row per order event; keep the final state of each order.
+                kind = 'orders'
+                final = {}
+                for index, row in rows:
+                    oid = row['order_id'].strip()
+                    status = row['status'].strip().replace('ORDER_STATUS.', '').lower()
+                    message = row.get('message', '').strip()
+                    reason = ('无成交量' if '无成交量' in message else
+                              '超过当根成交量上限' if ('percent of current bar volume' in message or '超过了成交量' in message) else
+                              '可用资金不足' if '资金不足' in message else
+                              '涨跌停' if ('涨停' in message or '跌停' in message or 'limit' in message.lower()) else
+                              '停牌' if '停牌' in message or 'suspend' in message.lower() else
+                              '其他原因' if status in {'cancelled', 'rejected'} else '')
+                    cash = re.search(r'当前资金[:：]\s*([\d.]+).*?所需资金[:：]\s*([\d.]+)', message)
+                    final[oid] = {'date': date_value(row['time'], '委托日期'), 'time': row['time'].strip()[11:19],
+                        'code': code_value(row['code']), 'side': 'buy' if 'BUY' in row['side'].upper() else 'sell',
+                        'quantity': quantity(row['quantity']), 'filled': quantity(row['filled_quantity'] or '0'),
+                        'status': status, 'reason': reason, 'order_id': oid, 'ref': _ref(kind, index),
+                        'message': message[:200],
+                        **({'available_cash': float(cash[1]), 'required_cash': float(cash[2])} if cash else {})}
+                result['orders'] = sorted(final.values(), key=lambda o: (o['date'], o['time'], o['order_id']))
+            elif {'datetime', 'rank', 'order_book_id'} <= fields or {'date', 'code', 'rank'} <= fields:
+                # The strategy's own daily ranking: rank per candidate, optionally which ones it selected.
+                kind = 'scores'
+                for index, row in rows:
+                    stamp = (row.get('datetime') or row.get('date') or '').strip()
+                    rank = numeric(row['rank'], '排名')
+                    if rank < 1 or not rank.is_integer():
+                        raise ValueError(f'{source.name} 第 {index} 行：排名须为正整数')
+                    flag = (row.get('selected') or '').strip().lower()
+                    result['scores'].append({'date': date_value(stamp, '排名日期'),
+                        'code': code_value(row.get('order_book_id') or row['code']), 'score': -rank, 'rank': int(rank),
+                        'selected': flag in {'true', '1', 'yes', '是'} if flag else None,
+                        'available_at': stamp[11:19] if len(stamp) > 10 else row.get('available_at', ''),
+                        'ref': _ref(kind, index)})
             elif {'date', 'code', 'score'} <= fields:
                 kind = 'scores'
                 for index, row in rows:
@@ -282,6 +380,10 @@ def other_platform(files, *, adapter, name, opening_cash=None):
         identities = [(r['date'], r.get('code', '')) for r in result[key]]
         if key != 'fills' and len(identities) != len(set(identities)):
             raise ValueError('同日持仓、账户或打分重复')
+    if adapter == 'ricequant' and result['snapshots']:
+        _receivable_dividends(result)
+    if adapter == 'ricequant' and result['snapshots'] and result['fills']:
+        _settle_rounded_prices(result)
     result['quality']['snapshots_complete'] = bool(result['snapshots'])
     result['quality']['negative_cash_days'] = sum(s['cash'] < 0 for s in result['snapshots'])
     if 'fills' not in seen and result['positions']:

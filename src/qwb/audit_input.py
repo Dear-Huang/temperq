@@ -87,6 +87,13 @@ def review(bundle):
         check('orders_vs_fills', '日志委托与成交对应', 'review',
               f"日志 {len(bundle['logs'])} 行、成交 {len(bundle['fills'])} 笔；尚无统一订单编号与完整生命周期映射。",
               '不能把日志行数当委托数或把差额当漏单；补订单编号、提交、撤单与成交回报后核对。')
+    orders = bundle.get('orders') or []
+    if orders:
+        failed = [o for o in orders if o['status'] in {'cancelled', 'rejected'} and o['filled'] < o['quantity']]
+        why = Counter(o['reason'] or '未说明' for o in failed)
+        check('orders', '委托与成交', 'consistent',
+              f"识别 {len(orders)} 笔委托，{len(failed)} 笔未全部成交" + ("：" + "、".join(f"{k} {v} 笔" for k, v in why.most_common()) if why else "。"),
+              '未成交的委托不产生费用，但会让持仓偏离信号；原因见『排名一变就换仓』卡片。')
     check('scores', '每日打分', 'consistent' if bundle.get('scores') else 'missing',
           f"识别 {len(bundle.get('scores', []))} 条打分。" if bundle.get('scores') else '信号寿命、构建方式对比、规则暴露需要每日打分数据。',
           '提供 date, code, score，可补 available_at；有打分不代表对应算法已运行。')
@@ -131,6 +138,23 @@ def review(bundle):
             check('coverage', '交易、持仓与账户区间', 'review',
                   f'账户记录覆盖 {first} 至 {last}；另有 {len(outside)} 天的交易或持仓在此之外（{outside[0]} 起），这些天不进入对账和归因。',
                   '常见原因是某个文件只导出了一部分，或几份文件不是同一次回测；请重新完整导出。')
+    rounded = bundle.get('quality', {}).get('rounded_price_fills')
+    if rounded:
+        check('rounded_prices', '成交价四舍五入', 'consistent',
+              f'交易详情里的成交价是含滑点后四舍五入到 3–4 位小数的；{rounded} 笔成交按账户实际收付的金额入账，差额在价格末位的四舍五入以内。',
+              '无需处理；如要逐笔精确，请导出未四舍五入的成交价。')
+    receivable = sum(1 for s in bundle['snapshots'] if s.get('receivable_dividend'))
+    if receivable:
+        check('receivable_dividend', '应收股息', 'consistent',
+              f'账户详情有 {receivable} 天含已宣告未到账的股息，计入账户现金；到账当天只是从应收转为现金，不算盈亏。',
+              '无需处理。')
+    ranked = [s for s in bundle.get('scores', []) if s.get('rank') is not None]
+    if ranked:
+        days = len({s['date'] for s in ranked})
+        flagged = any(s.get('selected') is not None for s in ranked)
+        check('ranking', '策略每日排名', 'consistent',
+              f'识别 {days} 天、{len(ranked)} 条排名' + ('，含策略选中的目标。' if flagged else '；未标出选中目标，按每天第 1 名当作目标。'),
+              '排名用于核对持仓是否跟随信号、统计换仓频率；它是信号排序，不是成交清单。')
     inferred_actions = bundle.get('quality', {}).get('inferred_actions')
     if inferred_actions:
         check('corporate_actions', '分红与送转（由账户推断）', 'review',

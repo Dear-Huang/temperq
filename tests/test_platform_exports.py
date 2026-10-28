@@ -101,3 +101,26 @@ def test_archives_with_unexpected_contents_are_refused():
         z.writestr("evil.exe", b"MZ")
     with pytest.raises(ValueError, match="只能是 CSV 或 TXT"):
         imports.normalize(files(("x.zip", buf.getvalue()), ("代码.txt", CODE)), adapter="auto", name="x")
+
+
+def test_local_rqalpha_receivable_dividend_and_rounded_prices_close_the_books():
+    from qwb import strategy_audit as audit
+    head = "﻿时间,trading_datetime,合约代码,合约名称,买/卖,开/平,exec_id,税费,佣金,成交量,成交价,order_id,费用\n"
+    # Sold at a printed 1.9646 (1964.60) while the account moved 1964.58: the price was rounded after slippage.
+    trades = (head + "2024-01-02 10:00:00,2024-01-02 10:00:00,510180.XSHG,上证180ETF,买,开,1,0,5,1000,1.995,1,5\n"
+                     "2024-01-03 10:00:00,2024-01-03 10:00:00,510180.XSHG,上证180ETF,卖,平,2,0,5,1000,1.9646,2,5\n").encode("utf-8")
+    holdings = ("﻿时间,合约代码,合约名称,仓位,最新价,开仓均价,市值,持仓浮动盈亏,权重\n"
+                "2024-01-02,510180.XSHG,上证180ETF,1000.0,2.0,1.995,2000.0,5,0.95\n").encode("utf-8")
+    # 01-03 is the ex-date: 0.5 yuan declared but unpaid. 01-04 it arrives as cash.
+    account = ("﻿日期,账户类型,可用资金,费用,市值,总权益,应收股息\n"
+               "2024-01-01,股票/场内基金,2100.0,0,0,2100.0,0.0\n"
+               "2024-01-02,股票/场内基金,100.0,5,2000.0,2100.0,0.0\n"
+               "2024-01-03,股票/场内基金,2059.58,5,0,2060.08,0.5\n"
+               "2024-01-04,股票/场内基金,2060.08,0,0,2060.08,0.0\n").encode("utf-8")
+    bundle = imports.normalize(files(("交易详情.csv", trades), ("持仓详情.csv", holdings), ("账户详情.csv", account),
+                                     ("代码.txt", CODE)), adapter="auto", name="rq")
+    assert bundle["quality"]["receivable_dividend_days"] == 1
+    assert [(a["date"], a["source"], round(a["cash"], 2)) for a in bundle["actions"]] == [("2024-01-03", "receivable_dividend", .5)]
+    assert bundle["quality"]["rounded_price_fills"] == 1
+    assert round(bundle["fills"][1]["notional"], 2) == 1964.58
+    assert audit.analyze(bundle)["modules"]["accounting"]["status"] == "verified"
