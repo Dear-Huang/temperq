@@ -4,3 +4,5 @@
 *.parquet binary
 # Distribution manifests hash exact bytes; checkouts must not convert newlines.
 src/qwb/bundled/** -text
+# Format fixtures are hashed byte for byte (CRLF, GBK and BOM are part of the formats).
+tests/fixtures/formats/** -text
