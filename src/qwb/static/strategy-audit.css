@@ -74,3 +74,7 @@ main>.strategy-picker{margin:8px 0 12px;padding:10px 0}.review-heading{margin-bo
 #audit-actions,#audit-findings,.audit-next{scroll-margin-top:150px}
 @media(max-width:640px){.audit-workflow ol{gap:8px}.audit-workflow a,.audit-workflow li>div{flex-direction:column;align-items:flex-start;gap:2px;font-size:12px}.audit-workspace-metrics{grid-template-columns:repeat(2,minmax(0,1fr));gap:16px}.audit-next{align-items:flex-start;flex-direction:column}.action-card{padding:16px}.strategy-actions{gap:10px}.strategy-actions .btn{padding:6px 9px}}
 .attribution-split>div{min-width:0}
+.action-edits{margin:12px 0;padding:12px 14px;background:var(--bg,#f6f7f9);border-radius:6px}
+.action-edit{display:grid;grid-template-columns:auto minmax(0,1fr);gap:4px 12px;margin:8px 0;align-items:baseline}
+.action-edit .edit-line{grid-row:span 3;font-size:12px;font-weight:600;color:var(--accent,#2453d6);white-space:nowrap}
+.action-edit code{font-size:12px;white-space:pre-wrap;overflow-wrap:anywhere}.edit-now{color:#b42318}.edit-new{color:#18724a}

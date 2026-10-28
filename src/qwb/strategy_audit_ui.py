@@ -128,7 +128,7 @@ def upload_form(token, error=""):
 <label>导出平台<select name="adapter"><option value="auto">自动识别</option><option value="bigquant">BigQuant</option><option value="joinquant">聚宽</option><option value="ricequant">米筐</option><option value="generic">其他 / 标准 CSV</option></select></label>
 <label>风格（可留空，由你确认）<input name="style" maxlength="40" placeholder="例如短期反转、趋势、多因子"></label>
 </div><p class="notice">推荐至少 2 年，最好 3 年以上，并覆盖至少一段明显下跌。较短回测也可导入，报告会区分可核账目与规则效果。</p>
-<label>原样上传代码、交易和可选持仓、日志、每日打分（最多6个文件）<input type="file" name="files" accept=".csv,.txt,.py" multiple></label>
+<label>原样上传代码、交易和可选持仓、日志、每日打分；平台下载的 ZIP 不用解压（最多7个文件）<input type="file" name="files" accept=".csv,.txt,.py,.zip" multiple></label>
 <details><summary>也可以直接粘贴策略代码</summary><label>策略代码<textarea name="code_text" rows="7" maxlength="200000" placeholder="只读解析，不运行代码；已上传代码文件时不必再粘贴"></textarea></label></details>
 <p class="mut">代码必填；仅有代码时可做静态检查。交易必填，聚宽持仓可推算净变动；持仓强烈推荐、日志推荐、每日打分选填。支持 UTF-8 / GBK，不用改列名。</p>
 <details open class="platform-guide"><summary>各平台怎么导出、能拿到什么</summary>
@@ -160,7 +160,7 @@ def overview(identity, bundle, token):
     fill_label = '条持仓净变动（由持仓推算）' if review['fills_inferred'] else '笔成交'
     body += f'<p class="review-meta">{period} · {len(days)} 个账户快照 · {len(bundle["fills"])} {fill_label}</p>'
     body += '<section class="review-section"><h2>01 · 材料核对</h2><div class="tw"><table><tr><th>文件</th><th>识别类型</th><th>行数</th></tr>'
-    labels = {"fills": "交易", "positions": "持仓与账户汇总", "snapshots": "账户汇总", "logs": "日志", "code": "策略代码", "external_attribution": "平台归因（待核口径）", "quote_observations": "日均报价价差（核对用途）", 'scores': '每日打分'}
+    labels = {"fills": "交易", "positions": "持仓与账户汇总", "snapshots": "账户汇总", "logs": "日志", "code": "策略代码", "external_attribution": "平台归因（待核口径）", "quote_observations": "日均报价价差（核对用途）", 'scores': '每日打分', 'platform_returns': '平台收益表（核对用途）'}
     for source in bundle["sources"]:
         body += f'<tr><td>{esc(source["name"])}</td><td>{labels[source["kind"]]} · {esc(source.get("encoding", "历史记录"))}</td><td>{source["rows"]}</td></tr>'
     body += '</table></div>'
@@ -328,9 +328,9 @@ def partial_report(identity, bundle, result):
     return body+f'<p><a href="/strategy-audits/{identity}/reports/{{report_id}}/evidence.json">下载证据 JSON</a></p>'
 
 
-def action_cards(result):
-    """Concrete changes first: finding, options, saving vs sacrifice, evidence, what overturns it."""
-    cards = audit_actions.cards(result)
+def action_cards(result, bundle=None):
+    """Concrete changes first: finding, where to edit, saving vs sacrifice, evidence, what overturns it."""
+    cards = audit_actions.cards(result, bundle)
     if not cards:
         return ''
     body = '<section class="review-section" id="audit-actions"><h2>建议怎么改</h2><div class="action-cards">'
@@ -343,6 +343,17 @@ def action_cards(result):
             for row in card["table"]:
                 body += f'<tr><td>{esc(row["label"])}</td><td>{row["matches"]}</td><td>¥{money(row["net"])}</td><td>¥{money(row["net_after_tick"])}</td></tr>'
             body += '</table></div>'
+        if card.get("edits"):
+            body += '<div class="action-edits"><b>改代码哪里</b>'
+            for edit in card["edits"]:
+                where = f'第 {edit["line"]} 行' if edit["line"] else '回测设置'
+                now = f'<code class="edit-now">{esc(edit["code"])}</code>' if edit["code"] else ''
+                body += (f'<div class="action-edit"><span class="edit-line">{where}</span>{now}'
+                         f'<code class="edit-new">→ {esc(edit["change"])}</code>'
+                         f'<span class="mut">{esc(edit["note"])}</span></div>')
+            body += '<p class="mut">只是指出位置，平台不改也不运行你的代码；改后回原平台重跑，再到『效果验证』上传对比。</p></div>'
+        elif bundle is not None and card["id"] in {"holding_period", "low_price", "fee_setting", "minimum_commission"}:
+            body += '<p class="mut action-edits">代码里没有找到控制这一项的设置，需要你在策略里自己定位。</p>'
         body += '<div class="action-options"><b>可选改法</b><ol>' + ''.join(f'<li><b>{esc(o["label"])}</b>：{esc(o["effect"])}</li>' for o in card["options"]) + '</ol></div>'
         body += '<dl class="action-ledger">'
         for label, key in (("省下", "saving"), ("可能放弃", "sacrifice"), ("净影响", "net")):
@@ -480,7 +491,7 @@ def verification_page(identity, record, result, versions, compare_with, token):
              '<li>导出交易、持仓、日志，在下方上传为新版本；系统按同一方法重算并对比。</li></ol>')
     body += (f'<form method="post" action="/strategy-audits/{identity}/optimized" enctype="multipart/form-data" class="review-form">'
              f'<input type="hidden" name="token" value="{token}">'
-             '<label>上传优化版回测导出（交易、持仓、日志、优化后代码）<input type="file" name="files" accept=".csv,.txt,.py" multiple></label>'
+             '<label>上传优化版回测导出（交易、持仓、日志、优化后代码；ZIP 不用解压）<input type="file" name="files" accept=".csv,.txt,.py,.zip" multiple></label>'
              '<button class="primary">上传优化版并核对</button></form>')
     body += '<p class="mut">上传后进入导入核对页，确认后成为新版本；原版本与报告保持不变。</p></section>'
     return body
@@ -1137,7 +1148,7 @@ def register(app, workdir, *, page, guard, token):
                     fee = '未知，不按0元处理' if module['reported_fees'] is None else '¥'+money(module['reported_fees'])
                     body += '<p>报告费用：'+fee+'</p>'
             body += f'<p><a href="/strategy-audits/{identity}/reports/{report_id}">查看完整报告与可复算明细</a> · <a href="/strategy-attribution?strategy={identity}">查看盈亏归因</a></p></section>'
-            body += action_cards(result)
+            body += action_cards(result, bundle)
             body += '<section class="review-section audit-next"><div><h2>下一步</h2><p class="mut">代码调整需回原平台回测；账户方案需补充当前信号与可卖数量。</p></div><div class="review-resources">'
             body += f'<a href="/strategy-comparison?strategy={identity}">导入新回测，验证改动</a><a href="/strategy-simulation?strategy={identity}">准备账户调整方案</a></div></section>'
             body += code_section(identity, report_id, bundle, result, token)
