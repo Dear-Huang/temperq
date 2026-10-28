@@ -348,6 +348,25 @@ def _churn_card(signals, edits, opening=None, t=None):
     }
 
 
+def attach_reruns(cards, reruns):
+    """Same-period reruns of a card (spec R6). They are E4: in-sample, never 'verified'."""
+    labels = {"better": "更好", "mixed": "有得有失", "worse": "更差"}
+    for card in cards:
+        runs = reruns.get(card["id"]) or []
+        if not runs:
+            continue
+        card["reruns"] = [{"state": r["state"], "verdict": r["verdict"], "version": r.get("version"), "id": r.get("id"),
+                           "parent": r.get("parent", ""), "label": labels.get(r["state"], r["state"])} for r in runs]
+        card["evidence"] = "E4"
+        latest = runs[-1]
+        if latest["state"] in {"worse", "mixed"}:
+            card["state"] = "hold"
+            card["headline"] = f"同区间复跑{labels[latest['state']]}（样本内）：{card['headline']}"
+        else:
+            card["headline"] = f"同区间复跑更好（样本内，不代表样本外有效）：{card['headline']}"
+    return cards
+
+
 def cards(result, bundle=None):
     """Action cards; with the bundle, each card also points at the code lines to change."""
     from . import audit_levers

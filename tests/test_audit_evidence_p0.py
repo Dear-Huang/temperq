@@ -165,3 +165,14 @@ def test_changed_threshold_changes_the_card_and_is_stored():
     assert r["rules"]["thresholds"]["T-HOLD-SHORT"] == 3 and r["settings"]["thresholds"] == {"T-HOLD-SHORT": 3}
     with pytest.raises(ValueError):
         audit.analyze(bundle, {**base, "thresholds": {"F-TICK-STOCK": .02}})
+
+
+def test_rerun_lifts_card_to_e4_and_never_says_verified():
+    card = audit_actions.cards({"modules": {"signal_mapping": signals()}})
+    out = audit_actions.attach_reruns(card, {"rank_churn": [{"state": "worse", "verdict": "没有好于原版（同区间复跑，样本内）",
+                                                             "version": 2, "id": "v2", "parent": "v1"}]})[0]
+    assert out["evidence"] == "E4" and out["state"] == "hold"
+    assert out["headline"].startswith("同区间复跑更差（样本内）") and "已验证" not in out["headline"]
+    assert out["reruns"][0]["label"] == "更差"
+    untouched = audit_actions.attach_reruns(audit_actions.cards({"modules": {"signal_mapping": signals()}}), {})[0]
+    assert untouched["evidence"] in {"E3", "E3c"} and "reruns" not in untouched

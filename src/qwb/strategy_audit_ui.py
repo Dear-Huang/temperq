@@ -380,9 +380,9 @@ def partial_report(identity, bundle, result):
     return body+f'<p><a href="/strategy-audits/{identity}/reports/{{report_id}}/evidence.json">下载证据 JSON</a></p>'
 
 
-def action_cards(result, bundle=None):
+def action_cards(result, bundle=None, reruns=None):
     """Concrete changes first: finding, where to edit, saving vs sacrifice, evidence, what overturns it."""
-    cards = audit_actions.cards(result, bundle)
+    cards = audit_actions.attach_reruns(audit_actions.cards(result, bundle), reruns or {})
     if not cards:
         return ''
     body = '<section class="review-section" id="audit-actions"><h2>建议怎么改</h2><div class="action-cards">'
@@ -414,6 +414,9 @@ def action_cards(result, bundle=None):
         if card.get("inputs"):
             body += '<dl class="action-ledger">' + ''.join(f'<div><dt>{esc(k)}</dt><dd>{esc(v)}</dd></div>' for k, v in card["inputs"]) + '</dl>'
             body += f'<p class="mut">计算：{esc(card["formula"])}</p>'
+        for run in card.get("reruns", []):
+            body += (f'<p class="action-rerun rerun-{esc(run["state"])}"><b>v{run["version"]} 同区间复跑：</b>{esc(run["verdict"])} '
+                     f'<a href="/strategy-comparison?strategy={esc(run["parent"])}&against={esc(run["id"])}">查看对比</a></p>')
         for condition in card.get("conditions", []):
             body += f'<p class="notice">{esc(condition)}</p>'
         body += f'<p class="action-evidence"><span class="tag">{esc(audit_actions.EVIDENCE[card["evidence"]])}</span>{esc(card["basis"])}</p>'
@@ -496,6 +499,15 @@ def _row(label, original, optimized=None):
     return '<tr>' + cells + '</tr>'
 
 
+def card_choice(result):
+    cards = audit_actions.cards(result)
+    if not cards:
+        return ''
+    options = ''.join(f'<option value="{esc(c["id"])}">{esc(c["title"])}</option>' for c in cards)
+    return ('<label>这次重跑验证的是哪张卡<select name="tests_card"><option value="">不指定（只比较两版）</option>'
+            f'{options}</select></label>')
+
+
 def verification_page(identity, record, result, versions, compare_with, token):
     restated = audit_verification.restate(result)
     if not restated:
@@ -558,6 +570,7 @@ def verification_page(identity, record, result, versions, compare_with, token):
              '<li>导出交易、持仓、日志，在下方上传为新版本；系统按同一方法重算并对比。</li></ol>')
     body += (f'<form method="post" action="/strategy-audits/{identity}/optimized" enctype="multipart/form-data" class="review-form">'
              f'<input type="hidden" name="token" value="{token}">'
+             + card_choice(result) +
              '<label>上传优化版回测导出（交易、持仓、日志、优化后代码；ZIP 不用解压）<input type="file" name="files" accept=".csv,.txt,.py,.zip" multiple></label>'
              '<button class="primary">上传优化版并核对</button></form>')
     body += '<p class="mut">上传后进入导入核对页，确认后成为新版本；原版本与报告保持不变。</p></section>'
@@ -985,6 +998,11 @@ def register(app, workdir, *, page, guard, token):
             additions = await uploaded_files(form)
             originals = await run_in_threadpool(store.source_files, workdir, identity)
             files, bundle = await run_in_threadpool(materials.replace_version, originals, previous, additions)
+            card = str(form.get('tests_card') or '').strip()
+            if card:
+                if len(card) > 40 or not card.replace('_', '').isalnum():
+                    raise ValueError('卡片编号无效')
+                bundle['metadata'] = {**bundle.get('metadata', {}), 'tests_card': card}
             updated = await run_in_threadpool(store.save, workdir, bundle, files, parent=identity)
         except (ValueError, TypeError, OSError) as exc:
             response = page('优化版未保存', '<p role="alert" class="notice warn">'+esc(str(exc))+'</p><p><a href="/strategy-comparison?strategy='+identity+'">返回效果验证</a></p>', identity=identity, tab='comparison')
@@ -1191,6 +1209,26 @@ def register(app, workdir, *, page, guard, token):
         _, _, result = load_report(identity, report_id)
         return report_id, result
 
+    def rerun_evidence(identity, record, result):
+        """{card id: comparison} for confirmed child versions that declared which card they test."""
+        out = {}
+        family = record.get('strategy_id', record['id'])
+        for child in store.history(workdir):
+            if child.get('parent_id') != identity or child.get('strategy_id', child['id']) != family:
+                continue
+            try:
+                _, child_bundle = load(child['id'])
+            except HTTPException:
+                continue
+            card = (child_bundle.get('metadata') or {}).get('tests_card')
+            other = current_report(child['id'])[1] if card else None
+            if not other:
+                continue
+            cmp = audit_verification.compare(result, other)
+            if cmp and cmp.get('comparable'):
+                out.setdefault(card, []).append({**cmp, 'version': child.get('version'), 'id': child['id'], 'parent': identity})
+        return out
+
     def workspace(tab, strategy, against=''):
         if strategy == 'new':
             return RedirectResponse('/strategy-audits/new', 303)
@@ -1237,7 +1275,7 @@ def register(app, workdir, *, page, guard, token):
                     fee = '未知，不按0元处理' if module['reported_fees'] is None else '¥'+money(module['reported_fees'])
                     body += '<p>报告费用：'+fee+'</p>'
             body += f'<p><a href="/strategy-audits/{identity}/reports/{report_id}">查看完整报告与可复算明细</a> · <a href="/strategy-attribution?strategy={identity}">查看盈亏归因</a></p></section>'
-            body += action_cards(result, bundle)
+            body += action_cards(result, bundle, rerun_evidence(identity, record, result))
             body += '<section class="review-section audit-next"><div><h2>下一步</h2><p class="mut">代码调整需回原平台回测；账户方案需补充当前信号与可卖数量。</p></div><div class="review-resources">'
             body += f'<a href="/strategy-comparison?strategy={identity}">导入新回测，验证改动</a><a href="/strategy-simulation?strategy={identity}">准备账户调整方案</a></div></section>'
             body += code_section(identity, report_id, bundle, result, token)
