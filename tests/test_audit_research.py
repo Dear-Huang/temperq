@@ -156,7 +156,7 @@ def test_price_boundaries_and_account_draft_never_claim_cost_coverage():
     data = partial_bundle()
     r = audit.analyze(data)
     t = r['modules']['tick_analysis']
-    assert [p['fills'] for p in t['price_bands']] == [1, 2, 0, 0]
+    assert [p['fills'] for p in t['price_bands']] == [1, 2, 0, 0, 0]  # last band: ETF/fund/bond
     assert t['accounted_intervals']['profit_covers_scenario'] is True
     data['snapshots'][-1]['cash'] += 1
     t = audit.analyze(data)['modules']['tick_analysis']

@@ -10,34 +10,46 @@ import re
 
 from .struct_costs import tick_half_spread_bp
 from .securities import tick_yuan
+from . import audit_slippage
 
 
-def _band(price):
+def _band(price, code=""):
+    if code and tick_yuan(code) != .01:
+        return "fund"
     return "under_5" if price < 5 else "5_to_10" if price < 10 else "10_to_20" if price < 20 else "20_plus"
 
 
-PRICE_BANDS = (("under_5", "低于5元"), ("5_to_10", "5至不足10元"),
-               ("10_to_20", "10至不足20元"), ("20_plus", "20元及以上"))
+PRICE_BANDS = (("under_5", "股票低于5元"), ("5_to_10", "股票5至不足10元"),
+               ("10_to_20", "股票10至不足20元"), ("20_plus", "股票20元及以上"),
+               ("fund", "ETF/基金/债券"))
 
 
 def tick_analysis(bundle, account):
     rows, groups = [], defaultdict(list)
     included = {r["date"] for r in account["daily"]}
+    slippage = audit_slippage.declared(bundle)
     for fill in bundle["fills"]:
-        bp = tick_half_spread_bp(fill["price"]) * tick_yuan(fill["code"]) / .01
+        floor_bp = tick_half_spread_bp(fill["price"]) * tick_yuan(fill["code"]) / .01
+        charged = audit_slippage.per_side_bp(slippage, fill["code"], fill["price"])
+        # Fill prices already include declared slippage; only the shortfall is extra cost.
+        bp = max(0., floor_bp - (charged or 0.))
         cost = fill["notional"] * bp / 10000
         clock = fill["time"].strip()
         phase = ("auction_boundary" if re.fullmatch(r"(?:09:30|15:00)(?::00(?:\.0+)?)?", clock)
                  else "execution_mechanism_unconfirmed")
         row = {**fill, "tick_half_spread_bp": bp, "tick_scenario_cost": cost,
-               "price_band": _band(fill["price"]), "accounted_interval": fill["date"] in included,
+               "tick_floor_bp": floor_bp, "slippage_charged_bp": charged,
+               "tick_floor_cost": fill["notional"] * floor_bp / 10000,
+               "price_band": _band(fill["price"], fill["code"]), "accounted_interval": fill["date"] in included,
                "execution_context": phase}
         rows.append(row); groups[row["price_band"]].append(row)
     def aggregate(items):
         value = sum(f["notional"] for f in items)
         cost = sum(f["tick_scenario_cost"] for f in items)
+        floor = sum(f["tick_floor_cost"] for f in items)
         return {"fills": len(items), "traded_notional": value, "reported_fees": sum(f["fee"] for f in items),
-                "tick_scenario_cost": cost, "weighted_half_spread_bp": cost / value * 10000 if value else None}
+                "tick_scenario_cost": cost, "weighted_half_spread_bp": cost / value * 10000 if value else None,
+                "tick_floor_cost": floor, "already_charged": floor - cost}
     all_fills = aggregate(rows)
     active = [r for r in rows if r["accounted_interval"]]
     interval = aggregate(active)
@@ -75,6 +87,7 @@ def tick_analysis(bundle, account):
             "formula": "half_spread_bp = 10000 * 0.01 / (2 * fill_price); cost = notional * half_spread_bp / 10000",
             "fills": rows, "all_exported_fills": all_fills, "accounted_intervals": interval, "price_bands": bands,
             "auction_boundary_fills": sum(r["execution_context"] == "auction_boundary" for r in rows),
+            "slippage": slippage, "slippage_note": audit_slippage.describe(slippage),
             "calibration_status": calibration["status"], "calibration": calibration, "measured_execution_cost": None,
             "meaning": "STRUCT 的一档报价地板分量，按每边半档作固定成交压力情景，非完整流动性模型。成交价代替中间价，仅近似换算；它不是实盘成本下限。开收盘竞价、被动成交和连续竞价机制不同，不能据此断言实盘必亏。",
             "overlap": "费用已保留在净盈亏中；仅在原回测未包含价差/滑点时才能把本情景视为额外成本。若已包含，需先分离，避免重复扣除。",
@@ -129,7 +142,7 @@ def holding_analysis(bundle, account, tick):
                 "gross_pnl": gross, "entry_fee": entry_fee, "exit_fee": exit_fee,
                 "fees": entry_fee + exit_fee, "net_pnl": net,
                 "tick_scenario_cost": entry_tick + exit_tick, "net_after_tick_scenario": net - entry_tick - exit_tick,
-                "entry_price_band": _band(buy["price"]), "right_censored": sell is None,
+                "entry_price_band": _band(buy["price"], buy["code"]), "right_censored": sell is None,
                 "entry_ref": buy["ref"], "exit_ref": sell["ref"] if sell else mark["ref"]}
     ambiguous_buy_days = 0
     def buy_order(fill):
