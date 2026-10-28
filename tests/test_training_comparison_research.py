@@ -5,7 +5,10 @@ import sys
 
 import numpy as np
 import pandas as pd
-import torch
+import pytest
+
+# Research-only comparison of training recipes; torch is not a runtime dependency.
+torch = pytest.importorskip("torch")
 
 
 spec = importlib.util.spec_from_file_location("training_comparison", Path(__file__).parents[1] / "scripts/run_training_comparison.py")

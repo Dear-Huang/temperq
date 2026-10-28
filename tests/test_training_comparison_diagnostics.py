@@ -4,8 +4,10 @@ import sys
 
 import numpy as np
 import pandas as pd
-import torch
 import pytest
+
+# Research-only comparison of training recipes; torch is not a runtime dependency.
+torch = pytest.importorskip("torch")
 
 scripts = Path(__file__).parents[1] / "scripts"
 sys.path.insert(0, str(scripts))
