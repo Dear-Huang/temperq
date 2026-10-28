@@ -9,13 +9,13 @@ import re
 
 from .strategy_imports import (LOG_LINE, is_platform_log, SCHEMA, MAX_ROWS, _ref, date_value, decode_source,
                                inspect_code, numeric)
-from .strategy import stock_code
+from .securities import security_code as stock_code
 from .audit_fee_units import order_fields
 
 
 def code_value(value):
     text = str(value).strip().upper()
-    match = re.search(r'\d{6}\.(?:XSHG|XSHE|SH|SZ)', text)
+    match = re.search(r'\d{6}\.(?:XSHG|XSHE|SH|SZ|BJ)', text) or re.search(r'[A-Z]{1,2}\d{3,4}\.[A-Z]{3,4}', text)
     if match:
         text = match[0]
     return stock_code(text.replace('.XSHG', '.SH').replace('.XSHE', '.SZ'))
@@ -190,7 +190,7 @@ def other_platform(files, *, adapter, name, opening_cash=None):
                     if q <= 0 or price <= 0:
                         raise ValueError('成交股数和价格须为正')
                     stamp = row['时间'].strip()
-                    result['fills'].append({'date': date_value(stamp[:10], '成交日期'),
+                    result['fills'].append({'date': date_value(stamp, '成交日期'),
                         'code': code_value(row['合约代码']), 'quantity': q, 'price': price, 'side': side,
                         'notional': q * price, 'fee': numeric(row.get('费用', '') or '0', '费用'),
                         'time': stamp[11:19], 'ref': _ref(kind, index), **order_fields({})})
@@ -204,7 +204,7 @@ def other_platform(files, *, adapter, name, opening_cash=None):
                     if q == 0:
                         continue
                     price = numeric(row['最新价'], '收盘价')
-                    result['positions'].append({'date': date_value(row['时间'][:10], '持仓日期'),
+                    result['positions'].append({'date': date_value(row['时间'], '持仓日期'),
                         'code': code_value(row['合约代码']), 'quantity': q, 'price': price,
                         'market_value': numeric(row['市值'], '市值'), 'ref': _ref(kind, index)})
             elif {'账户类型', '可用资金', '总权益'} <= fields:
@@ -213,7 +213,7 @@ def other_platform(files, *, adapter, name, opening_cash=None):
                 for index, row in rows:
                     equity = numeric(row['总权益'], '总权益')
                     current_cash = numeric(row['可用资金'], '可用资金', nonnegative=False)
-                    result['snapshots'].append({'date': date_value(row['日期'][:10], '账户日期'),
+                    result['snapshots'].append({'date': date_value(row['日期'], '账户日期'),
                         'equity': equity, 'cash': current_cash, 'market_value': equity - current_cash,
                         'reported_day_fee': numeric(row.get('费用', '') or '0', '费用'), 'ref': _ref(kind, index)})
             elif {'date', 'code', 'quantity', 'side', 'price', 'fee'} <= fields:
@@ -253,7 +253,7 @@ def other_platform(files, *, adapter, name, opening_cash=None):
             elif {'时间', '策略收益', '基准收益'} <= fields:
                 # JoinQuant 收益详情: the platform's own cumulative return, kept to cross-check equity.
                 kind = 'platform_returns'
-                result['platform_returns'] = [{'date': date_value(row['时间'][:10], '收益日期'),
+                result['platform_returns'] = [{'date': date_value(row['时间'], '收益日期'),
                     'strategy_pct': numeric(row['策略收益'], '策略收益', nonnegative=False),
                     'ref': _ref(kind, index)} for index, row in rows]
             elif {'时间', '级别', '内容'} <= fields:

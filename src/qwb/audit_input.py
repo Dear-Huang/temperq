@@ -1,6 +1,8 @@
 """Material readiness, literal parameter provenance and pre-audit consistency."""
 from __future__ import annotations
 
+from .securities import pays_stamp_tax, tick_yuan
+
 from collections import Counter
 
 PLATFORMS = {'bigquant_v1': 'BigQuant', 'joinquant_v1': '聚宽', 'ricequant_v1': '米筐', 'generic_v1': '其他', 'code_only_v1': '未识别平台'}
@@ -121,6 +123,14 @@ def review(bundle):
         check('platform_returns', '平台收益表与账户', 'consistent' if worst <= .05 else 'review',
               f'平台报告的累计收益与按持仓、现金还原的账户逐日对照 {len(paired)} 天，最大差 {worst:.2f} 个百分点。',
               '一致说明导出完整、属于同一次回测。' if worst <= .05 else '差异较大：确认收益表与交易、持仓来自同一次回测。')
+    if bundle['snapshots']:
+        first, last = bundle['snapshots'][0]['date'], bundle['snapshots'][-1]['date']
+        outside = sorted({r['date'] for key in ('fills', 'positions') for r in bundle[key]
+                          if not first <= r['date'] <= last})
+        if outside:
+            check('coverage', '交易、持仓与账户区间', 'review',
+                  f'账户记录覆盖 {first} 至 {last}；另有 {len(outside)} 天的交易或持仓在此之外（{outside[0]} 起），这些天不进入对账和归因。',
+                  '常见原因是某个文件只导出了一部分，或几份文件不是同一次回测；请重新完整导出。')
     inferred_actions = bundle.get('quality', {}).get('inferred_actions')
     if inferred_actions:
         check('corporate_actions', '分红与送转（由账户推断）', 'review',
@@ -159,13 +169,15 @@ def partial_result(bundle, settings):
     for index, f in enumerate(bundle['fills']):
         try:
             cost = fees.costs(f['notional'], f['side'].upper(), date.fromisoformat(f['date']))
+            if not pays_stamp_tax(f['code']):
+                cost['stamp_tax'] = 0.0
             cost['commission'] = commissions[index]
             modeled = sum(cost.values())
         except ValueError:
             modeled = None
         rows.append({'date': f['date'], 'code': f['code'], 'quantity': f['quantity'],
             'notional_reference': f['notional'], 'reported_fee': None if inferred else f['fee'],
-            'modeled_fee_scenario': modeled, 'tick_half_spread_bp': 50 / f['price'],
+            'modeled_fee_scenario': modeled, 'tick_half_spread_bp': 5000 * tick_yuan(f['code']) / f['price'],
             'tick_cost_scenario': f['notional'] * 50 / f['price'] / 10000,
             'inferred': inferred})
     return {'id': 'partial_diagnostics', 'status': 'approximate' if inferred else 'observed_fills_only',

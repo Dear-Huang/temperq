@@ -9,6 +9,7 @@ from datetime import date, time
 import re
 
 from .struct_costs import tick_half_spread_bp
+from .securities import tick_yuan
 
 
 def _band(price):
@@ -23,7 +24,7 @@ def tick_analysis(bundle, account):
     rows, groups = [], defaultdict(list)
     included = {r["date"] for r in account["daily"]}
     for fill in bundle["fills"]:
-        bp = tick_half_spread_bp(fill["price"])
+        bp = tick_half_spread_bp(fill["price"]) * tick_yuan(fill["code"]) / .01
         cost = fill["notional"] * bp / 10000
         clock = fill["time"].strip()
         phase = ("auction_boundary" if re.fullmatch(r"(?:09:30|15:00)(?::00(?:\.0+)?)?", clock)

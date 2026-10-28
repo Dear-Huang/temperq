@@ -1179,7 +1179,15 @@ def register(app, workdir, *, page, guard, token):
                 if risk:
                     body += f'<p>最大快照回撤 {pct(risk["max_drawdown"]["ratio"])}。<a href="/strategy-audits/{identity}/reports/{report_id}#risk-diagnostics">查看回撤贡献与闭合核对</a></p>'
             else:
-                body += f'<p class="notice">当前没有可闭合的归因报告。推算交易的费用未知，缺完整账户时不显示精确盈亏。</p><div class="material-actions">{material_links(identity, "positions")}{material_links(identity, "fills")}</div>'
+                kinds = {src['kind'] for src in bundle['sources']}
+                if 'fills' in kinds and 'positions' not in kinds:
+                    why, need = '只有交易记录，没有每日持仓和现金，算不出每天的账户盈亏。', 'positions'
+                elif bundle.get('quality', {}).get('fills_inferred'):
+                    why, need = '交易是从持仓变化推算的，费用未知，不显示精确盈亏。', 'fills'
+                else:
+                    why, need = '交易、持仓与账户还没有对上，先在材料管理里核对。', 'positions'
+                body += (f'<p class="notice">当前没有可闭合的归因报告：{why}补上后即可归因。</p>'
+                         f'<div class="material-actions">{material_links(identity, need)}</div>')
         elif tab == 'comparison':
             versions = [r for r in store.history(workdir) if r.get('strategy_id', r['id']) == record.get('strategy_id', record['id'])]
             other = None

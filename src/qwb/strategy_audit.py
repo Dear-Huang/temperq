@@ -125,6 +125,8 @@ def governance(bundle, context, settings):
     cap = settings["max_weight"]
     breaches = []
     for p in bundle["positions"]:
+        if p["date"] not in snapshots:
+            continue  # reported as a coverage gap in the input review
         equity = snapshots[p["date"]]["equity"]
         if equity > 0 and p["market_value"] / equity > cap + 1e-8:
             breaches.append({"date": p["date"], "code": p["code"], "weight": p["market_value"] / equity, "ref": p["ref"]})

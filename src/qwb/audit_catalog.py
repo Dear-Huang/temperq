@@ -109,7 +109,7 @@ def coverage(bundle, result):
     snapshots = bundle["snapshots"]
     equity = {s["date"]: s["equity"] for s in snapshots}
     counts = Counter(p["date"] for p in bundle["positions"])
-    weights = [p["market_value"] / equity[p["date"]] for p in bundle["positions"] if equity[p["date"]] > 0]
+    weights = [p["market_value"] / equity[p["date"]] for p in bundle["positions"] if equity.get(p["date"], 0) > 0]
     fills = bundle["fills"]
     turns = [d["gross_turnover"] for d in account["daily"] if d["gross_turnover"] is not None]
     candidates = bundle.get("code", {}).get("candidates", [])

@@ -6,6 +6,7 @@ from datetime import date, time
 
 from .portfolio.reference import Fees
 from .audit_fee_units import charging_units
+from .securities import pays_stamp_tax
 
 
 def fee_analysis(bundle, account, settings):
@@ -20,6 +21,8 @@ def fee_analysis(bundle, account, settings):
         unit, commission = allocations[index]
         try:
             cost = fees.costs(fill["notional"], fill["side"].upper(), date.fromisoformat(fill["date"]))
+            if not pays_stamp_tax(fill["code"]):
+                cost["stamp_tax"] = 0.0
         except ValueError:
             cost = None  # Unsupported dates stay unpriced, rather than silently using today's tax.
         if cost is not None:
