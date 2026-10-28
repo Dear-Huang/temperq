@@ -333,7 +333,7 @@ def normalize(files, *, adapter="auto", name="导入策略", opening_cash=None):
         if adapter == 'auto' and detected == 'code_only':
             result['adapter'] = 'code_only_v1'
         validate_orders(result['fills'])
-        if result['adapter'] in {'joinquant_v1', 'ricequant_v1'}:
+        if result['adapter'] in {'joinquant_v1', 'ricequant_v1', 'generic_v1'}:
             # These exports omit dividend and bonus-share records; recover the ones the account pins down.
             from . import corporate_actions
             result = corporate_actions.apply(result, corporate_actions.infer(result))

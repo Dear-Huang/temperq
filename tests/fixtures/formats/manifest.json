@@ -1,0 +1,79 @@
+{
+ "note": "合成账户，非行情数据；由 scripts/make_format_fixtures.py 生成",
+ "formats": {
+  "bigquant": {
+   "files": {
+    "交易.csv": "c40617635f2caab53fd3c53d1a6bf37f445c8e33a490184df75a6abd3ddfde76",
+    "持仓.csv": "eb7b42884511d5bdc9f48a0e45ff62c65d6a5f7361c48d2ec431d6217217fbb2",
+    "日志.csv": "470c7f3019284354d068bf373dd2d9ed9101f5b8b709703b5d045eab0e6f61c2",
+    "代码.txt": "8e7524f10922275fd7bf2769497f28067caee1f09b38fc2726b320ffe3a4f0ee"
+   },
+   "expected": {
+    "adapter": "bigquant_v1",
+    "fills": 5,
+    "accounting": "verified"
+   }
+  },
+  "joinquant": {
+   "files": {
+    "transaction.csv": "6d5a11c243491abce8bae32294f03506cb74748260fcc67df430dd68374098f5",
+    "position.csv": "4afbc915562869a8397787bdf90a5aa8dba4e05cf2f2941d84197f06eb79b0bd",
+    "result.csv": "9d8a12d3f21caf596a0942be0e2cf80d104289037f4337f7f77cf025caed888c",
+    "log.txt": "1f3e6a2afb2d2fcd848af9455178179eca5a84668b28ffe741232b9c662a8735",
+    "代码.txt": "8e7524f10922275fd7bf2769497f28067caee1f09b38fc2726b320ffe3a4f0ee"
+   },
+   "expected": {
+    "adapter": "joinquant_v1",
+    "fills": 5,
+    "accounting": "verified",
+    "inferred_dividends": 2
+   }
+  },
+  "ricequant_web": {
+   "files": {
+    "交易详情.csv": "99a82ac988f9d1e8ab810c4e4f7967c22aabe56a2b4566c71a417ae79d0b3f9a",
+    "持仓详情.csv": "9439b4f88b7a9949ede05c39910ec48f28e9cbc404154645d155cb8a6bd973dd",
+    "账户详情.csv": "771f4bff77af3bb8572232342156115e7628d153e490b091a55accb443744c83",
+    "代码.txt": "8e7524f10922275fd7bf2769497f28067caee1f09b38fc2726b320ffe3a4f0ee"
+   },
+   "expected": {
+    "adapter": "ricequant_v1",
+    "fills": 5,
+    "accounting": "verified",
+    "inferred_dividends": 2
+   }
+  },
+  "ricequant_local": {
+   "files": {
+    "交易详情.csv": "ef709a73b29d0cc31015bbc43087e31d773d0f0890292a1d9879ef7c0e111498",
+    "持仓详情.csv": "08ba8c48654b3069bd80572ec65437cde5a5fca6e077108df831ad37312d16cb",
+    "账户详情.csv": "85d9cded0210e59c059600389b8b90036180b3a03e0a0cfc5a57ca4be5aeb6d2",
+    "委托详情.csv": "140f827379ae553acdfdc258d0000dc09f4f2a1a48e7e73eb7736c929aaf7eb1",
+    "每日股票排名.csv": "8fdc73ef87556b74e77bc1a2f73bcf677dda2d8e33ede48b1619a0d7b8139059",
+    "代码.txt": "8e7524f10922275fd7bf2769497f28067caee1f09b38fc2726b320ffe3a4f0ee"
+   },
+   "expected": {
+    "adapter": "ricequant_v1",
+    "fills": 5,
+    "accounting": "verified",
+    "receivable_dividend_days": 1,
+    "orders": 6,
+    "rank_rows": 16
+   }
+  },
+  "generic": {
+   "files": {
+    "trades.csv": "7f57462b416df64e6c5d093d2767657bd78eedeb43ec15d4b669755e4433b2f5",
+    "holdings.csv": "69810ded073e9060b7562b21911b8652200032ab4236af8ec4cf21811b81897b",
+    "account.csv": "c29113c2b59ea1eac822069b9d69457662b30d27996ad7ac7daa2db37dce9842",
+    "代码.txt": "8e7524f10922275fd7bf2769497f28067caee1f09b38fc2726b320ffe3a4f0ee"
+   },
+   "expected": {
+    "adapter": "generic_v1",
+    "fills": 5,
+    "accounting": "verified",
+    "inferred_dividends": 2
+   }
+  }
+ }
+}

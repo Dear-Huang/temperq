@@ -1,0 +1,3 @@
+def initialize(context):
+    set_order_cost(OrderCost(open_commission=0.0003, close_commission=0.0003, close_tax=0.0005, min_commission=5), type='stock')
+    g.stock_num = 2

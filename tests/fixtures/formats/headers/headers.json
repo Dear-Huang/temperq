@@ -1,0 +1,206 @@
+{
+ "bigquant/交易.csv": {
+  "encoding": "utf-8-sig",
+  "columns": [
+   "日期",
+   "时间",
+   "证券代码",
+   "证券名称",
+   "买/卖",
+   "数量",
+   "成交价",
+   "成交金额",
+   "平仓盈亏",
+   "交易费用"
+  ]
+ },
+ "bigquant/持仓.csv": {
+  "encoding": "utf-8-sig",
+  "columns": [
+   "日期",
+   "证券代码",
+   "证券名称",
+   "数量",
+   "持仓均价",
+   "收盘价",
+   "持仓市值",
+   "持仓占比",
+   "收益"
+  ]
+ },
+ "bigquant/日志.csv": {
+  "encoding": "utf-8-sig",
+  "columns": [
+   "时间",
+   "级别",
+   "内容"
+  ]
+ },
+ "joinquant/transaction.csv": {
+  "encoding": "gb18030",
+  "columns": [
+   "日期",
+   "委托时间",
+   "品种",
+   "标的",
+   "交易类型",
+   "下单类型",
+   "成交数量",
+   "成交价",
+   "成交额",
+   "委托数量",
+   "委托价格",
+   "平仓盈亏",
+   "手续费",
+   "状态",
+   "最后更新时间"
+  ]
+ },
+ "joinquant/position.csv": {
+  "encoding": "gb18030",
+  "columns": [
+   "日期",
+   "品种",
+   "标的",
+   "多空",
+   "数量",
+   "可用数量",
+   "收盘价/结算价",
+   "市值/价值",
+   "盈亏/逐笔浮盈",
+   "开仓均价",
+   "持仓均价（期货）",
+   "保证金",
+   "当日盈亏",
+   "今手数",
+   "盈亏占比",
+   "仓位占比"
+  ]
+ },
+ "joinquant/result.csv": {
+  "encoding": "gb18030",
+  "columns": [
+   "时间",
+   "基准收益",
+   "策略收益",
+   "当日盈利",
+   "当日亏损",
+   "当日买入",
+   "当日卖出",
+   "超额收益(%)"
+  ]
+ },
+ "joinquant/log.txt": {
+  "encoding": "gb18030",
+  "columns": null
+ },
+ "ricequant_web/交易详情.csv": {
+  "encoding": "utf-8-sig",
+  "columns": [
+   "时间",
+   "合约代码",
+   "合约名称",
+   "买/卖",
+   "开/平",
+   "成交量",
+   "成交价",
+   "费用"
+  ]
+ },
+ "ricequant_web/持仓详情.csv": {
+  "encoding": "utf-8-sig",
+  "columns": [
+   "时间",
+   "合约代码",
+   "合约名称",
+   "最新价",
+   "多/空",
+   "仓位",
+   "开仓均价",
+   "市值",
+   "累计盈亏",
+   "保证金",
+   "费用"
+  ]
+ },
+ "ricequant_web/账户详情.csv": {
+  "encoding": "utf-8-sig",
+  "columns": [
+   "日期",
+   "账户类型",
+   "可用资金",
+   "总权益",
+   "市值",
+   "保证金",
+   "费用"
+  ]
+ },
+ "ricequant_local/交易详情.csv": {
+  "encoding": "utf-8-sig",
+  "columns": [
+   "时间",
+   "trading_datetime",
+   "合约代码",
+   "合约名称",
+   "买/卖",
+   "开/平",
+   "exec_id",
+   "税费",
+   "佣金",
+   "成交量",
+   "成交价",
+   "order_id",
+   "费用"
+  ]
+ },
+ "ricequant_local/持仓详情.csv": {
+  "encoding": "utf-8-sig",
+  "columns": [
+   "时间",
+   "合约代码",
+   "合约名称",
+   "仓位",
+   "最新价",
+   "开仓均价",
+   "市值",
+   "持仓浮动盈亏",
+   "权重"
+  ]
+ },
+ "ricequant_local/账户详情.csv": {
+  "encoding": "utf-8-sig",
+  "columns": [
+   "日期",
+   "账户类型",
+   "可用资金",
+   "费用",
+   "市值",
+   "总权益",
+   "应收股息"
+  ]
+ },
+ "ricequant_local/委托详情.csv": {
+  "encoding": "utf-8-sig",
+  "columns": [
+   "time",
+   "event",
+   "order_id",
+   "code",
+   "side",
+   "quantity",
+   "filled_quantity",
+   "status",
+   "message"
+  ]
+ },
+ "ricequant_local/每日股票排名.csv": {
+  "encoding": "utf-8-sig",
+  "columns": [
+   "datetime",
+   "candidates",
+   "rank",
+   "order_book_id",
+   "selected"
+  ]
+ }
+}
