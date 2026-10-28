@@ -152,7 +152,7 @@ def test_my_strategies_four_actions_rerun_only_confirmed_parameters(tmp_path, mo
     created = {p.name for p in records.iterdir()} - before
     assert len(created) == 1
     _, _, result = store.report(tmp_path, identity, created.pop())
-    assert result['settings'] == {'commission_bp': 2., 'minimum_commission': 6., 'max_weight': .4}
+    assert result['settings'] == {'commission_bp': 2., 'minimum_commission': 6., 'max_weight': .4, 'broker_confirmed': False}
     assert result['period_review']['settings'] == {'validation_fraction': .3, 'minimum_triggers': 30, 'purge_days': 25}
     assert not (tmp_path / 'runs/paper').exists()
 

@@ -150,7 +150,7 @@ def upload_form(token, error=""):
     return body
 
 
-def overview(identity, bundle, token):
+def overview(identity, bundle, token, inherited=None):
     body = heading('策略导入 · 核对与补齐', '/strategy-audits', '我的策略')
     body += workflow(identity)
     body += '<p>'+esc(bundle['name'])+' · 完成以下核对后，进入四页共用的策略工作区。</p>'
@@ -172,8 +172,16 @@ def overview(identity, bundle, token):
     body += '<details class="import-details"><summary>回测长度、可审范围与内部验证分段</summary>'+period_section(audit_period.assess(bundle))+'</details><section class="review-section"><h2>02 · 确认并完成导入</h2>'
     body += f'<form method="post" action="/strategy-audits/{identity}/analyze" class="review-form"><input type="hidden" name="token" value="{token}"><input type="hidden" name="input_digest" value="{ex.object_digest(bundle)}"><div class="review-fields">'
     prefills = {p['key']: p['value'] for p in review['parameters']}
+    if inherited:
+        # A re-run version keeps the parent report's cost scenario, so both versions are restated alike.
+        prefills.update({k: inherited[k] for k in ('commission_bp', 'minimum_commission', 'max_weight') if k in inherited})
+        body += (f'<p class="notice">这是上一版的改版：费用情景沿用上一版报告（佣金 {inherited["commission_bp"]:g}bp、'
+                 f'最低佣金 ¥{inherited["minimum_commission"]:g}），两版按同一口径比较。改了这里，比较就不再同口径。</p>')
     for key, label, value, mini, maxi in (("commission_bp", "佣金情景（bp）", prefills['commission_bp'], 0, 1000), ("minimum_commission", "最低佣金情景（元）", prefills['minimum_commission'], 0, 10000), ("max_weight", "单票收盘上限（%）", prefills['max_weight'] * 100, .01, 100)):
         body += f'<label>{label}<input type="number" name="{key}" value="{value}" min="{mini}" max="{maxi}" step=".01" required></label>'
+    checked = ' checked' if inherited and inherited.get('broker_confirmed') else ''
+    body += (f'<label class="check"><input type="checkbox" name="broker_confirmed" value="yes"{checked}>'
+             '上面的佣金和最低佣金是我券商合同的费率（不勾选时只作费率情景，不判断回测成本偏高或偏低）</label>')
     body += '<input type="hidden" name="destination" value="workspace">'
     button = '完成导入，进入策略治理'
     disabled = '' if review['can_analyze'] else ' disabled'
@@ -359,7 +367,16 @@ def action_cards(result, bundle=None):
         for label, key in (("省下", "saving"), ("可能放弃", "sacrifice"), ("净影响", "net")):
             body += f'<div><dt>{label}</dt><dd>{esc(card[key])}</dd></div>'
         body += '</dl>'
+        if card.get("inputs"):
+            body += '<dl class="action-ledger">' + ''.join(f'<div><dt>{esc(k)}</dt><dd>{esc(v)}</dd></div>' for k, v in card["inputs"]) + '</dl>'
+            body += f'<p class="mut">计算：{esc(card["formula"])}</p>'
+        for condition in card.get("conditions", []):
+            body += f'<p class="notice">{esc(condition)}</p>'
         body += f'<p class="action-evidence"><span class="tag">{esc(audit_actions.EVIDENCE[card["evidence"]])}</span>{esc(card["basis"])}</p>'
+        if card.get("rules"):
+            body += '<p class="mut action-rules">依据：' + '；'.join(
+                f'{esc(r["id"])} {esc(r["text"])}（{"经验阈值，未经样本检验" if r["kind"] == "threshold" else esc(r["source"])}）'
+                for r in card["rules"]) + '</p>'
         body += f'<p class="mut">什么情况下这条建议不成立：{esc(card["overturn"])}</p></article>'
     return body + '</div></section>'
 
@@ -438,22 +455,28 @@ def _row(label, original, optimized=None):
 def verification_page(identity, record, result, versions, compare_with, token):
     restated = audit_verification.restate(result)
     if not restated:
-        return '<section class="review-section"><h2>效果验证</h2><p class="notice">需要完整的交易与持仓材料，才能按真实成本重算。</p></section>'
+        return '<section class="review-section"><h2>效果验证</h2><p class="notice">需要完整的交易与持仓材料，才能按费率情景重算。</p></section>'
     t = audit_verification.totals(restated)
-    body = '<section class="review-section" id="restated"><h2>第一步：按更真实的成本重算原回测</h2>'
-    body += '<p>不重跑策略，只把原回测的每一笔成交按更接近实盘的成本重算：佣金按你确认的费率、印花税按成交日期适用税率，再加最小价位的买卖价差情景。</p>'
+    rate = result.get('settings', {})
+    confirmed = rate.get('broker_confirmed')
+    rate_label = f"{rate.get('commission_bp', 0):g}bp（{'已确认合同费率' if confirmed else '未确认，仅为情景'}）"
+    body = '<section class="review-section" id="restated"><h2>第一步：按费率情景重算原回测</h2>'
+    body += (f'<p>不重跑策略，只把原回测的每一笔成交重算：佣金按 {rate_label}、印花税按成交日期适用税率，'
+             '再加最小价位的买卖价差情景。</p>')
+    if not confirmed:
+        body += '<p class="notice">券商合同费率未确认：下面是费率情景，不代表实盘成本。在审计设置里确认合同费率后重新审计。</p>'
     body += '<div class="tw"><table><tr><th></th><th>金额</th></tr>'
     body += _row('原回测净盈亏', t['reported'])
     body += _row('费用复算差（原回测多扣为正）', t['fee_gap'])
     body += _row('买卖价差情景', -t['spread'])
-    body += _row('按真实成本重算后', t['realistic'])
+    body += _row('按费率情景重算后', t['realistic'])
     body += '</table></div>'
     dd = restated['drawdown']
     body += f'<p>最大回撤：原回测 {pct(-dd["reported"])}，重算后 {pct(-dd["realistic"])}。</p>'
     if restated['unpriced_fills']:
         body += f'<p class="notice">{restated["unpriced_fills"]} 笔成交无法复算费用，按原回测费用计入。</p>'
     tone = 'neg' if t['realistic'] < 0 else ''
-    body += f'<p class="restated-verdict {tone}">原回测显示 ¥{money(t["reported"])}，按更真实的成本约为 ¥{money(t["realistic"])}。</p>'
+    body += f'<p class="restated-verdict {tone}">原回测显示 ¥{money(t["reported"])}，按 {rate_label}重算约为 ¥{money(t["realistic"])}。</p>'
     body += '<p class="mut">价差是情景估计；原回测若已计滑点或价差，需先分离，避免重复扣除。</p></section>'
 
     body += '<section class="review-section" id="compare"><h2>第二步：用优化版回测验证改法</h2>'
@@ -916,7 +939,11 @@ def register(app, workdir, *, page, guard, token):
     @app.get('/strategy-audits/{identity}')
     def show(identity: str):
         record, bundle = load(identity)
-        body = overview(identity, bundle, token)
+        inherited = None
+        if record.get('parent_id'):
+            parent_report = current_report(record['parent_id'])[1]
+            inherited = (parent_report or {}).get('settings')
+        body = overview(identity, bundle, token, inherited)
         if record.get('parent_id'):
             body += f'<p class="mut">材料版本 v{record["version"]}，尚需再次确认。<a href="/strategy-audits/{record["parent_id"]}">查看上一个材料版本</a></p>'
         paths = sorted((store.root(workdir, identity) / 'reports').glob('*/result.json'), key=lambda p: p.stat().st_mtime, reverse=True)
@@ -938,6 +965,7 @@ def register(app, workdir, *, page, guard, token):
                 raise ValueError('请确认材料来自同一次回测并核对参数')
             settings = {key: float(form[key]) for key in ('commission_bp', 'minimum_commission', 'max_weight')}
             settings['max_weight'] /= 100
+            settings['broker_confirmed'] = form.get('broker_confirmed') == 'yes'
             policy = {'validation_fraction': float(form.get('validation_fraction', 25)) / 100,
                       'minimum_triggers': float(form.get('minimum_triggers', 20)),
                       'purge_days': float(form.get('purge_days', 20))}
@@ -968,7 +996,9 @@ def register(app, workdir, *, page, guard, token):
         _, previous = current_report(identity)
         if not previous or not previous.get('confirmation', {}).get('same_run'):
             return RedirectResponse('/strategy-audits/'+identity, 303)
-        result = await run_in_threadpool(audit.analyze, bundle, previous['settings'],
+        # Same settings and the same judgement thresholds as the confirmed report.
+        settings = {**previous['settings'], 'thresholds': (previous.get('rules') or {}).get('thresholds')}
+        result = await run_in_threadpool(audit.analyze, bundle, settings,
             policy=previous.get('period_review', {}).get('settings'))
         result['confirmation'] = previous['confirmation']
         for candidate in result['input_review']['parameters']:

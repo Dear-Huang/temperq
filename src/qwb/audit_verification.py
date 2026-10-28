@@ -74,8 +74,21 @@ def windows(result):
             "validation": (part["validation_start"], part["validation_end"])}
 
 
+def _path(result):
+    fills = (result.get("modules", {}).get("tick_analysis") or {}).get("fills") or []
+    return [(f.get("date"), f.get("code"), f.get("side"), f.get("quantity") or 0) for f in fills]
+
+
+def _same_route(a, b):
+    """Same dates, codes and sides; quantities within 2% (cheaper fees leave a little more cash to invest)."""
+    return bool(a) and all(x[3] for x in a) and len(a) == len(b) and all(
+        x[:3] == y[:3] and abs(x[3] - y[3]) <= .02 * max(x[3], y[3]) for x, y in zip(a, b))
+
+
 def compare(original, optimized):
-    """Restate both versions with one method and judge only on the realistic figures."""
+    """Restate both versions with one method; judge on realistic P&L and drawdown, same-period runs are in-sample."""
+    from .audit_rules import defaults
+    tolerance = {**defaults(), **((original.get("rules") or {}).get("thresholds") or {})}["T-DD-TOLERANCE"]
     a, b = restate(original), restate(optimized)
     if not a or not b:
         return None
@@ -92,15 +105,24 @@ def compare(original, optimized):
     full_gain = rows["full"][1]["realistic"] - rows["full"][0]["realistic"]
     val = rows.get("validation")
     val_gain = val[1]["realistic"] - val[0]["realistic"] if val else None
-    if full_gain > 0 and (val_gain is None or val_gain > 0):
-        verdict, state = "按更真实的成本，优化版好于原版", "better"
+    dd_a, dd_b = a["drawdown"]["realistic"], b["drawdown"]["realistic"]   # negative numbers
+    deeper = dd_a - dd_b > tolerance
+    same_trades = _same_route(_path(original), _path(optimized))
+    if full_gain > 0 and deeper:
+        verdict, state = (f"收益更高，但最大回撤从 {-dd_a:.1%} 扩大到 {-dd_b:.1%}；有得有失，建议先保留原版", "mixed")
+    elif full_gain > 0 and (val_gain is None or val_gain > 0):
+        verdict, state = "按同一费率情景，优化版好于原版", "better"
         if val_gain is None:
-            verdict += "；但没有可用的验证段，结论只基于同一段历史"
+            verdict += "；没有可用的验证段"
     elif full_gain > 0:
         verdict, state = "优化版只在前段更好，验证段没有赢过原版；建议先保留原版", "mixed"
     else:
-        verdict, state = "按更真实的成本，优化版没有好于原版；建议保留原版", "worse"
+        verdict, state = "按同一费率情景，优化版没有好于原版；建议保留原版", "worse"
+    verdict += "（同区间复跑，样本内，不代表样本外有效）"
+    if same_trades:
+        verdict += "。两版的交易日期、标的和方向完全相同，差异来自费用：这是费率敏感性，不是策略改进"
     return {"comparable": True, "start": start, "end": end, "same_period": same_period,
             "rows": rows, "full_gain": full_gain, "validation_gain": val_gain,
             "drawdown": (a["drawdown"]["realistic"], b["drawdown"]["realistic"]),
+            "same_trades": same_trades, "drawdown_deeper": deeper, "evidence": "E4",
             "verdict": verdict, "state": state}

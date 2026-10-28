@@ -157,11 +157,27 @@ def governance(bundle, context, settings):
             "log_errors": sum(r["级别"].upper() == "ERROR" for r in bundle["logs"])}
 
 
+def opening_state(bundle, context):
+    """What the audit knows about the account before the first fill (spec R5)."""
+    opening = bundle.get("opening") or {}
+    lots = (context.get("holding_analysis") or {}).get("closed") or []
+    if opening.get("kind") == "empty":
+        return {"status": "declared_empty", "cash": opening.get("cash"), "closed_lots": len(lots),
+                "text": f"空仓，现金 ¥{opening.get('cash'):,.0f}"}
+    first = bundle["snapshots"][0] if bundle.get("snapshots") else None
+    held = [p for p in bundle.get("positions", []) if first and p["date"] == first["date"]]
+    return {"status": "unconfirmed", "cash": None, "closed_lots": len(lots), "first_day_positions": len(held),
+            "text": "未确认：首日收盘持仓按成本未知处理，不进入配对" if held else "未确认：首日无持仓"}
+
+
 def analyze(bundle, settings=None, *, policy=None):
     if bundle.get("schema_version") != SCHEMA:
         raise ValueError("不支持的策略导入格式")
     settings = dict(settings or {"commission_bp": 3., "minimum_commission": 5., "max_weight": .5})
     import math
+    from . import audit_rules
+    broker_confirmed = bool(settings.pop("broker_confirmed", False))
+    thresholds = audit_rules.resolve(settings.pop("thresholds", None))
     if set(settings) != {"commission_bp", "minimum_commission", "max_weight"}:
         raise ValueError("审计设置字段不完整")
     if any(not isinstance(v, (int, float)) or not math.isfinite(v) for v in settings.values()):
@@ -194,12 +210,16 @@ def analyze(bundle, settings=None, *, policy=None):
     context["trading_behavior"] = trading_behavior(bundle)
     context["tick_analysis"] = tick_analysis(bundle, context["accounting"])
     context["holding_analysis"] = holding_analysis(bundle, context["accounting"], context["tick_analysis"])
-    from . import audit_signals
-    signals = audit_signals.analyze(bundle, context)
+    from . import audit_signals, audit_fee_model
+    context["fee_model"] = audit_fee_model.analyze(bundle, context, {**settings, "broker_confirmed": broker_confirmed})
+    signals = audit_signals.analyze(bundle, context, thresholds)
     if signals:
         context["signal_mapping"] = signals
+    settings = {**settings, "broker_confirmed": broker_confirmed}
     result = {"schema_version": VERSION, "input_digest": ex.object_digest(bundle),
               "settings": settings, "modules": context, "coverage_version": "audit_coverage_v3",
+              "rules": audit_rules.snapshot(thresholds),
+              "opening_state": opening_state(bundle, context),
               'input_review': input_review, 'mode': 'full',
               'period_review': period_review,
               "coverage": coverage(bundle, {"modules": context}),

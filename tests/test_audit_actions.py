@@ -44,7 +44,7 @@ def test_cost_card_holds_when_profit_covers_spread():
 
 def test_fee_card_direction_and_absence_when_fees_match():
     over = audit_actions.cards(result(fee_analysis={"status": "measured", "reported_fee": 120., "modeled_fee": 80.}))
-    assert over and "偏保守" in over[0]["headline"] and over[0]["evidence"] == "recomputed"
+    assert over and "偏保守" in over[0]["headline"] and over[0]["evidence"] == "E1"
     under = audit_actions.cards(result(fee_analysis={"status": "measured", "reported_fee": 80., "modeled_fee": 120.}))
     assert "偏乐观" in under[0]["headline"]
     assert audit_actions.cards(result(fee_analysis={"status": "measured", "reported_fee": 100., "modeled_fee": 100.})) == []
@@ -55,7 +55,7 @@ def test_holding_card_is_descriptive_not_a_promise():
                "closed_age_bands": [{"id": "0_to_2", "label": "0–2自然日", "matches": 3, "net_pnl": -1., "net_after_tick_scenario": -2.,
                                      "fees": 1., "tick_scenario_cost": 1.}]}
     card = audit_actions.cards(result(holding_analysis=holding))[0]
-    assert card["evidence"] == "descriptive" and "重放" in card["net"]
+    assert card["evidence"] == "E2" and "重放" in card["net"]
 
 
 def test_missing_modules_give_no_cards():

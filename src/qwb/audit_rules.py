@@ -1,0 +1,109 @@
+"""Every rule an audit conclusion rests on, with its kind and source.
+
+Three kinds, never mixed: ``fact`` (exchange and tax rules, accounting identities),
+``method`` (a published or documented method), and ``threshold`` (a judgement call
+by the project, not yet tested on samples). Only thresholds may be adjusted.
+Reports store the values they used, so a changed threshold yields a new report.
+"""
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+
+VERSION = "audit_rules_v1"
+
+
+@dataclass(frozen=True)
+class Rule:
+    id: str
+    kind: str                     # fact | method | threshold
+    text: str
+    source: str
+    value: object = None
+    unit: str = ""
+    applies_to: tuple = ("stock", "fund", "bond")
+    range: tuple | None = None    # thresholds only: (min, max)
+
+    def __post_init__(self):
+        if self.kind not in {"fact", "method", "threshold"}:
+            raise ValueError(f"{self.id}: unknown rule kind {self.kind}")
+        if (self.kind == "threshold") != (self.range is not None):
+            raise ValueError(f"{self.id}: thresholds, and only thresholds, need an allowed range")
+
+
+UNTESTED = "经验阈值，未经样本检验"
+
+RULES = {r.id: r for r in (
+    # Facts
+    Rule("F-ACCOUNT", "fact", "权益 = 现金 + 持仓市值；持仓变化 = 成交；现金变化 = 成交金额 + 费用", "账务恒等式"),
+    Rule("F-TICK-STOCK", "fact", "股票最小报价单位 0.01 元", "沪深交易所交易规则", .01, "元", ("stock",)),
+    Rule("F-TICK-FUND", "fact", "ETF、基金、债券最小报价单位 0.001 元", "沪深交易所交易规则", .001, "元", ("fund", "bond")),
+    Rule("F-STAMP", "fact", "卖出股票按成交日适用税率缴印花税；2023-08-28 起 0.05%，此前 0.1%；基金和债券免征",
+         "财政部、税务总局公告"),
+    Rule("F-MIN-COMMISSION", "fact", "佣金不足最低佣金时按最低佣金收取", "券商佣金规则；最低额由合同约定"),
+    # Methods
+    Rule("M-TICK-HALF", "method", "价差下限 = 每边半个最小价位", "作者 STRUCT 稿（SSRN，未经同行评审）"),
+    Rule("M-FIFO", "method", "按先进先出配对买卖，计算每笔已平仓交易的持有期和盈亏", "通用会计配对方法"),
+    Rule("M-SLIPPAGE", "method", "回测已计的滑点按平台文档换算为每边成本，价差情景只补差额",
+         "聚宽 set_slippage 文档；RQAlpha 滑点模型文档"),
+    Rule("M-RANK-REPLAY", "method", "用策略导出的每日排名回放换仓次数；不重算收益", "本项目，见 audit_signals"),
+    # Thresholds
+    Rule("T-HOLD-SHORT", "threshold", "持有不超过这个自然日数算短持有", UNTESTED, 5, "自然日", range=(1, 60)),
+    Rule("T-PRICE-LOW", "threshold", "低于这个价格的股票算低价股", UNTESTED, 5., "元", ("stock",), (1., 50.)),
+    Rule("T-MIN-COMM-MATERIAL", "threshold", "最低佣金多付超过这个金额才建议处理", UNTESTED, 500., "元", range=(0., 100000.)),
+    Rule("T-BUFFER-RANK", "threshold", "保留带：持有的标的排进前几名就不卖", UNTESTED, 2, "名", range=(2, 10)),
+    Rule("T-WHIPSAW-DAYS", "threshold", "卖出后这么多个信号日内又排回第一，算来回", UNTESTED, 5, "信号日", range=(1, 60)),
+    Rule("T-CHURN-SHARE", "threshold", "保留带少换的次数占换仓次数达到这个比例才建议改", UNTESTED, .2, "比例", range=(0., 1.)),
+    Rule("T-CHURN-MIN", "threshold", "保留带至少少换这么多次才建议改", UNTESTED, 3, "次", range=(1, 100)),
+    Rule("T-CASH-BUFFER", "threshold", "全仓下单时预留的现金比例", UNTESTED, .01, "比例", range=(.001, .1)),
+    Rule("T-CASH-SHORT", "threshold", "拒单所差金额不超过下单金额的这个比例，算“差一点”", UNTESTED, .01, "比例", range=(.001, .1)),
+    Rule("T-FEE-GAP-SHARE", "threshold", "费用差额占复算费用达到这个比例才出现费用卡", UNTESTED, .01, "比例", range=(0., .1)),
+    Rule("T-DD-TOLERANCE", "threshold", "改版最大回撤比原版多出这么多（百分点）就不算更好", UNTESTED, .01, "比例", range=(0., .2)),
+    Rule("T-FEE-GAP-MIN", "threshold", "费用差额至少这么多元才出现费用卡", UNTESTED, 1., "元", range=(0., 1000.)),
+)}
+
+
+def defaults():
+    return {r.id: r.value for r in RULES.values() if r.kind == "threshold"}
+
+
+def resolve(overrides=None):
+    """Threshold values for one audit; facts and methods cannot be overridden."""
+    values = defaults()
+    for key, value in (overrides or {}).items():
+        rule = RULES.get(key)
+        if rule is None or rule.kind != "threshold":
+            raise ValueError(f"不能调整的规则：{key}")
+        if not isinstance(value, (int, float)) or isinstance(value, bool):
+            raise ValueError(f"{key} 须为数字")
+        low, high = rule.range
+        if not low <= value <= high:
+            raise ValueError(f"{key} 须在 {low}–{high} {rule.unit} 之间")
+        values[key] = type(rule.value)(value)
+    return values
+
+
+def snapshot(values):
+    """What a report stores: registry version and every threshold value used."""
+    return {"version": VERSION, "thresholds": dict(values)}
+
+
+def cite(*ids):
+    """Rule references for a conclusion, in display form."""
+    out = []
+    for rid in ids:
+        rule = RULES[rid]
+        out.append({"id": rid, "kind": rule.kind, "text": rule.text, "source": rule.source})
+    return out
+
+
+# Evidence levels shared by every card and check (see docs/specs/AUDIT_EVIDENCE_SPEC.md §3).
+EVIDENCE = {
+    "E1": "记录事实：导出记录与账务恒等式上的复算",
+    "E2": "描述：事后分组，不证明改了会更好",
+    "E3": "情景：固定原成交，在声明假设下估计",
+    "E3c": "条件情景：有前提未确认，结论随它变",
+    "E4": "同区间复跑：同一段历史重跑的比较，仍是样本内",
+    "E5": "独立验证段通过：冻结候选后在未看过的验证段通过",
+    "E6": "前向观察：模拟盘或实盘记录",
+    "N": "待补材料：缺少计算所需材料",
+}

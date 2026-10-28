@@ -8,11 +8,12 @@ from __future__ import annotations
 
 from collections import defaultdict
 
-BUFFER_RANK = 2      # keep a holding while it ranks within the top 2
-WHIPSAW_DAYS = 5     # sold, then ranked first again within this many signal days
 
 
-def analyze(bundle, context):
+def analyze(bundle, context, thresholds=None):
+    from .audit_rules import defaults
+    t = {**defaults(), **(thresholds or {})}
+    buffer_rank, whipsaw_days, short_share = t["T-BUFFER-RANK"], t["T-WHIPSAW-DAYS"], t["T-CASH-SHORT"]
     ranked = [s for s in bundle.get("scores", []) if s.get("rank") is not None]
     account = context.get("accounting") or {}
     if not ranked or account.get("status") != "verified":
@@ -24,6 +25,9 @@ def analyze(bundle, context):
         if s.get("selected"):
             chosen[s["date"]].add(s["code"])
     days = sorted(d for d in ranks if d >= account["daily"][0]["date"]) if account.get("daily") else []
+    signal_time = {}
+    for s in ranked:
+        signal_time.setdefault(s["date"], s.get("available_at") or "")
     if len(days) < 20:
         return None
     for d in days:
@@ -49,20 +53,22 @@ def analyze(bundle, context):
             continue
         changed = prev is not None and chosen[prev] != want
         orders = failed.get(d, [])
+        platform = orders[-1]["message"] if orders and orders[-1].get("message") else ""
         if orders:
             reason = "委托未成交：" + (orders[-1]["reason"] or "未说明")
         elif changed or traded[d]:
             reason = "换仓当天未成交"
         else:
             reason = "策略当天未下单"
-        missed.append({"date": d, "wanted": sorted(want), "held": sorted(held[d]), "reason": reason})
+        missed.append({"date": d, "wanted": sorted(want), "held": sorted(held[d]), "reason": reason,
+                       "platform_message": platform, "order_time": orders[-1].get("time", "") if orders else ""})
 
     # 2. How often the top name changed, and how many changes a buffer would skip.
     switches = sum(chosen[a] != chosen[b] for a, b in zip(days, days[1:]))
     target_size = max(1, round(sum(len(chosen[d]) for d in days) / len(days)))
     keep, buffered = None, 0
     for d in days:
-        if keep is None or any(ranks[d].get(c, 1e9) > target_size + BUFFER_RANK - 1 for c in keep):
+        if keep is None or any(ranks[d].get(c, 1e9) > target_size + buffer_rank - 1 for c in keep):
             if keep is not None and keep != chosen[d]:
                 buffered += 1
             keep = chosen[d]
@@ -78,11 +84,11 @@ def analyze(bundle, context):
         i = index.get(lot["exit_date"])
         if i is None:
             continue
-        later = days[i + 1:i + 1 + WHIPSAW_DAYS]
+        later = days[i + 1:i + 1 + whipsaw_days]
         if any(lot["code"] in chosen[d] for d in later):
             whipsaw.append(lot)
     short = [o for o in bundle.get("orders") or [] if o.get("required_cash") and o.get("available_cash") is not None
-             and 0 < o["required_cash"] - o["available_cash"] <= .01 * o["required_cash"]]
+             and 0 < o["required_cash"] - o["available_cash"] <= short_share * o["required_cash"]]
     short_days = {o["date"] for o in short}
     return {
         "id": "signal_mapping", "days": len(days), "followed_days": len(days) - len(missed),
@@ -91,13 +97,29 @@ def analyze(bundle, context):
         "cash_short_examples": [{"date": o["date"], "code": o["code"], "available": o["available_cash"],
                                  "required": o["required_cash"]} for o in short[:3]],
         "missed": missed, "missed_reasons": dict(_count(m["reason"] for m in missed)),
-        "switches": switches, "buffer_rank": target_size + BUFFER_RANK - 1, "buffered_switches": buffered,
+        "switches": switches, "buffer_rank": target_size + buffer_rank - 1, "buffered_switches": buffered,
+        "closed_lots": len(lots), "missed_groups": _groups(missed, signal_time),
         "avoided_switches": avoided, "cost_per_round_trip": per_switch, "avoided_cost": avoided * per_switch,
         "whipsaw_lots": len(whipsaw), "whipsaw_cost": sum(l["fees"] + l["tick_scenario_cost"] for l in whipsaw),
         "whipsaw_net": sum(l["net_after_tick_scenario"] for l in whipsaw),
         "average_hold_days": len(days) / (switches + 1),
         "scope": "按策略自己的每日排名描述实际发生的换仓；保留带只数少换的次数，收益影响需在原平台重跑",
     }
+
+
+def _groups(missed, signal_time):
+    """Facts only: which code, at what signal time, with what platform reason. No cause is inferred."""
+    groups = defaultdict(list)
+    for m in missed:
+        key = ("、".join(m["wanted"]), m["order_time"] or signal_time.get(m["date"], ""), m["reason"])
+        groups[key].append(m)
+    out = []
+    for (code, clock, reason), rows in sorted(groups.items(), key=lambda kv: -len(kv[1])):
+        messages = sorted({r["platform_message"] for r in rows if r["platform_message"]})
+        out.append({"code": code, "time": clock, "reason": reason, "days": len(rows),
+                    "first": rows[0]["date"], "last": rows[-1]["date"], "dates": [r["date"] for r in rows],
+                    "platform_messages": messages[:3]})
+    return out
 
 
 def _count(items):

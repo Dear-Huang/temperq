@@ -7,12 +7,19 @@ already computed by the audit modules; nothing here re-runs the strategy.
 """
 from __future__ import annotations
 
-# Evidence levels, from strongest to weakest.
-EVIDENCE = {
-    "recomputed": "复算：按导出成交逐笔重算",
-    "scenario": "情景：在声明假设下估计",
-    "descriptive": "描述：事后分组，不证明改了会更好",
-    "needs_data": "待复验：缺少重放所需材料",
+from .audit_rules import EVIDENCE, cite
+
+# Old evidence names → levels in docs/specs/AUDIT_EVIDENCE_SPEC.md §3.
+_LEVEL = {"recomputed": "E1", "descriptive": "E2", "scenario": "E3", "needs_data": "N"}
+# Rules each card rests on.
+_RULES = {
+    "tick_floor": ("F-TICK-STOCK", "F-TICK-FUND", "M-TICK-HALF", "M-SLIPPAGE"),
+    "holding_period": ("M-FIFO", "T-HOLD-SHORT"),
+    "low_price": ("M-FIFO", "T-PRICE-LOW", "F-TICK-STOCK", "M-TICK-HALF"),
+    "fee_setting": ("F-STAMP", "F-MIN-COMMISSION"),
+    "minimum_commission": ("F-MIN-COMMISSION", "T-MIN-COMM-MATERIAL"),
+    "rank_churn": ("M-RANK-REPLAY", "M-FIFO", "T-BUFFER-RANK", "T-WHIPSAW-DAYS", "T-CHURN-SHARE", "T-CHURN-MIN"),
+    "cash_buffer": ("T-CASH-SHORT", "T-CASH-BUFFER"),
 }
 STATES = {"act": "建议处理", "review": "建议核对", "hold": "暂不改"}
 
@@ -109,7 +116,9 @@ def _holding_card(holding, edits):
     }
 
 
-def _fee_card(fees, edits):
+def _fee_card(fees, edits, model=None, t=None):
+    if model:
+        return _fee_model_card(model, edits, t or {})
     reported, modeled = fees.get("reported_fee"), fees.get("modeled_fee")
     if fees.get("status") not in {"measured", "verified"} or reported is None or modeled is None:
         return None
@@ -133,6 +142,64 @@ def _fee_card(fees, edits):
         "evidence": "recomputed",
         "basis": "佣金按确认的费率和最低佣金，印花税按成交日期适用税率",
         "overturn": "你的券商合同费率与确认值不同；或报告费用中包含过户费等其他项目。",
+    }
+
+
+def _fee_model_card(model, edits, t):
+    """Spec R3: (1) did the backtest charge its own declared model; (2) against the broker, only once confirmed."""
+    declared, check, stamp = model["declared"], model["self_check"], model.get("stamp_check")
+    reported = model["charged"]["reported"]
+    scenarios = "、".join(f"{s['commission_bp']:g}bp 约 {_yuan(s['fee'])}" for s in model["scenarios"])
+    lines = []
+    if declared["status"] == "none":
+        lines.append("代码里没有费用设置，回测用的是平台默认费率（默认值未知），无法核对回测是否按自己的设置扣费。")
+    else:
+        where = "；".join(f"{m['source']}（第 {m['line']} 行）" for m in declared["models"].values()) or "仅定位到配置键"
+        lines.append(f"回测声明的费用模型：{where}。")
+        for cls, why in declared["missing"].items():
+            lines.append(f"{ {'stock': '股票', 'fund': 'ETF/基金', 'bond': '债券'}[cls] }：{why}。")
+        if check["status"] == "consistent":
+            lines.append(f"按声明模型逐笔复算 {check['priced_fills']} 笔，与回测实际扣费 {_yuan(reported)} 一致。")
+        elif check["status"] == "inconsistent":
+            lines.append(f"按声明模型逐笔复算为 {_yuan(check['recomputed'])}，回测实际扣费 {_yuan(check['reported'])}，"
+                         f"{check['mismatched_fills']} 笔对不上，差 {_yuan(check['gap'])}。")
+    tax_wrong = stamp and stamp["mismatched_sells"]
+    if tax_wrong:
+        lines.append(f"声明的卖出印花税约 {stamp['declared_bp']:.1f}bp，与成交日适用税率 {'/'.join(f'{b:g}' for b in stamp['rule_bp'])}bp "
+                     f"不符的卖出 {stamp['mismatched_sells']} 笔。")
+    broker, versus = model["broker"], model.get("broker_check")
+    gap_min, gap_share = t.get("T-FEE-GAP-MIN", 1.), t.get("T-FEE-GAP-SHARE", .01)
+    if versus is not None:
+        gap = versus["gap"]
+        material = abs(gap) >= max(gap_min, gap_share * versus["modeled"])
+        lines.append(f"按你确认的合同口径（{broker['commission_bp']:g}bp、最低 ¥{broker['minimum_commission']:g}）复算为 "
+                     f"{_yuan(versus['modeled'])}，回测{'高于' if gap > 0 else '低于'}合同口径 {_yuan(abs(gap))}。")
+        headline = (f"回测成本{'高于' if gap > 0 else '低于'}合同口径约 {_yuan(abs(gap))}，结果偏{'保守' if gap > 0 else '乐观'}"
+                    if material else "回测成本与合同口径一致")
+        evidence, conditions = "E1", []
+    else:
+        lines.append(f"券商合同费率未确认；按费率情景复算：{scenarios}。确认合同费率后才判断回测成本偏高还是偏低。")
+        material = False
+        headline = ("回测按自己声明的模型扣费一致；合同费率未确认，只给情景区间" if check["status"] == "consistent"
+                    else "合同费率未确认，只给情景区间")
+        evidence, conditions = "E3c", ["券商合同费率未确认"]
+    inconsistent = check["status"] == "inconsistent"
+    if not (inconsistent or tax_wrong or material or declared["status"] != "complete" or versus is None):
+        return None
+    return {
+        "id": "fee_setting", "state": "act" if inconsistent or tax_wrong else "review" if material or versus is None else "hold",
+        "title": "回测费用设置",
+        "finding": "".join(lines),
+        "headline": ("回测没有按自己声明的费用模型扣费" if inconsistent else "卖出印花税与成交日税率不符" if tax_wrong else headline),
+        "edits": edits.get("fees", []) if inconsistent or tax_wrong or material else [],
+        "options": [{"label": "维持原样", "effect": "费用设置与合同一致时不用改"},
+                    {"label": "在审计设置确认券商合同费率", "effect": "确认后给出回测高于或低于合同口径的单一结论"}],
+        "saving": "不改变实际交易成本，只让回测结果更接近合同口径",
+        "sacrifice": "无",
+        "net": (f"回测净盈亏与合同口径相差约 {_yuan(abs(versus['gap']))}" if versus is not None else "取决于合同费率，见情景区间"),
+        "evidence": evidence, "conditions": conditions,
+        "basis": "声明模型来自代码或配置；实际扣费来自成交导出；印花税按成交日适用税率",
+        "overturn": "合同还有过户费、经手费等其他项目；或平台默认费率与此处读到的设置不同。",
     }
 
 
@@ -187,38 +254,55 @@ def _cash_buffer_card(signals, edits):
         return None
     ex = signals["cash_short_examples"][0]
     return {
-        "id": "cash_buffer", "state": "act", "title": "全仓下单没留费用余量",
+        "id": "cash_buffer", "state": "review", "title": "全仓下单没留费用余量",
         "finding": f"有 {signals['cash_short_orders']} 笔买单因“可用资金不足”被拒，差额最多 {_yuan(signals['cash_short_gap'])}："
                    f"例如 {ex['date']} 有 {_yuan(ex['available'])}，下单需要 {_yuan(ex['required'])}。"
                    f"策略用全部现金下单，佣金和滑点一加就超了，结果这 {signals['cash_short_days']} 天账户空仓，没有持有信号选中的标的。",
-        "headline": f"下单金额留出约 1% 余量，{signals['cash_short_days']} 天的空仓就不会发生",
+        "headline": f"下单留约 1% 余量可消除这 {signals['cash_short_orders']} 笔拒单；收益和回撤影响需重跑",
         "edits": edits.get("cash_buffer", []),
         "options": [{"label": "维持原样", "effect": "空仓天数由当天价格碰巧决定，回测结果含这部分偶然"},
                     {"label": "下单金额乘 0.99", "effect": "留出佣金和滑点，买单不再被拒"}],
         "saving": "不省钱：修的是本该持仓却空仓的天数",
         "sacrifice": "每次少买约 1% 的金额，现金略多",
         "net": "空仓这些天的涨跌原回测没有吃到，改后结果可能更好也可能更差，需回原平台重跑",
-        "evidence": "recomputed",
+        "evidence": "scenario",
         "basis": "委托详情里平台给出的拒单原因和金额",
         "overturn": "这些天恰好是下跌日，空仓反而躲过了亏损；重跑后对比即可看出。",
     }
 
 
-def _churn_card(signals, edits):
+def _churn_card(signals, edits, opening=None, t=None):
     if not signals or not signals["switches"]:
         return None
+    t = t or {}
     avoided, switches = signals["avoided_switches"], signals["switches"]
-    worth = avoided >= max(3, .2 * switches)
+    worth = avoided >= max(t.get("T-CHURN-MIN", 3), t.get("T-CHURN-SHARE", .2) * switches)
+    opening = opening or {}
+    known = opening.get("status") == "declared_empty"
+    inputs = [("少换次数", f"{avoided}"), ("配对口径", "FIFO"), ("已平仓笔数", f"{signals.get('closed_lots', 0)}"),
+              ("期初状态", opening.get("text", "未确认")),
+              ("平均每笔成本", f"¥{signals['cost_per_round_trip']:,.2f}（费用 + 价差情景）"),
+              ("每笔成本是否随审计佣金变化", "否：取导出的实际费用")]
     missed = signals["days"] - signals["followed_days"]
-    reasons = "、".join(f"{k} {v} 天" for k, v in signals["missed_reasons"].items())
+    groups = signals.get("missed_groups") or []
+    reasons = "；".join(f"{g['days']} 天{'全部' if g['days'] > 1 else ''}是 {g['code']}，"
+                       f"{(g['time'][:5] + ' 下单，') if g['time'] else ''}平台原因：{g['reason'].replace('委托未成交：', '')}"
+                       for g in groups[:3]) or "、".join(f"{k} {v} 天" for k, v in signals["missed_reasons"].items())
+    if groups and groups[0]["days"] >= max(3, .5 * missed):
+        reasons += ("。要确定原因，需要该标的这些日期的分钟数据（区分成交量为 0 和缺数据），"
+                    "或原平台同区间的委托和成交导出")
     return {
         "id": "rank_churn", "state": "review" if worth else "hold", "title": "排名一变就换仓",
         "finding": f"按策略自己的每日排名，{signals['days']} 个交易日里第一名换了 {switches} 次，平均每 {signals['average_hold_days']:.0f} 天换一次；"
                    f"每次换仓的费用和价差约 {_yuan(signals['cost_per_round_trip'])}。"
                    f"有 {signals['whipsaw_lots']} 笔卖出后 5 天内又排回第一，这些交易付出约 {_yuan(signals['whipsaw_cost'])}。"
                    + (f"另有 {missed} 天没有持有选中的目标（{reasons}）。" if missed else "持仓每天都跟上了信号。"),
-        "headline": (f"排进前 {signals['buffer_rank']} 就不卖，可少换 {avoided} 次，省费用和价差约 {_yuan(signals['avoided_cost'])}"
-                     if worth else f"保留带只能少换 {avoided} 次，暂不改"),
+        "headline": (f"固定成交下，排进前 {signals['buffer_rank']} 就不卖可少换 {avoided} 次，费用和价差情景约 "
+                     f"{_yuan(signals['avoided_cost'])}；收益影响需重跑" if worth
+                     else f"固定成交下保留带只能少换 {avoided} 次，暂不改"),
+        "inputs": inputs,
+        "formula": f"{avoided} × ¥{signals['cost_per_round_trip']:,.2f} = {_yuan(signals['avoided_cost'])}",
+        "conditions": [] if known else ["首日持仓成本未确认，换仓节省仅为条件情景；补填期初现金并声明空仓可消除"],
         "edits": edits.get("buffer", []),
         "options": [{"label": "维持原样", "effect": "信号每天都更新，换仓跟得最紧"},
                     {"label": f"加保留带：持有的标的排进前 {signals['buffer_rank']} 就继续持有", "effect": "排名小幅波动不换仓"}],
@@ -234,8 +318,10 @@ def _churn_card(signals, edits):
 def cards(result, bundle=None):
     """Action cards; with the bundle, each card also points at the code lines to change."""
     from . import audit_levers
+    from .audit_rules import defaults
     modules = result.get("modules", {})
     fees_module = modules.get("fee_analysis") or {}
+    thresholds = {**defaults(), **((result.get("rules") or {}).get("thresholds") or {})}
     edits = {}
     if bundle:
         levers, platform = audit_levers.locate(bundle), bundle.get("adapter", "")
@@ -249,9 +335,17 @@ def cards(result, bundle=None):
     out = [_tick_card(modules.get("tick_analysis") or {}),
            _holding_card(modules.get("holding_analysis") or {}, edits),
            _price_card(modules.get("holding_analysis") or {}, modules.get("tick_analysis") or {}, edits),
-           _fee_card(fees_module, edits),
+           _fee_card(fees_module, edits, modules.get("fee_model"), thresholds),
            _minimum_card(fees_module, edits),
-           _churn_card(modules.get("signal_mapping"), edits),
+           _churn_card(modules.get("signal_mapping"), edits, result.get("opening_state"), thresholds),
            _cash_buffer_card(modules.get("signal_mapping"), edits)]
     order = {"act": 0, "review": 1, "hold": 2}
-    return sorted((c for c in out if c), key=lambda c: order[c["state"]])
+    cards = sorted((c for c in out if c), key=lambda c: order[c["state"]])
+    for card in cards:
+        level = _LEVEL.get(card["evidence"], card["evidence"])
+        card["conditions"] = card.get("conditions") or []
+        if card["conditions"] and level == "E3":
+            level = "E3c"
+        card["evidence"] = level
+        card["rules"] = cite(*_RULES.get(card["id"], ()))
+    return cards
