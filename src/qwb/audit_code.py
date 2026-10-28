@@ -11,10 +11,8 @@ from .experiments import object_digest
 
 
 def _tree(source):
-    try:
-        return ast.parse(source)
-    except (SyntaxError, ValueError, RecursionError, MemoryError):
-        return None
+    from .code_parse import parse
+    return parse(source)[0]
 
 
 def inspect(bundle, result):

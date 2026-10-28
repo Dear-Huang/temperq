@@ -8,17 +8,26 @@ audit_code and is limited to BigQuant.
 from __future__ import annotations
 
 import ast
+import re
 
 STAMP_TAX_CUT = "2023-08-28"   # sell-side stamp tax fell from 10bp to 5bp on this date
-HOLDING_NAMES = {"stock_count", "buy_stock_count", "stock_num", "MAX_HOLDING_NUM", "hold_num", "hold_count", "n_hold"}
+HOLDING_NAMES = {"stock_count", "buy_stock_count", "stock_num", "MAX_HOLDING_NUM", "hold_num", "hold_count", "n_hold",
+                 "stocknum", "num_stocks", "choicenum", "max_number", "stockCount"}
 INTERVAL_NAMES = {"REBALANCE_INTERVAL", "rebalance_interval", "hold_days"}
+# Names seen across a few hundred shared strategies; matched case-insensitively.
+HOLDING_PATTERN = re.compile(r"^(max_)?(hold_|buy_)?(stock_?)?(num|nums|count|number)(_stocks?)?$|^max_hold(_stock)?(_?nums?)?$"
+                             r"|^max_(hold_)?stock_?(num|nums|count)$|^max_hold_stocknum$")
+INTERVAL_PATTERN = re.compile(r"(refresh|rebalance|reblance|adjust|tiaocang|change|shift)_?(rate|days?|period|interval|freq)?$"
+                              r"|^(hold|holding)_?days$|^(period|interval)(_days)?$", re.I)
+NOT_A_COUNT = re.compile(r"day|date|price|threshold|proportion|ratio|rate|zt|limit|min_|percent|pct", re.I)
+TRADING_NAME = re.compile(r"trade|adjust|rebalance|reblance|buy|sell|order|market_open|tiaocang", re.I)
+ORDER_CALLS = {"order", "order_target", "order_value", "order_target_value", "order_shares", "order_percent",
+               "order_target_percent", "order_lots"}
 
 
 def _tree(source):
-    try:
-        return ast.parse(source)
-    except (SyntaxError, ValueError, RecursionError, MemoryError):
-        return None
+    from .code_parse import parse
+    return parse(source)[0]
 
 
 def _name(node):
@@ -42,6 +51,21 @@ def _literal(node):
     return value if isinstance(value, (int, float)) and not isinstance(value, bool) else None
 
 
+def _trading_functions(tree):
+    """Functions that place orders, directly or through functions they call (any depth in this file)."""
+    calls = {}
+    for fn in ast.walk(tree):
+        if isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            calls[fn.name] = {_call_name(c) for c in ast.walk(fn) if isinstance(c, ast.Call)}
+    trading = {name for name, used in calls.items() if used & ORDER_CALLS}
+    changed = True
+    while changed:
+        grown = {name for name, used in calls.items() if used & trading} - trading
+        trading |= grown
+        changed = bool(grown)
+    return trading
+
+
 def _call_name(node):
     func = node.func
     return func.id if isinstance(func, ast.Name) else func.attr if isinstance(func, ast.Attribute) else ""
@@ -56,6 +80,8 @@ def locate(bundle):
     lines = source.splitlines()
     text = lambda n: lines[n - 1].strip()[:160] if 0 < n <= len(lines) else ""
     found = {}
+    trading = _trading_functions(tree)
+    defined = {fn.name for fn in ast.walk(tree) if isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef))}
 
     def add(kind, line, **extra):
         found.setdefault(kind, []).append({"line": line, "code": text(line), **extra})
@@ -64,9 +90,10 @@ def locate(bundle):
         if isinstance(node, ast.Assign) and len(node.targets) == 1:
             name = _name(node.targets[0])
             value = _literal(node.value)
-            if name in HOLDING_NAMES and isinstance(value, int):
+            if isinstance(value, int) and (name in HOLDING_NAMES or (HOLDING_PATTERN.match(name.lower())
+                                                                       and not NOT_A_COUNT.search(name))) and 1 <= value <= 300:
                 add("holding_count", node.lineno, name=name, value=value)
-            elif name in INTERVAL_NAMES and isinstance(value, int):
+            elif isinstance(value, int) and (name in INTERVAL_NAMES or INTERVAL_PATTERN.search(name)) and 1 <= value <= 120:
                 add("rebalance", node.lineno, name=name, value=value)
             elif name == "FILTERS" and isinstance(node.value, ast.List):
                 add("price_filter", node.lineno, name=name)
@@ -82,7 +109,7 @@ def locate(bundle):
         elif isinstance(node, ast.Call):
             call = _call_name(node)
             keywords = {k.arg: k for k in node.keywords if k.arg}
-            if call in {"PerOrder", "OrderCost"}:
+            if call in {"PerOrder", "OrderCost", "PerTrade"}:
                 values = {k: _literal(v.value) for k, v in keywords.items()}
                 # JoinQuant's set_order_cost(..., type='fund') does not apply to stock trades.
                 parent = next((p for p in ast.walk(tree) if isinstance(p, ast.Call) and node in p.args), None)
@@ -96,7 +123,8 @@ def locate(bundle):
                 add("price_filter", keywords["expr_filters"].lineno, name="expr_filters")
             if call in {"run_daily", "run_weekly", "run_monthly"} and node.args and isinstance(node.args[0], ast.Name):
                 fn = node.args[0].id
-                if any(word in fn for word in ("trade", "adjust", "rebalance")):
+                # Defined here: trust what it does. Defined elsewhere: fall back to its name.
+                if fn in trading or (fn not in defined and TRADING_NAME.search(fn)):
                     add("rebalance", node.lineno, name=call, value={"run_daily": 1, "run_weekly": 5, "run_monthly": 20}[call],
                         function=fn)
             if (call == "order_value" and len(node.args) == 2 and isinstance(node.args[1], ast.Name)):
@@ -109,6 +137,14 @@ def locate(bundle):
 def _period(bundle):
     days = sorted({row["date"] for key in ("snapshots", "fills", "positions") for row in bundle.get(key, []) if row.get("date")})
     return (days[0], days[-1]) if days else (None, None)
+
+
+def _set_value(code, old, new):
+    """Swap the assigned value only: after '=' or inside the keyword's quotes, never inside a name."""
+    quote = "(?:" + '"' * 3 + "|" + "'" * 3 + "|" + '"' + "|" + "'" + ")?"
+    pattern = re.compile(r"(=\s*" + quote + r"\s*)" + re.escape(str(old)) + r"(?!\d)")
+    swapped, n = pattern.subn(lambda m: m.group(1) + str(new), code, count=1)
+    return swapped if n else f"{code}  # 改为 {new}"
 
 
 def holding(levers, platform):
@@ -127,7 +163,9 @@ def holding(levers, platform):
             continue
         else:
             new = max(5, lever["value"] * 2)
-            out.append({**lever, "change": lever["code"].replace(str(lever["value"]), str(new), 1),
+            if new == lever["value"]:
+                continue
+            out.append({**lever, "change": _set_value(lever["code"], lever["value"], new),
                         "note": f"{lever['name']} 从 {lever['value']} 改为 {new}，先试这一档，用效果验证比较"})
     return out
 
@@ -191,7 +229,7 @@ def fees(levers, bundle, more, commission_bp=None):
                          ("（回测跨越这一天，改后之前的部分偏乐观）" if start and start < STAMP_TAX_CUT else ""))
             out.append({**lever, "change": change, "note": note})
             continue
-        if lever["call"] == "PerOrder" and values.get("sell_cost") is not None and values.get("buy_cost") is not None:
+        if lever["call"] in {"PerOrder", "PerTrade"} and values.get("sell_cost") is not None and values.get("buy_cost") is not None:
             stamp = values["sell_cost"] - values["buy_cost"]
             if more and stamp > .0007 and start and start >= STAMP_TAX_CUT:
                 new = round(values["buy_cost"] + .0005, 6)

@@ -9,7 +9,7 @@ import io
 import math
 import re
 
-from .strategy import stock_code
+from .securities import security_code as stock_code
 from .audit_fee_units import order_fields, validate_orders
 
 SCHEMA = "strategy_export_v1"
@@ -43,10 +43,14 @@ def numeric(value, label, *, summary=False, nonnegative=True):
 
 def date_value(value, label):
     from datetime import date
+    text = value.strip()
+    match = re.fullmatch(r"(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})(?:[ T]\d{1,2}:\d{2}(?::\d{2}(?:\.\d+)?)?)?", text)
     try:
-        return date.fromisoformat(value.strip()).isoformat()
+        if match:  # Excel re-saves 2023-01-03 as 2023/1/3
+            return date(int(match[1]), int(match[2]), int(match[3])).isoformat()
+        return date.fromisoformat(text[:10]).isoformat() if re.fullmatch(r"\d{4}-\d{2}-\d{2}([ T].*)?", text) else date.fromisoformat(text).isoformat()
     except ValueError:
-        raise ValueError(f"{label}：日期应为 YYYY-MM-DD") from None
+        raise ValueError(f"{label}：日期应为 YYYY-MM-DD，读到“{text[:20]}”") from None
 
 
 def _rows(text, name):
@@ -72,10 +76,13 @@ def inspect_code(source):
     """Literal candidates only, with line provenance; these are not active rules."""
     if len(source.encode("utf-8")) > MAX_CODE_BYTES:
         raise ValueError("策略代码不能超过 200KB")
-    try:
-        tree = ast.parse(source)
-    except (SyntaxError, RecursionError, MemoryError):
-        return {"status": "unparsed", "candidates": [], "note": "代码无法静态解析；成交与持仓仍可分析"}
+    from .code_parse import parse
+    tree, skipped = parse(source)
+    if tree is None:
+        py2 = re.search(r"^\s*print\s+[^(\s=]", source, re.M)
+        return {"status": "unparsed", "candidates": [],
+                "note": ("代码像是 Python 2 写法（print 不带括号），无法静态解析；成交与持仓仍可分析" if py2
+                         else "代码无法静态解析；成交与持仓仍可分析")}
     keys = {"stock_count", "max_cash_per_instrument", "hold_days", "capital_base",
             "rebalance_period_days", "order_price_field_buy", "order_price_field_sell",
             "buy_cost", "sell_cost", "min_cost", "expr", "expr_filters", "mode",
@@ -110,8 +117,9 @@ def inspect_code(source):
                 except (ValueError, TypeError):
                     continue
                 add(key, node.args[1], node.lineno)
-    return {"status": "parsed", "candidates": candidates,
-            "note": "静态字面量候选，可能位于未调用函数或分支；未执行代码，未激活规则"}
+    return {"status": "parsed", "candidates": candidates, "skipped_header_lines": skipped,
+            "note": "静态字面量候选，可能位于未调用函数或分支；未执行代码，未激活规则"
+                    + (f"；已跳过开头 {skipped} 行说明文字" if skipped else "")}
 
 
 MAX_UNPACKED_BYTES = 40_000_000
