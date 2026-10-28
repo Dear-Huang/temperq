@@ -7,7 +7,7 @@ from hashlib import sha256
 import io
 import re
 
-from .strategy_imports import (SCHEMA, MAX_ROWS, _ref, date_value, decode_source,
+from .strategy_imports import (LOG_LINE, is_platform_log, SCHEMA, MAX_ROWS, _ref, date_value, decode_source,
                                inspect_code, numeric)
 from .strategy import stock_code
 from .audit_fee_units import order_fields
@@ -123,7 +123,17 @@ def other_platform(files, *, adapter, name, opening_cash=None):
     seen, cash, assets = set(), {}, {}
     for source in files:
         text, encoding = decode_source(source)
-        if source.name.lower().endswith(('.py', '.txt')):
+        if source.name.lower().endswith('.txt') and is_platform_log(text):
+            kind = 'logs'
+            for index, line in enumerate(text.splitlines(), 1):
+                match = LOG_LINE.match(line)
+                if match:
+                    result['logs'].append({'时间': match[1], '级别': match[2], '内容': match[3].strip(),
+                                           'ref': _ref(kind, index)})
+                elif result['logs']:
+                    result['logs'][-1]['内容'] += chr(10) + line  # continuation of a multi-line message
+            row_count = len(result['logs'])
+        elif source.name.lower().endswith(('.py', '.txt')):
             kind = 'code'
             result['code'] = {**inspect_code(text), 'source': text}
             row_count = len(text.splitlines())
@@ -240,6 +250,12 @@ def other_platform(files, *, adapter, name, opening_cash=None):
                     result['scores'].append({'date': date_value(row['date'], '打分日期'),
                         'code': code_value(row['code']), 'score': numeric(row['score'], '打分', nonnegative=False),
                         'available_at': row.get('available_at', ''), 'ref': _ref(kind, index)})
+            elif {'时间', '策略收益', '基准收益'} <= fields:
+                # JoinQuant 收益详情: the platform's own cumulative return, kept to cross-check equity.
+                kind = 'platform_returns'
+                result['platform_returns'] = [{'date': date_value(row['时间'][:10], '收益日期'),
+                    'strategy_pct': numeric(row['策略收益'], '策略收益', nonnegative=False),
+                    'ref': _ref(kind, index)} for index, row in rows]
             elif {'时间', '级别', '内容'} <= fields:
                 kind = 'logs'
                 result['logs'] = [{**row, 'ref': _ref(kind, i)} for i, row in rows]

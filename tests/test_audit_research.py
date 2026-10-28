@@ -123,8 +123,8 @@ def test_optional_sixth_material_daily_quote_comparison_and_coverage():
     assert calibration['weighted_tick_half_spread_bp'] == 5.
     assert calibration['matches'][0]['quote_ref']['source'] == 'quote_observations'
     assert 'not_trade_time_execution' in calibration['scope']
-    with pytest.raises(ValueError, match='2–6'):
-        imp.normalize(files+[quote_file()])
+    with pytest.raises(ValueError, match='2–7'):
+        imp.normalize(files+[quote_file(), quote_file()])
 
 
 @pytest.mark.parametrize('row', [

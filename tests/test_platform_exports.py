@@ -70,3 +70,34 @@ def test_ricequant_trade_details_are_real_fills():
     assert [(f["side"], f["quantity"], f["price"], f["fee"]) for f in bundle["fills"]] == [
         ("buy", 22300, 4.43, 79.0312), ("sell", 22300, 4.5, 130.36)]
     assert bundle["fills"][0]["code"] == "601398.SH" and bundle["fills"][0]["time"] == "15:00:00"
+
+
+def test_joinquant_zip_downloads_logs_and_returns_import_as_is():
+    import io, zipfile
+
+    def zipped(name, data):
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, "w") as z:
+            z.writestr(name, data)
+        return buf.getvalue()
+
+    log = ("2008-11-10 09:05:00 - INFO  - 准备股票池\n2008-11-10 14:40:00 - WARNING - 部分成交\n"
+           "2008-11-10 15:10:00 - INFO  - 代码:002192.XSHE\n成本价:7.49\n").encode("gbk")
+    returns = "时间,基准收益,策略收益,当日盈利,当日亏损,当日买入,当日卖出,超额收益(%)\n2008-11-10 16:00:00,0.5,0.1,10,0,19474,0,0\n".encode("gbk")
+    bundle = imports.normalize(files(("transaction.zip", zipped("transaction.csv", JQ_TRADES)),
+                                     ("position.zip", zipped("position.csv", JQ_POSITIONS)),
+                                     ("log.zip", zipped("log.txt", log)), ("result_1.csv", returns),
+                                     ("代码.txt", CODE)), adapter="auto", name="聚宽")
+    kinds = {s["kind"]: s["name"] for s in bundle["sources"]}
+    assert kinds["logs"] == "log.txt" and kinds["code"] == "代码.txt" and kinds["platform_returns"] == "result_1.csv"
+    assert [l["级别"] for l in bundle["logs"]] == ["INFO", "WARNING", "INFO"] and "成本价" in bundle["logs"][-1]["内容"]
+    assert bundle["platform_returns"][0]["strategy_pct"] == .1
+
+
+def test_archives_with_unexpected_contents_are_refused():
+    import io, zipfile, pytest
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as z:
+        z.writestr("evil.exe", b"MZ")
+    with pytest.raises(ValueError, match="只能是 CSV 或 TXT"):
+        imports.normalize(files(("x.zip", buf.getvalue()), ("代码.txt", CODE)), adapter="auto", name="x")

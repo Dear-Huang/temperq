@@ -20,6 +20,9 @@ def save(workdir, bundle, files, *, parent=None):
     identity = uuid.uuid4().hex
     directory = root(workdir, identity)
     directory.mkdir(parents=True, exist_ok=False)
+    # Store what was parsed: zip downloads are kept as their unpacked members, in source order.
+    from .strategy_imports import unpack_archives
+    files = unpack_archives(files)
     manifest = []
     for index, source in enumerate(files):
         stored = f"source-{index}.bin"

@@ -33,7 +33,7 @@ The interface and user documentation are currently in Chinese.
 
 | Page | Question | What you get |
 | --- | --- | --- |
-| **Strategy governance** | What is wrong and what to change | One card per issue: finding, options (always including "keep as is"), what it saves, what it may give up, evidence level, and what would overturn it |
+| **Strategy governance** | What is wrong and what to change | One card per issue: finding, whether to change it, which code line to edit, options (always including "keep as is"), what it saves, what it may give up, evidence level, and what would overturn it |
 | **P&L attribution** | Where the money came from | A waterfall from gross P&L through commissions and stamp tax to net P&L and the spread scenario; concentration by stock, holding period and price band; who caused the maximum drawdown |
 | **Effect verification** | Is the changed version actually better | First restates the original with realistic costs; then compares an optimized re-run, exported from the original platform, on the full period and an internal validation segment: better / mixed / worse |
 
@@ -58,7 +58,7 @@ The interface and user documentation are currently in Chinese.
 | **RiceQuant** | Trade, position and account detail exports + strategy code | Full audit; dividends and bonus shares inferred; written suggestions |
 | **Others** | trades / holdings / account in the [generic format](docs/STRATEGY_AUDIT_FORMAT.md) | Fees, spread, attribution; only obvious code parameters are read |
 
-Upload the raw files **unchanged**; the format is detected from table headers. Files from different platforms cannot be mixed in one backtest. All three platforms have been reconciled end to end on real backtest exports.
+Upload the raw files **unchanged** (JoinQuant zips need no unpacking); the format is detected from table headers. Files from different platforms cannot be mixed in one backtest. All three platforms have been reconciled end to end on real backtest exports.
 
 Daily stock scores are optional. None of the three platforms makes them easy to export, and no 1.0 audit depends on them. When provided, they add an analysis of how long the signal lasts.
 

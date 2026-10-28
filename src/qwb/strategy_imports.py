@@ -114,6 +114,49 @@ def inspect_code(source):
             "note": "静态字面量候选，可能位于未调用函数或分支；未执行代码，未激活规则"}
 
 
+MAX_UNPACKED_BYTES = 40_000_000
+
+
+def unpack_archives(files):
+    """JoinQuant downloads each export as a zip holding one CSV or TXT; open those in place.
+
+    Archives are read in memory, one level deep, only for csv/txt/py members, with the
+    uncompressed size checked before reading so a crafted archive cannot exhaust memory.
+    """
+    import zipfile
+    out = []
+    for source in files:
+        if not source.name.lower().endswith('.zip'):
+            out.append(source)
+            continue
+        try:
+            archive = zipfile.ZipFile(io.BytesIO(source.data))
+        except zipfile.BadZipFile:
+            raise ValueError(f"{source.name}：压缩包损坏，请重新下载") from None
+        members = [m for m in archive.infolist() if not m.is_dir()
+                   and not m.filename.startswith(('__MACOSX/', '.')) and '/._' not in m.filename]
+        if not members or len(members) > 3:
+            raise ValueError(f"{source.name}：压缩包应只含一个导出文件")
+        if sum(m.file_size for m in members) > MAX_UNPACKED_BYTES:
+            raise ValueError(f"{source.name}：解压后超过 40MB")
+        for member in members:
+            inner = member.filename.rsplit('/', 1)[-1]
+            if not inner.lower().endswith(('.csv', '.txt', '.py')):
+                raise ValueError(f"{source.name}：压缩包里只能是 CSV 或 TXT")
+            out.append(SourceFile(inner, archive.read(member)))
+    return out
+
+
+def is_platform_log(text):
+    """JoinQuant run logs are plain text: 'YYYY-MM-DD HH:MM:SS - LEVEL - message'."""
+    head = [line for line in text.splitlines()[:20] if line.strip()]
+    matched = sum(bool(LOG_LINE.match(line)) for line in head)
+    return len(head) >= 3 and bool(LOG_LINE.match(head[0])) and matched >= .6 * len(head)
+
+
+LOG_LINE = re.compile(r"(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}) - ([A-Z]+)\s*- (.*)")
+
+
 def decode_source(source):
     """Decode without dropping bytes; retain the identified encoding in provenance."""
     for encoding in ('utf-8-sig', 'gb18030'):
@@ -249,8 +292,9 @@ ADAPTERS = {"bigquant": bigquant}
 def normalize(files, *, adapter="auto", name="导入策略", opening_cash=None):
     if adapter not in {'auto', 'bigquant', 'joinquant', 'ricequant', 'generic'}:
         raise ValueError("暂不支持该平台适配器")
-    if not 1 <= len(files) <= 6:
-        raise ValueError("每次上传 2–6 个文件")
+    files = unpack_archives(files)
+    if not 1 <= len(files) <= 7:
+        raise ValueError("每次上传 2–7 个文件")
     if not name.strip() or len(name) > 80:
         raise ValueError("策略名称应为 1–80 个字符")
     if opening_cash is not None:
@@ -262,12 +306,12 @@ def normalize(files, *, adapter="auto", name="导入策略", opening_cash=None):
         if not source.name or len(source.name) > 120 or any(c in source.name for c in '/\\:\x00'):
             raise ValueError("文件名无效，请只上传文件本身")
         if not source.name.lower().endswith((".csv", ".py", ".txt")):
-            raise ValueError("只支持 CSV 和策略代码 TXT/PY 文件")
+            raise ValueError("只支持 CSV、TXT/PY，或平台下载的 ZIP")
         if len(source.data) > MAX_FILE_BYTES:
-            raise ValueError("单个文件不能超过 8MB")
+            raise ValueError(f"{source.name}：单个文件不能超过 8MB")
         total += len(source.data)
-    if total > MAX_TOTAL_BYTES:
-        raise ValueError("文件合计不能超过 24MB")
+    if total > MAX_UNPACKED_BYTES:
+        raise ValueError("文件解压后合计不能超过 40MB")
     try:
         from .strategy_import_formats import detect_adapter, other_platform
         detected = detect_adapter(files)

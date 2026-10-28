@@ -112,6 +112,15 @@ def review(bundle):
     check('price_basis', '价格口径', 'missing',
           '持仓和成交表自身不足以认证不复权成交价；未用外部行情核对比例。',
           '上传原平台价格设置或对应日期不复权日线；不得直接改股数/金额使账目对齐。')
+    returns = bundle.get('platform_returns') or []
+    equity = {s['date']: s['equity'] for s in bundle['snapshots']}
+    paired = [(r['strategy_pct'], equity[r['date']]) for r in returns if r['date'] in equity]
+    if paired:
+        base = paired[0][1] / (1 + paired[0][0] / 100)
+        worst = max(abs((e / base - 1) * 100 - pct) for pct, e in paired)
+        check('platform_returns', '平台收益表与账户', 'consistent' if worst <= .05 else 'review',
+              f'平台报告的累计收益与按持仓、现金还原的账户逐日对照 {len(paired)} 天，最大差 {worst:.2f} 个百分点。',
+              '一致说明导出完整、属于同一次回测。' if worst <= .05 else '差异较大：确认收益表与交易、持仓来自同一次回测。')
     inferred_actions = bundle.get('quality', {}).get('inferred_actions')
     if inferred_actions:
         check('corporate_actions', '分红与送转（由账户推断）', 'review',

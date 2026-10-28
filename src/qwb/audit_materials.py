@@ -50,6 +50,7 @@ def replace_files(originals, previous, additions, kind):
         raise ValueError('不支持的补充材料类型')
     if not additions:
         raise ValueError('请先选择要上传的文件')
+    additions = imports.unpack_archives(additions)
     if any(material_kind(source) != kind for source in additions):
         raise ValueError('文件内容与所选材料不一致，请按该项模板填写或选择正确的上传项')
     if kind == 'code' and not any(line.strip() and not line.lstrip().startswith('#')
@@ -68,6 +69,7 @@ def replace_version(originals, previous, additions):
     """A re-run backtest: every uploaded kind replaces its old files; other kinds are kept."""
     if not additions:
         raise ValueError('请先选择优化版回测的导出文件')
+    additions = imports.unpack_archives(additions)
     kinds = {material_kind(source) for source in additions}
     if 'fills' not in kinds and 'positions' not in kinds:
         raise ValueError('优化版至少需要新的回测交易或持仓文件')
@@ -81,6 +83,8 @@ def replace_version(originals, previous, additions):
 
 
 def material_kind(source):
+    if source.name.lower().endswith('.txt') and imports.is_platform_log(imports.decode_source(source)[0]):
+        return 'logs'
     if source.name.lower().endswith(('.py', '.txt')):
         return 'code'
     from .strategy_import_formats import table
@@ -94,6 +98,11 @@ def material_kind(source):
         ('positions', {'date', 'code', 'quantity'}),
         ('snapshots', {'date', 'equity', 'cash'}),
         ('logs', {'时间', '级别', '内容'}),
+        ('platform_returns', {'时间', '策略收益', '基准收益'}),
+        ('fills', {'标的', '交易类型', '成交数量', '手续费'}),
+        ('fills', {'合约代码', '买/卖', '成交量', '成交价'}),
+        ('positions', {'合约代码', '仓位', '最新价'}),
+        ('snapshots', {'账户类型', '可用资金', '总权益'}),
         ('scores', {'date', 'code', 'score'}),
         ('quote_observations', {'date', 'code', 'quoted_spread_bp', 'sample_count', 'measurement_scope'}),
     ):
