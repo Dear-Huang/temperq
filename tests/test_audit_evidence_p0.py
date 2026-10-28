@@ -118,3 +118,16 @@ def test_rerun_version_inherits_parent_cost_scenario():
     html = ui.overview("id", b, "tok", {"commission_bp": 2., "minimum_commission": 5., "max_weight": .5, "broker_confirmed": True})
     assert 'name="commission_bp" value="2.0"' in html and "沿用上一版报告" in html
     assert 'name="broker_confirmed" value="yes" checked' in html
+
+
+def test_minimum_and_cash_buffer_cards_follow_registry_thresholds():
+    fees = {"status": "measured", "minimum_premium": 300., "small_unit_count": 10}
+    default = audit_actions.cards({"modules": {"fee_analysis": fees}})[0]
+    lowered = audit_actions.cards({"modules": {"fee_analysis": fees},
+                                   "rules": {"thresholds": {"T-MIN-COMM-MATERIAL": 200.}}})[0]
+    assert default["state"] == "hold" and lowered["state"] == "review"
+    sig = {**signals(), "cash_short_orders": 5, "cash_short_days": 5, "cash_short_gap": 3.,
+           "cash_short_examples": [{"date": "2024-01-02", "code": "510300.SH", "available": 99.5, "required": 100.2}]}
+    card = next(c for c in audit_actions.cards({"modules": {"signal_mapping": sig}, "rules": {"thresholds": {"T-CASH-BUFFER": .02}}})
+                if c["id"] == "cash_buffer")
+    assert "2%" in card["headline"] and card["options"][1]["label"] == "下单金额乘 0.98"

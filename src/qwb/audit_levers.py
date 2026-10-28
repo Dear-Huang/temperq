@@ -168,15 +168,15 @@ def _period(bundle):
     return (days[0], days[-1]) if days else (None, None)
 
 
-def cash_buffer(levers):
+def cash_buffer(levers, keep=.01):
     """All-in order sizes: leave room for commission and slippage."""
     out = []
     for lever in levers.get("order_size", []):
         if lever["name"] != "value" or "available_cash" not in lever["code"] and "cash" not in lever["code"]:
             continue
         code = lever["code"].split("#")[0].rstrip()
-        out.append({**lever, "change": f"{code} * 0.99",
-                    "note": ("在原策略代码里；" if lever.get("embedded") else "") + "留出约 1% 给佣金和滑点，买单不再因资金差几元被拒"})
+        out.append({**lever, "change": f"{code} * {1 - keep:g}",
+                    "note": ("在原策略代码里；" if lever.get("embedded") else "") + f"留出约 {keep:.0%} 给佣金和滑点，买单不再因资金差几元被拒"})
     return out
 
 

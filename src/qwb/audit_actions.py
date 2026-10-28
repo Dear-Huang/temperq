@@ -203,15 +203,16 @@ def _fee_model_card(model, edits, t):
     }
 
 
-def _minimum_card(fees, edits):
+def _minimum_card(fees, edits, t=None):
     premium, count = fees.get("minimum_premium") or 0, fees.get("small_unit_count") or 0
+    material = (t or {}).get("T-MIN-COMM-MATERIAL", 500.)
     if fees.get("status") not in {"measured", "verified"} or premium <= 0 or not count:
         return None
     return {
-        "id": "minimum_commission", "state": "review" if premium >= 500 else "hold", "title": "小额订单的最低佣金",
+        "id": "minimum_commission", "state": "review" if premium >= material else "hold", "title": "小额订单的最低佣金",
         "finding": f"{count} 笔订单金额低于最低佣金拐点，因最低佣金多付约 {_yuan(premium)}。",
-        "headline": "金额小，影响有限" if premium < 500 else "小单最低佣金值得处理",
-        "edits": edits.get("order_floor", []) if premium >= 500 else [],
+        "headline": f"金额小于 {_yuan(material)}，影响有限" if premium < material else "小单最低佣金值得处理",
+        "edits": edits.get("order_floor", []) if premium >= material else [],
         "options": [{"label": "维持原样", "effect": "金额不大时可以不改"},
                     {"label": "设置最低新增买入金额", "effect": "可在下方『按审计发现修改代码』生成改法"}],
         "saving": f"最多约 {_yuan(premium)}",
@@ -249,21 +250,22 @@ def _price_card(holding, tick, edits):
     }
 
 
-def _cash_buffer_card(signals, edits):
+def _cash_buffer_card(signals, edits, t=None):
     if not signals or signals.get("cash_short_orders", 0) < 3:
         return None
     ex = signals["cash_short_examples"][0]
+    keep = (t or {}).get("T-CASH-BUFFER", .01)
     return {
         "id": "cash_buffer", "state": "review", "title": "全仓下单没留费用余量",
         "finding": f"有 {signals['cash_short_orders']} 笔买单因“可用资金不足”被拒，差额最多 {_yuan(signals['cash_short_gap'])}："
                    f"例如 {ex['date']} 有 {_yuan(ex['available'])}，下单需要 {_yuan(ex['required'])}。"
                    f"策略用全部现金下单，佣金和滑点一加就超了，结果这 {signals['cash_short_days']} 天账户空仓，没有持有信号选中的标的。",
-        "headline": f"下单留约 1% 余量可消除这 {signals['cash_short_orders']} 笔拒单；收益和回撤影响需重跑",
+        "headline": f"下单留约 {keep:.0%} 余量可消除这 {signals['cash_short_orders']} 笔拒单；收益和回撤影响需重跑",
         "edits": edits.get("cash_buffer", []),
         "options": [{"label": "维持原样", "effect": "空仓天数由当天价格碰巧决定，回测结果含这部分偶然"},
-                    {"label": "下单金额乘 0.99", "effect": "留出佣金和滑点，买单不再被拒"}],
+                    {"label": f"下单金额乘 {1 - keep:g}", "effect": "留出佣金和滑点，买单不再被拒"}],
         "saving": "不省钱：修的是本该持仓却空仓的天数",
-        "sacrifice": "每次少买约 1% 的金额，现金略多",
+        "sacrifice": f"每次少买约 {keep:.0%} 的金额，现金略多",
         "net": "空仓这些天的涨跌原回测没有吃到，改后结果可能更好也可能更差，需回原平台重跑",
         "evidence": "scenario",
         "basis": "委托详情里平台给出的拒单原因和金额",
@@ -331,14 +333,14 @@ def cards(result, bundle=None):
                  "order_floor": audit_levers.order_floor(levers, platform, fees_module.get("breakpoint_notional") or 0),
                  "fees": audit_levers.fees(levers, bundle, more, (result.get("settings") or {}).get("commission_bp")),
                  "buffer": audit_levers.buffer(levers, (modules.get("signal_mapping") or {}).get("buffer_rank", 2)),
-                 "cash_buffer": audit_levers.cash_buffer(levers)}
+                 "cash_buffer": audit_levers.cash_buffer(levers, thresholds["T-CASH-BUFFER"])}
     out = [_tick_card(modules.get("tick_analysis") or {}),
            _holding_card(modules.get("holding_analysis") or {}, edits),
            _price_card(modules.get("holding_analysis") or {}, modules.get("tick_analysis") or {}, edits),
            _fee_card(fees_module, edits, modules.get("fee_model"), thresholds),
-           _minimum_card(fees_module, edits),
+           _minimum_card(fees_module, edits, thresholds),
            _churn_card(modules.get("signal_mapping"), edits, result.get("opening_state"), thresholds),
-           _cash_buffer_card(modules.get("signal_mapping"), edits)]
+           _cash_buffer_card(modules.get("signal_mapping"), edits, thresholds)]
     order = {"act": 0, "review": 1, "hold": 2}
     cards = sorted((c for c in out if c), key=lambda c: order[c["state"]])
     for card in cards:
