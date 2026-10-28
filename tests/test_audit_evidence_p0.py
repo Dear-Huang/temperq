@@ -131,3 +131,37 @@ def test_minimum_and_cash_buffer_cards_follow_registry_thresholds():
     card = next(c for c in audit_actions.cards({"modules": {"signal_mapping": sig}, "rules": {"thresholds": {"T-CASH-BUFFER": .02}}})
                 if c["id"] == "cash_buffer")
     assert "2%" in card["headline"] and card["options"][1]["label"] == "下单金额乘 0.98"
+
+
+def test_rules_document_matches_registry():
+    from pathlib import Path
+    doc = Path(__file__).parents[1] / "docs" / "AUDIT_RULES.md"
+    assert doc.read_text(encoding="utf-8") == audit_rules.document(), \
+        "docs/AUDIT_RULES.md 与 audit_rules 不一致：运行 audit_rules.document() 重新生成"
+
+
+def test_threshold_form_lists_only_thresholds_and_round_trips():
+    from qwb import strategy_audit_ui as ui
+    html = ui.threshold_fields({"T-HOLD-SHORT": 10})
+    assert 'name="t:T-HOLD-SHORT" value="10"' in html and 'threshold-changed' in html
+    assert "F-TICK" not in html and "F-STAMP" not in html
+    assert 'name="t:T-CASH-BUFFER" value="1"' in html            # 1% shown as a percentage
+    form = {"t:T-HOLD-SHORT": "10", "t:T-CASH-BUFFER": "2", "t:T-PRICE-LOW": "5"}
+    assert ui.threshold_values(form) == {"T-HOLD-SHORT": 10., "T-CASH-BUFFER": .02}
+
+
+def test_changed_threshold_changes_the_card_and_is_stored():
+    from qwb import strategy_audit as audit, strategy_imports as imports
+    trades = ("date,code,side,quantity,price,fee\n2024-01-02,600000.SH,buy,1000,10,5\n2024-01-09,600000.SH,sell,1000,10.1,10\n"
+              "2024-01-10,600000.SH,buy,1000,10,5\n2024-01-12,600000.SH,sell,1000,10.2,10\n")
+    holdings = "date,code,quantity,price,market_value\n" + "".join(
+        f"2024-01-{d:02d},600000.SH,1000,10,10000\n" for d in (2, 3, 4, 5, 8, 10, 11))
+    days = ["02", "03", "04", "05", "08", "09", "10", "11", "12"]
+    account = "date,equity,cash\n" + "".join(f"2024-01-{d},100000,{90000 if d not in ('09', '12') else 100000}\n" for d in days)
+    files = [imports.SourceFile(n, t.encode()) for n, t in (("t.csv", trades), ("h.csv", holdings), ("a.csv", account))]
+    bundle = imports.normalize(files + [imports.SourceFile("s.py", b"x = 1\n")], adapter="auto", name="t", opening_cash=100000.)
+    base = {"commission_bp": 3., "minimum_commission": 5., "max_weight": 1.}
+    r = audit.analyze(bundle, {**base, "thresholds": {"T-HOLD-SHORT": 3}})
+    assert r["rules"]["thresholds"]["T-HOLD-SHORT"] == 3 and r["settings"]["thresholds"] == {"T-HOLD-SHORT": 3}
+    with pytest.raises(ValueError):
+        audit.analyze(bundle, {**base, "thresholds": {"F-TICK-STOCK": .02}})

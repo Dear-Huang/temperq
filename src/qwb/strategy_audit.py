@@ -215,7 +215,9 @@ def analyze(bundle, settings=None, *, policy=None):
     signals = audit_signals.analyze(bundle, context, thresholds)
     if signals:
         context["signal_mapping"] = signals
-    settings = {**settings, "broker_confirmed": broker_confirmed}
+    settings = {**settings, "broker_confirmed": broker_confirmed,
+                **({"thresholds": {k: v for k, v in thresholds.items() if v != audit_rules.defaults()[k]}}
+                   if thresholds != audit_rules.defaults() else {})}
     result = {"schema_version": VERSION, "input_digest": ex.object_digest(bundle),
               "settings": settings, "modules": context, "coverage_version": "audit_coverage_v3",
               "rules": audit_rules.snapshot(thresholds),

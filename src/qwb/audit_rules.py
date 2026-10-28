@@ -107,3 +107,38 @@ EVIDENCE = {
     "E6": "前向观察：模拟盘或实盘记录",
     "N": "待补材料：缺少计算所需材料",
 }
+
+
+KIND_NAMES = {"fact": "规则事实", "method": "有出处的方法", "threshold": "经验阈值"}
+ASSET_NAMES = {"stock": "股票", "fund": "ETF/基金", "bond": "债券"}
+
+
+def _fmt(rule, value):
+    if rule.unit == "比例":
+        return f"{value:.1%}".replace(".0%", "%")
+    return f"{value:g} {rule.unit}".strip() if isinstance(value, (int, float)) else str(value)
+
+
+def document():
+    """docs/AUDIT_RULES.md, generated from RULES; a test keeps the file and the code identical."""
+    out = ["# 审计规则登记表", "",
+           f"注册表版本：`{VERSION}`。本文件由 `qwb.audit_rules.document()` 生成，请勿手改；"
+           "改规则时改代码并重新生成，测试会核对两者一致。", "",
+           "每条审计结论都标注它用到的规则编号。三类规则分开：规则事实不可调；有出处的方法写明来源；"
+           "经验阈值是项目自己的判断，尚未经样本检验，可在审计设置的“判断口径”里调整，报告保存当次使用的值。", ""]
+    for kind in ("fact", "method", "threshold"):
+        rows = [r for r in RULES.values() if r.kind == kind]
+        out += [f"## {KIND_NAMES[kind]}", ""]
+        if kind == "threshold":
+            out += ["| 编号 | 含义 | 默认值 | 允许范围 | 适用资产 | 来源 |", "| --- | --- | --- | --- | --- | --- |"]
+            for r in rows:
+                low, high = r.range
+                assets = "、".join(ASSET_NAMES[a] for a in r.applies_to)
+                out.append(f"| {r.id} | {r.text} | {_fmt(r, r.value)} | {_fmt(r, low)} – {_fmt(r, high)} | {assets} | {r.source} |")
+        else:
+            out += ["| 编号 | 内容 | 来源 |", "| --- | --- | --- |"]
+            out += [f"| {r.id} | {r.text} | {r.source} |" for r in rows]
+        out.append("")
+    out += ["## 证据等级", "", "| 等级 | 含义 |", "| --- | --- |"]
+    out += [f"| {k} | {v} |" for k, v in EVIDENCE.items()]
+    return "\n".join(out) + "\n"

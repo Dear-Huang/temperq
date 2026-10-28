@@ -78,3 +78,6 @@ main>.strategy-picker{margin:8px 0 12px;padding:10px 0}.review-heading{margin-bo
 .action-edit{display:grid;grid-template-columns:auto minmax(0,1fr);gap:4px 12px;margin:8px 0;align-items:baseline}
 .action-edit .edit-line{grid-row:span 3;font-size:12px;font-weight:600;color:var(--accent,#2453d6);white-space:nowrap}
 .action-edit code{font-size:12px;white-space:pre-wrap;overflow-wrap:anywhere}.edit-now{color:#b42318}.edit-new{color:#18724a}
+.threshold-settings label{display:flex;flex-direction:column;gap:2px}.threshold-settings small{font-size:11px}
+.threshold-changed input{outline:2px solid var(--accent,#2453d6)}.action-rules{font-size:12px}
+button.link{background:none;border:0;color:var(--accent,#2453d6);cursor:pointer;padding:0;margin-top:8px}

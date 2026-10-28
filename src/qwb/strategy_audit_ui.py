@@ -150,6 +150,49 @@ def upload_form(token, error=""):
     return body
 
 
+def threshold_fields(values=None):
+    """判断口径: experience thresholds only. Exchange rules, tax rates and identities are not listed."""
+    from . import audit_rules
+    values = {**audit_rules.defaults(), **(values or {})}
+    percent = lambda r: r.unit == "比例"
+    rows = ''
+    for rule in audit_rules.RULES.values():
+        if rule.kind != 'threshold':
+            continue
+        low, high = rule.range
+        scale = 100 if percent(rule) else 1
+        unit = '%' if percent(rule) else rule.unit
+        step = '0.1' if percent(rule) or isinstance(rule.value, float) else '1'
+        assets = '、'.join(audit_rules.ASSET_NAMES[a] for a in rule.applies_to)
+        value = values[rule.id] * scale
+        default = rule.value * scale
+        changed = ' class="threshold-changed"' if abs(value - default) > 1e-9 else ''
+        rows += (f'<label{changed}><span>{esc(rule.text)}（{esc(unit)}）</span>'
+                 f'<input type="number" name="t:{rule.id}" value="{value:g}" min="{low * scale:g}" max="{high * scale:g}" '
+                 f'step="{step}" data-default="{default:g}">'
+                 f'<small class="mut">{esc(rule.id)} · 默认 {default:g}{esc(unit)} · 范围 {low * scale:g}–{high * scale:g} · {esc(assets)}</small></label>')
+    return ('<details class="import-details threshold-settings"><summary>判断口径（经验阈值，可调）</summary>'
+            '<p class="mut">这些是项目自己定的判断标准，尚未经样本检验；改了会生成新报告，旧报告不变。'
+            '交易所规则、税率和账务恒等式不在这里，不能改。<a href="/strategy-audits/rules">查看全部规则</a></p>'
+            f'<div class="review-fields">{rows}</div>'
+            '<button type="button" class="link" onclick="this.closest(\'details\').querySelectorAll(\'input[data-default]\')'
+            '.forEach(function(i){i.value=i.dataset.default})">全部恢复默认值</button></details>')
+
+
+def threshold_values(form):
+    """Read 判断口径 back; only values that differ from the defaults are stored as overrides."""
+    from . import audit_rules
+    out = {}
+    for rule in audit_rules.RULES.values():
+        raw = form.get('t:' + rule.id)
+        if rule.kind != 'threshold' or raw in (None, ''):
+            continue
+        value = float(raw) / (100 if rule.unit == '比例' else 1)
+        if abs(value - rule.value) > 1e-12:
+            out[rule.id] = value
+    return out
+
+
 def overview(identity, bundle, token, inherited=None):
     body = heading('策略导入 · 核对与补齐', '/strategy-audits', '我的策略')
     body += workflow(identity)
@@ -182,6 +225,7 @@ def overview(identity, bundle, token, inherited=None):
     checked = ' checked' if inherited and inherited.get('broker_confirmed') else ''
     body += (f'<label class="check"><input type="checkbox" name="broker_confirmed" value="yes"{checked}>'
              '上面的佣金和最低佣金是我券商合同的费率（不勾选时只作费率情景，不判断回测成本偏高或偏低）</label>')
+    body += threshold_fields((inherited or {}).get('thresholds'))
     body += '<input type="hidden" name="destination" value="workspace">'
     button = '完成导入，进入策略治理'
     disabled = '' if review['can_analyze'] else ' disabled'
@@ -858,6 +902,20 @@ def register(app, workdir, *, page, guard, token):
         _, bundle = load(identity)
         return template_download(kind, bundle['adapter'].removesuffix('_v1') if bundle['adapter'] != 'code_only_v1' else 'generic')
 
+    @app.get('/strategy-audits/rules')
+    def rules_page():
+        from . import audit_rules
+        body = heading('审计规则登记表', '/strategy-audits', '我的策略')
+        body += '<section class="review-section"><p>每条审计结论都标注它用到的规则编号。规则事实不可调；经验阈值是项目自己的判断，可在导入确认页的“判断口径”里调整。</p>'
+        for kind in ('fact', 'method', 'threshold'):
+            body += f'<h2>{audit_rules.KIND_NAMES[kind]}</h2><div class="tw"><table><tr><th>编号</th><th>内容</th><th>默认值</th><th>来源</th></tr>'
+            for r in audit_rules.RULES.values():
+                if r.kind == kind:
+                    value = audit_rules._fmt(r, r.value) if r.value is not None else ''
+                    body += f'<tr><td>{esc(r.id)}</td><td>{esc(r.text)}</td><td>{esc(value)}</td><td>{esc(r.source)}</td></tr>'
+            body += '</table></div>'
+        return page('审计规则', body + '</section>')
+
     @app.get('/strategy-audits/sample.zip')
     def sample():
         stream = io.BytesIO()
@@ -966,6 +1024,7 @@ def register(app, workdir, *, page, guard, token):
             settings = {key: float(form[key]) for key in ('commission_bp', 'minimum_commission', 'max_weight')}
             settings['max_weight'] /= 100
             settings['broker_confirmed'] = form.get('broker_confirmed') == 'yes'
+            settings['thresholds'] = threshold_values(form)
             policy = {'validation_fraction': float(form.get('validation_fraction', 25)) / 100,
                       'minimum_triggers': float(form.get('minimum_triggers', 20)),
                       'purge_days': float(form.get('purge_days', 20))}

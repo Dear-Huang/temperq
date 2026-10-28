@@ -81,25 +81,42 @@ def _tick_card(tick):
     }
 
 
-def _holding_card(holding, edits):
+def _split_lots(holding, keep):
+    """Closed FIFO lots split by a threshold; falls back to the fixed bands for old reports without lots."""
+    lots = holding.get("closed")
+    if lots is None:
+        return None
+    hit = [l for l in lots if keep(l)]
+    rest = [l for l in lots if not keep(l)]
+    total = lambda rows, key: sum(r[key] for r in rows)
+    return {"n": len(hit), "rest": len(rest), "after": total(hit, "net_after_tick_scenario"),
+            "cost": total(hit, "fees") + total(hit, "tick_scenario_cost")}
+
+
+def _holding_card(holding, edits, t=None):
     bands = holding.get("closed_age_bands") or []
     summary = holding.get("closed_summary") or {}
     if holding.get("status") != "verified" or not summary.get("matches"):
         return None
+    days = int((t or {}).get("T-HOLD-SHORT", 5))
     rows = [{"label": b["label"], "matches": b["matches"], "net": b["net_pnl"],
              "net_after_tick": b["net_after_tick_scenario"]} for b in bands if b["matches"]]
-    short = [b for b in bands if b["id"] in {"0_to_2", "3_to_5"}]
-    short_n = sum(b["matches"] for b in short)
-    long_n = sum(b["matches"] for b in bands if b["id"] not in {"0_to_2", "3_to_5"})
-    short_after = sum(b["net_after_tick_scenario"] for b in short)
-    short_cost = sum(b["fees"] + b["tick_scenario_cost"] for b in short)
+    split = _split_lots(holding, lambda l: l["calendar_days"] <= days)
+    if split is not None:
+        short_n, long_n, short_after, short_cost = split["n"], split["rest"], split["after"], split["cost"]
+    else:
+        short = [b for b in bands if b["id"] in {"0_to_2", "3_to_5"}]
+        short_n = sum(b["matches"] for b in short)
+        long_n = sum(b["matches"] for b in bands if b["id"] not in {"0_to_2", "3_to_5"})
+        short_after = sum(b["net_after_tick_scenario"] for b in short)
+        short_cost = sum(b["fees"] + b["tick_scenario_cost"] for b in short)
     if not short_n:
         return None
     losing = short_after < 0
     few = long_n < max(5, short_n // 4)
     return {
         "id": "holding_period", "state": "review" if losing else "hold", "title": "持有期是否太短",
-        "finding": f"已平仓 {summary['matches']} 笔中，持有 5 个自然日以内的有 {short_n} 笔，付出费用和价差约 {_yuan(short_cost)}，"
+        "finding": f"已平仓 {summary['matches']} 笔中，持有 {days} 个自然日以内的有 {short_n} 笔，付出费用和价差约 {_yuan(short_cost)}，"
                    f"扣完后合计 {_yuan(short_after)}；持有更久的 {long_n} 笔" + ("，样本少，不能下结论。" if few else "。"),
         "headline": (f"短持有交易扣完成本后亏 {_yuan(-short_after)}，值得试着拿久一点" if losing
                      else f"短持有交易扣完成本后仍赚 {_yuan(short_after)}，拿久一点可能丢掉这部分，暂不改"),
@@ -224,23 +241,37 @@ def _minimum_card(fees, edits, t=None):
     }
 
 
-def _price_card(holding, tick, edits):
+def _price_card(holding, tick, edits, t=None):
     """Low-priced stocks pay the widest tick spread; say whether they still earned their keep."""
-    bands = {b["id"]: b for b in holding.get("entry_price_bands") or []}
-    cheap = (bands.get("under_5") or {}).get("closed") or {}
-    share = next((b["notional_share"] for b in tick.get("price_bands") or [] if b["id"] == "under_5"), 0)
-    if holding.get("status") != "verified" or not cheap.get("matches") or share < .05:
+    from .securities import asset_class
+    floor = float((t or {}).get("T-PRICE-LOW", 5.))
+    cheap_stock = lambda code, price: asset_class(code) == "stock" and price < floor
+    fills = tick.get("fills")
+    if fills is not None:
+        total_value = sum(f["notional"] for f in fills)
+        share = sum(f["notional"] for f in fills if cheap_stock(f["code"], f["price"])) / total_value if total_value else 0
+    else:
+        share = next((b["notional_share"] for b in tick.get("price_bands") or [] if b["id"] == "under_5"), 0)
+    split = _split_lots(holding, lambda l: cheap_stock(l["code"], l["entry_price"]))
+    if split is not None:
+        cheap = {"matches": split["n"], "net_after_tick_scenario": split["after"], "cost": split["cost"]}
+    else:
+        bands = {b["id"]: b for b in holding.get("entry_price_bands") or []}
+        cheap = (bands.get("under_5") or {}).get("closed") or {}
+        if cheap:
+            cheap = {**cheap, "cost": cheap["fees"] + cheap["tick_scenario_cost"]}
+    if holding.get("status") != "verified" or not cheap.get("matches") or (share or 0) < .05:
         return None
-    after, cost = cheap["net_after_tick_scenario"], cheap["fees"] + cheap["tick_scenario_cost"]
+    after, cost = cheap["net_after_tick_scenario"], cheap["cost"]
     losing = after < 0
     return {
         "id": "low_price", "state": "review" if losing else "hold", "title": "低价股是否太多",
-        "finding": f"低于 5 元的股票占成交额 {share:.0%}，已平仓 {cheap['matches']} 笔，付出费用和价差约 {_yuan(cost)}，扣完后合计 {_yuan(after)}。",
+        "finding": f"低于 {floor:g} 元的股票占成交额 {share:.0%}，已平仓 {cheap['matches']} 笔，付出费用和价差约 {_yuan(cost)}，扣完后合计 {_yuan(after)}。",
         "headline": (f"低价股扣完成本后亏 {_yuan(-after)}，可以加价格门槛" if losing
                      else f"低价股扣完成本后仍赚 {_yuan(after)}，加价格门槛会丢掉这部分，暂不改"),
         "edits": edits.get("price", []),
         "options": [{"label": "维持原样", "effect": "低价股本身赚钱时，价差只是成本的一部分"},
-                    {"label": "选股时排除 5 元以下", "effect": "直接去掉价差最贵的一段"}],
+                    {"label": f"选股时排除 {floor:g} 元以下", "effect": "直接去掉价差最贵的一段"}],
         "saving": f"这部分的费用和价差约 {_yuan(cost)}",
         "sacrifice": f"这些交易扣完成本后合计 {_yuan(after)}，剔除后由其他股票顶上，结果要重跑才知道",
         "net": "需回原平台重跑，用效果验证比较",
@@ -335,8 +366,8 @@ def cards(result, bundle=None):
                  "buffer": audit_levers.buffer(levers, (modules.get("signal_mapping") or {}).get("buffer_rank", 2)),
                  "cash_buffer": audit_levers.cash_buffer(levers, thresholds["T-CASH-BUFFER"])}
     out = [_tick_card(modules.get("tick_analysis") or {}),
-           _holding_card(modules.get("holding_analysis") or {}, edits),
-           _price_card(modules.get("holding_analysis") or {}, modules.get("tick_analysis") or {}, edits),
+           _holding_card(modules.get("holding_analysis") or {}, edits, thresholds),
+           _price_card(modules.get("holding_analysis") or {}, modules.get("tick_analysis") or {}, edits, thresholds),
            _fee_card(fees_module, edits, modules.get("fee_model"), thresholds),
            _minimum_card(fees_module, edits, thresholds),
            _churn_card(modules.get("signal_mapping"), edits, result.get("opening_state"), thresholds),
