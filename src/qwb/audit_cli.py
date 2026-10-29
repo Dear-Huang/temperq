@@ -112,6 +112,8 @@ def summary(bundle, result):
         "premise": premise and {k: premise.get(k) for k in ("premise", "source", "status", "verdict", "overall",
                                                             "spread_mean", "spread_t", "held_years", "reversed_years")},
         "attribution": attr and attr["summary"],
+        "fill_timing": (lambda t: t and {k: t.get(k) for k in ("status", "verdict", "open_share", "low", "high", "net_pnl",
+                                                               "max_volume_share", "scope")})(result["modules"].get("fill_timing")),
         "findings": [{"title": c["title"], "state": c["state"], "evidence": c["evidence"], "headline": c["headline"],
                       "finding": c.get("finding"), "overturn": c.get("overturn")} for c in cards],
         "stages": [{"title": v["title"], "state": v["state"], "reason": v["reason"]} for v in verdicts],

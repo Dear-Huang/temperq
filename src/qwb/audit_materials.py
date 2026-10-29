@@ -10,6 +10,7 @@ MATERIALS = {
     'snapshots': ('账户汇总', '每个交易日的总权益与现金，与持仓和成交保持同次回测。'),
     'logs': ('运行日志', '保留原始时间、级别和内容。普通日志不能替代完整订单生命周期。'),
     'orders': ('委托详情', '每笔委托的提交、成交与撤单；用于解释信号选中却没买到的原因。'),
+    'minute_prices': ('成交日分钟价', '成交日每只成交标的的分钟收盘价（date, time, code, close，可加 open、volume），用于检验成交时点敏感性；只需成交日，可只给 09:31–14:50 的整点和半点。'),
     'prices': ('候选池收盘价', '候选池每只标的每个交易日的收盘价（date, code, close），用于检验策略前提；不只填买入的标的。'),
     'scores': ('每日打分', '覆盖每日候选池，不只填最终入选股票；available_at为当时实际可用时间。'),
     'quote_observations': ('日均报价价差', '仅用于量级核对，不是实际成交成本；measurement_scope填daily_quote_mean。'),
@@ -36,6 +37,7 @@ def template(kind, adapter='generic'):
         'snapshots': 'date,equity,cash',
         'logs': '时间,级别,内容',
         'scores': 'date,code,score,available_at',
+        'minute_prices': 'date,time,code,close,open,volume',
         'prices': 'date,code,close',
         'quote_observations': 'date,code,quoted_spread_bp,sample_count,measurement_scope',
     }
@@ -109,6 +111,7 @@ def material_kind(source):
         ('positions', {'合约代码', '仓位', '最新价'}),
         ('snapshots', {'账户类型', '可用资金', '总权益'}),
         ('scores', {'date', 'code', 'score'}),
+        ('minute_prices', {'date', 'time', 'code', 'close'}),
         ('prices', {'date', 'code', 'close'}),
         ('scores', {'datetime', 'rank', 'order_book_id'}),
         ('orders', {'event', 'order_id', 'status', 'filled_quantity'}),

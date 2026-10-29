@@ -14,7 +14,7 @@ from .audit_fee_units import order_fields, validate_orders
 
 SCHEMA = "strategy_export_v1"
 # Trades, positions, account, code, log, scores, candidate prices, plus the extras a native report writes.
-MAX_FILES = 10
+MAX_FILES = 16
 MAX_FILE_BYTES = 8_000_000
 MAX_TOTAL_BYTES = 24_000_000
 MAX_ROWS = 50_000
@@ -251,7 +251,7 @@ def bigquant(files, *, name, opening_cash=None):
               "opening": {"kind": "empty" if opening_cash is not None else "first_close",
                           "cash": opening_cash},
               "fills": [], "positions": [], "snapshots": [], "actions": [],
-              "logs": [], "external_attribution": [], "quote_observations": [], "scores": [], "prices": [], "code": {}, "sources": []}
+              "logs": [], "external_attribution": [], "quote_observations": [], "scores": [], "prices": [], "minute_prices": [], "code": {}, "sources": []}
     seen = set()
     for source in files:
         text, encoding = decode_source(source)

@@ -360,6 +360,22 @@ def render(record, bundle, result):
             rows.append(("年化双边换手（成交额 / 期初权益）", f'{notional / perf["start_equity"] / perf["years"]:.1f} 倍'))
     h.append('<div class="tw"><table><tr><th>项目</th><th class="n">数值</th></tr>' + "".join(f'<tr><td>{a}</td><td class="n">{b}</td></tr>' for a, b in rows) + '</table></div>')
     h.append('<p class="mut">价差为按最小价位估算的情景，不是实测成本；原回测若已计滑点，需先分离再比较。逐笔费用见附件 fees.csv、tick-costs.csv。</p>')
+    timing = modules.get("fill_timing")
+    if timing:
+        h.append('<h3>成交时点敏感性</h3>')
+        if timing.get("open_share") is not None:
+            h.append(f'<p>{timing["timed_fills"]} 笔有成交时间，{timing["open_fills"]} 笔在 {timing["open_by"]} 以前成交，'
+                     f'占成交额 {timing["open_share"]:.0%}。</p>')
+        tone = {"sensitive": "evidence", "stable": "pass"}.get(timing["status"], "evidence")
+        h.append(f'<p><span class="tag {tone}">结论</span>{esc(timing["verdict"])}</p>')
+        if timing.get("rows"):
+            h.append('<div class="tw"><table><tr><th>换到这个时点成交</th><th class="n">笔数</th><th class="n">盈亏变化</th>'
+                     '<th class="n">每边（bp）</th><th class="n">成交额覆盖</th></tr>' + "".join(
+                f'<tr><td>{esc(r["label"])}</td><td class="n">{r["fills"]}</td><td class="n{" neg" if r["gain"] < 0 else ""}">{_yuan(r["gain"])}</td>'
+                f'<td class="n">{r["gain_bp"]:+.1f}</td><td class="n">{_pct(r["coverage"], 0)}</td></tr>' for r in timing["rows"]) + '</table></div>')
+        if timing.get("max_volume_share") is not None:
+            h.append(f'<p>单笔成交最多占当分钟成交量的 {timing["max_volume_share"]:.0%}（核对 {timing["volume_checked"]} 笔）。</p>')
+        h.append(f'<p class="mut">{esc(timing["scope"])}。正数表示换到该时点成交会更好。</p>')
 
     # 6. Findings
     h.append('<h2>六、发现与建议</h2>')

@@ -129,7 +129,7 @@ def upload_form(token, error=""):
 <label>导出平台<select name="adapter"><option value="auto">自动识别</option><option value="bigquant">BigQuant</option><option value="joinquant">聚宽</option><option value="ricequant">米筐</option><option value="generic">其他 / 标准 CSV</option></select></label>
 <label>风格（可留空，由你确认）<input name="style" maxlength="40" placeholder="例如短期反转、趋势、多因子"></label>
 </div><p class="notice">推荐至少 2 年，最好 3 年以上，并覆盖至少一段明显下跌。较短回测也可导入，报告会区分可核账目与规则效果。</p>
-<label>原样上传代码、交易和可选持仓、日志、每日打分；平台下载的 ZIP 不用解压（最多10个文件）<input type="file" name="files" accept=".csv,.txt,.py,.zip" multiple></label>
+<label>原样上传代码、交易和可选持仓、日志、每日打分；平台下载的 ZIP 不用解压（最多16个文件）<input type="file" name="files" accept=".csv,.txt,.py,.zip" multiple></label>
 <details><summary>也可以直接粘贴策略代码</summary><label>策略代码<textarea name="code_text" rows="7" maxlength="200000" placeholder="只读解析，不运行代码；已上传代码文件时不必再粘贴"></textarea></label></details>
 <p class="mut">代码必填；仅有代码时可做静态检查。交易必填，聚宽持仓可推算净变动；持仓强烈推荐、日志推荐、每日打分选填。支持 UTF-8 / GBK，不用改列名。</p>
 <details open class="platform-guide"><summary>各平台怎么导出、能拿到什么</summary>
@@ -225,7 +225,7 @@ def overview(identity, bundle, token, inherited=None):
     fill_label = '条持仓净变动（由持仓推算）' if review['fills_inferred'] else '笔成交'
     body += f'<p class="review-meta">{period} · {len(days)} 个账户快照 · {len(bundle["fills"])} {fill_label}</p>'
     body += '<section class="review-section"><h2>01 · 材料核对</h2><div class="tw"><table><tr><th>文件</th><th>识别类型</th><th>行数</th></tr>'
-    labels = {"fills": "交易", "positions": "持仓与账户汇总", "snapshots": "账户汇总", "logs": "日志", "code": "策略代码", "external_attribution": "平台归因（待核口径）", "quote_observations": "日均报价价差（核对用途）", 'scores': '每日打分', 'platform_returns': '平台收益表（核对用途）', 'orders': '委托详情', 'auxiliary': '辅助表（不参与审计）', 'platform_summary': '平台绩效汇总（核对用途）', 'prices': '候选池收盘价'}
+    labels = {"fills": "交易", "positions": "持仓与账户汇总", "snapshots": "账户汇总", "logs": "日志", "code": "策略代码", "external_attribution": "平台归因（待核口径）", "quote_observations": "日均报价价差（核对用途）", 'scores': '每日打分', 'platform_returns': '平台收益表（核对用途）', 'orders': '委托详情', 'auxiliary': '辅助表（不参与审计）', 'platform_summary': '平台绩效汇总（核对用途）', 'prices': '候选池收盘价', 'minute_prices': '成交日分钟价', 'empty': '空表（无数据）'}
     for source in bundle["sources"]:
         body += f'<tr><td>{esc(source["name"])}</td><td>{labels[source["kind"]]} · {esc(source.get("encoding", "历史记录"))}</td><td>{source["rows"]}</td></tr>'
     body += '</table></div>'
@@ -442,7 +442,12 @@ def action_cards(result, bundle=None, reruns=None):
         body += f'<article class="action-card action-{card["state"]}" id="action-{card["id"]}">'
         body += f'<header><span class="action-state">{audit_actions.STATES[card["state"]]}</span><h3>{esc(card["title"])}</h3></header>'
         body += f'<p class="action-headline">{esc(card["headline"])}</p><p>{esc(card["finding"])}</p>'
-        if card.get("table"):
+        if card.get("table") and card.get("table_kind") == "timing":
+            body += '<div class="tw"><table><tr><th>换到这个时点成交</th><th>笔数</th><th>盈亏变化</th><th>成交额覆盖</th></tr>'
+            for row in card["table"]:
+                body += f'<tr><td>{esc(row["label"])}</td><td>{row["fills"]}</td><td>¥{money(row["gain"])}</td><td>{pct(row["coverage"])}</td></tr>'
+            body += '</table></div>'
+        elif card.get("table"):
             body += '<div class="tw"><table><tr><th>持有期</th><th>笔数</th><th>净盈亏</th><th>扣价差情景后</th></tr>'
             for row in card["table"]:
                 body += f'<tr><td>{esc(row["label"])}</td><td>{row["matches"]}</td><td>¥{money(row["net"])}</td><td>¥{money(row["net_after_tick"])}</td></tr>'

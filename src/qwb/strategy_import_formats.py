@@ -182,7 +182,7 @@ def other_platform(files, *, adapter, name, opening_cash=None):
     result = {'schema_version': SCHEMA, 'adapter': adapter + '_v1', 'name': name,
         'opening': {'kind': 'empty' if opening_cash is not None else 'first_close', 'cash': opening_cash},
         'fills': [], 'positions': [], 'snapshots': [], 'actions': [], 'logs': [],
-        'external_attribution': [], 'quote_observations': [], 'scores': [], 'prices': [], 'code': {}, 'sources': [],
+        'external_attribution': [], 'quote_observations': [], 'scores': [], 'prices': [], 'minute_prices': [], 'code': {}, 'sources': [],
         'quality': {'fills_inferred': False, 'holdings_header_repaired': False,
                     'price_basis': 'unconfirmed', 'snapshots_complete': False}}
     seen, cash, assets = set(), {}, {}
@@ -414,6 +414,20 @@ def other_platform(files, *, adapter, name, opening_cash=None):
                         'selected': flag in {'true', '1', 'yes', '是'} if flag else None,
                         'available_at': stamp[11:19] if len(stamp) > 10 else row.get('available_at', ''),
                         'ref': _ref(kind, index)})
+            elif {'date', 'time', 'code', 'close'} <= fields and 'quantity' not in fields:
+                # Minute prices on fill days, for checking how much the result depends on the fill minute.
+                kind = 'minute_prices'
+                for index, row in rows:
+                    from .audit_timing import hhmm
+                    minute = hhmm(row['time'])
+                    if not minute:
+                        raise ValueError(f'分钟价第 {index} 行：time 须为 HH:MM 或 HH:MM:SS')
+                    opened = (row.get('open') or '').strip()
+                    vol = (row.get('volume') or '').strip()
+                    result['minute_prices'].append({'date': date_value(row['date'], '分钟价日期'), 'time': minute,
+                        'code': code_value(row['code']), 'close': numeric(row['close'], '分钟收盘价'),
+                        'open': numeric(opened, '分钟开盘价') if opened else None,
+                        'volume': numeric(vol, '分钟成交量') if vol else None, 'ref': _ref(kind, index)})
             elif {'date', 'code', 'close'} <= fields and 'quantity' not in fields:
                 # Candidate closing prices, for checking the strategy's premise across its whole pool.
                 kind = 'prices'

@@ -217,7 +217,11 @@ def coverage(bundle, result):
         "costs": [algorithm("逐笔费用核验与合单情景", "connected" if cost else "not_connected"), algorithm("完整STRUCT流动性分量", "not_connected", "missing", ["历史原始行情和上月校准特征", "适用域与成本模型选择"])],
         "capacity": [algorithm("参与预算与可达金额", "not_implemented", "missing", STAGES[8]["needs"])],
         "completion": [algorithm("情景供给下完成期限", "not_implemented", "missing", STAGES[9]["needs"])],
-        "execution": [algorithm("库存必要条件与成交核验", inputs=reconciled), algorithm("实现短缺及延迟分解", "not_implemented", "missing", ["带时点的目标订单、决策价及完整生命周期"])],
+        "execution": [algorithm("库存必要条件与成交核验", inputs=reconciled),
+                      algorithm("成交时点敏感性", inputs="ready" if (modules.get("fill_timing") or {}).get("status") in ("sensitive", "stable", "unscaled")
+                                else "missing", missing=[] if (modules.get("fill_timing") or {}).get("status") in ("sensitive", "stable", "unscaled")
+                                else ["成交时间与成交日分钟价（date, time, code, close）"]),
+                      algorithm("实现短缺及延迟分解", "not_implemented", "missing", ["带时点的目标订单、决策价及完整生命周期"])],
         "account_integrity": [algorithm("库存、现金、公司行动与盈亏桥", inputs=reconciled)],
         "attribution": [algorithm("逐股及回撤期会计贡献", inputs=reconciled), algorithm("基准/风格与可行反事实分解", "not_implemented", "missing", ["时点基准、因子收益及构建目标历史"])],
         "validation": [algorithm("输入和结果摘要核对"), algorithm("历史政策配对复验", "not_implemented", "missing", ["共同日期的冻结候选路径", "尝试登记和独立验证段"])],

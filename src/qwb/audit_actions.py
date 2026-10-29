@@ -20,12 +20,47 @@ _RULES = {
     "minimum_commission": ("F-MIN-COMMISSION", "T-MIN-COMM-MATERIAL"),
     "rank_churn": ("M-RANK-REPLAY", "M-FIFO", "T-BUFFER-RANK", "T-WHIPSAW-DAYS", "T-CHURN-SHARE", "T-CHURN-MIN"),
     "cash_buffer": ("T-CASH-SHORT", "T-CASH-BUFFER"),
+    "fill_timing": ("M-FILL-TIMING", "T-TIMING-SHARE"),
 }
 STATES = {"act": "建议处理", "review": "建议核对", "hold": "暂不改"}
 
 
 def _yuan(value):
     return f"¥{value:,.0f}"
+
+
+def _timing_card(timing):
+    """Does the result depend on the minute the orders filled? Only from minute prices the user supplied."""
+    if not timing or timing.get("status") not in ("sensitive", "stable"):
+        return None
+    sensitive = timing["status"] == "sensitive"
+    worst = min(timing["rows"], key=lambda r: r["gain"])
+    best = max(timing["rows"], key=lambda r: r["gain"])
+    flatter = timing.get("open_flatters")
+    finding = (f"{timing['timed_fills']} 笔有成交时间，其中 {timing['open_fills']} 笔在 {timing['open_by']} 以前成交"
+               f"（成交额占 {timing['open_share']:.0%}）。固定股数和费用，只把成交价换成同日其他时点：最差是 {worst['label']}，"
+               f"盈亏 {_yuan(worst['gain'])}；最好是 {best['label']}，盈亏 {_yuan(best['gain'])}；回测净盈亏 {_yuan(timing['net_pnl'])}。")
+    if timing.get("max_volume_share") is not None:
+        finding += f"单笔成交最多占当分钟成交量的 {timing['max_volume_share']:.0%}。"
+    return {
+        "id": "fill_timing", "state": "review" if sensitive else "hold", "title": "成交时点是否决定了结论",
+        "finding": finding,
+        "headline": (("所有对照时点都比回测用的时点差，回测按这个时点成交偏乐观" if flatter else
+                      "换个时点成交，盈亏变化和净盈亏同一量级：结论依赖成交时点") if sensitive
+                     else "换个时点成交，盈亏变化远小于净盈亏：成交时点不改变结论"),
+        "edits": [],
+        "options": [{"label": "维持原样", "effect": "实盘确实能在回测时点按该价成交时（例如开盘竞价挂单且金额小）"},
+                    {"label": "改为更可执行的时点或价格", "effect": "回原平台改调仓时点或改用开盘价/均价撮合重跑，再到『效果验证』比较"},
+                    {"label": "分笔或延后执行", "effect": "单笔占当分钟成交量大时，分到多个分钟成交"}],
+        "saving": "不省钱；回测结果更接近实盘能拿到的价格",
+        "sacrifice": f"按对照时点计，盈亏最多少 {_yuan(-worst['gain'])}" if worst["gain"] < 0 else "对照时点都不更差",
+        "net": "只换成交价、不重跑决策；换时点后策略的选股可能也会变，需回原平台重跑确认",
+        "evidence": "scenario",
+        "basis": "按用户提供的分钟价重算成交价；股数、费用和交易日期不变",
+        "overturn": "实盘成交记录显示能在回测时点按回测价成交；或换时点重跑后选股和盈亏都不变。",
+        "table_kind": "timing",
+        "table": [{"label": r["label"], "fills": r["fills"], "gain": r["gain"], "coverage": r["coverage"]} for r in timing["rows"]],
+    }
 
 
 def _tick_card(tick):
@@ -396,7 +431,8 @@ def cards(result, bundle=None):
            _fee_card(fees_module, edits, modules.get("fee_model"), thresholds),
            _minimum_card(fees_module, edits, thresholds),
            _churn_card(modules.get("signal_mapping"), edits, result.get("opening_state"), thresholds),
-           _cash_buffer_card(modules.get("signal_mapping"), edits, thresholds)]
+           _cash_buffer_card(modules.get("signal_mapping"), edits, thresholds),
+           _timing_card(modules.get("fill_timing"))]
     order = {"act": 0, "review": 1, "hold": 2}
     cards = sorted((c for c in out if c), key=lambda c: order[c["state"]])
     for card in cards:

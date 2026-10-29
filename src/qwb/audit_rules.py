@@ -62,6 +62,8 @@ RULES = {r.id: r for r in (
     Rule("T-DD-TOLERANCE", "threshold", "改版最大回撤比原版多出这么多（百分点）就不算更好", UNTESTED, .01, "比例", range=(0., .2)),
     Rule("T-PREMISE-T", "threshold", "IC 均值的 t 统计量达到这个值，才说前提成立或反了（全期与各分段相同）", UNTESTED, 2., "", range=(1., 5.)),
     Rule("T-PREMISE-MIN-PERIODS", "threshold", "至少这么多个调仓周期才检验前提", UNTESTED, 20, "期", range=(5, 500)),
+    Rule("T-TIMING-SHARE", "threshold", "换个成交时点，盈亏变化达到净盈亏的这个比例，就说结论依赖成交时点", UNTESTED, .25, "比例", range=(.01, 1.)),
+    Rule("M-FILL-TIMING", "method", "固定原成交股数和费用，把成交价换成同日其他分钟的收盘价，比较盈亏；不重跑策略决策", "本项目，见 audit_timing"),
     Rule("T-FEE-GAP-MIN", "threshold", "费用差额至少这么多元才出现费用卡", UNTESTED, 1., "元", range=(0., 1000.)),
 )}
 

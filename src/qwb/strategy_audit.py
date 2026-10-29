@@ -220,6 +220,10 @@ def analyze(bundle, settings=None, *, policy=None):
         context["premise"] = checked
     if signals:
         context["signal_mapping"] = signals
+    from . import audit_timing
+    timing = audit_timing.analyze(bundle, context["accounting"], thresholds)
+    if timing:
+        context["fill_timing"] = timing
     settings = {**settings, "broker_confirmed": broker_confirmed, **({"premise": premise} if premise else {}),
                 **({"thresholds": {k: v for k, v in thresholds.items() if v != audit_rules.defaults()[k]}}
                    if thresholds != audit_rules.defaults() else {})}
