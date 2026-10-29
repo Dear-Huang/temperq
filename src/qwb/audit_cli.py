@@ -1,0 +1,177 @@
+"""`qwb audit`: the strategy audit without the web page.
+
+    qwb audit check <材料目录>              import only: what each file was read as, whether the books close
+    qwb audit run   <材料目录> --out <目录>  full audit: report.html, summary.json, evidence.json, evidence CSVs
+
+Both read a directory of platform exports or standard-format CSVs (see docs/AUDIT_SKILL_FORMAT.md).
+Every figure in the outputs comes from the audit engine; nothing here estimates or rewrites a number.
+"""
+from __future__ import annotations
+
+import json
+import sys
+from pathlib import Path
+
+ACCEPTED = (".csv", ".txt", ".py", ".zip")
+
+
+def add_parser(sub):
+    parser = sub.add_parser("audit", help="audit a backtest from exported files (no web page)")
+    commands = parser.add_subparsers(dest="audit_cmd", required=True)
+    for name, text in (("check", "import only; report what was recognised and whether the books close"),
+                       ("run", "full audit; write report.html, summary.json, evidence.json and CSVs")):
+        cmd = commands.add_parser(name, help=text)
+        cmd.add_argument("materials", help="directory of exported files")
+        cmd.add_argument("--name", default="", help="strategy name shown in the report")
+        cmd.add_argument("--opening-cash", type=float, help="declare an empty opening account with this cash")
+        if name == "run":
+            cmd.add_argument("--out", required=True, help="new output directory")
+            cmd.add_argument("--commission-bp", type=float, help="commission scenario in bp (default: from code, else 3)")
+            cmd.add_argument("--min-commission", type=float, help="minimum commission in yuan (default: from code, else 5)")
+            cmd.add_argument("--max-weight", type=float, help="single-name cap in percent (default: 100)")
+            cmd.add_argument("--broker-confirmed", action="store_true", help="the commission given is the broker contract rate")
+            cmd.add_argument("--premise-text", default="", help="the user's own premise, one sentence")
+            cmd.add_argument("--premise-direction", choices=("higher", "lower"), help="higher or lower scores are better")
+        cmd.add_argument("--json", action="store_true", help="print the machine-readable result only")
+
+
+def _files(directory):
+    from .strategy_imports import SourceFile
+    folder = Path(directory)
+    if not folder.is_dir():
+        raise ValueError(f"{directory} 不是目录")
+    paths = sorted(p for p in folder.iterdir() if p.is_file() and p.suffix.lower() in ACCEPTED)
+    skipped = sorted(p.name for p in folder.iterdir() if p.is_file() and p.suffix.lower() not in ACCEPTED)
+    if not paths:
+        raise ValueError(f"{directory} 里没有 CSV/TXT/PY/ZIP 文件")
+    return [SourceFile(p.name, p.read_bytes()) for p in paths], skipped
+
+
+def load(args):
+    from . import strategy_imports as imports
+    files, skipped = _files(args.materials)
+    bundle = imports.normalize(files, adapter="auto", name=(args.name or Path(args.materials).resolve().name)[:80],
+                               opening_cash=args.opening_cash)
+    return bundle, skipped
+
+
+def check(args):
+    """What the engine read; used to verify a format conversion before the full audit."""
+    from . import audit_input, strategy_audit as audit
+    bundle, skipped = load(args)
+    review = audit_input.review(bundle)
+    out = {"status": "imported", "platform": review.get("platform"), "mode": review["mode"],
+           "files": [{"name": s["name"], "read_as": s["kind"], "rows": s["rows"]} for s in bundle["sources"]],
+           "skipped_files": skipped,
+           "counts": {k: len(bundle.get(k) or []) for k in ("fills", "positions", "snapshots", "scores", "prices", "logs")},
+           "period": [bundle["snapshots"][0]["date"], bundle["snapshots"][-1]["date"]] if bundle["snapshots"] else None,
+           "parameters": {p["key"]: {"value": p["value"], "source": p["source"]} for p in review["parameters"]},
+           "checks": [{"title": c["title"], "status": c["status"], "detail": c["detail"]} for c in review["checks"]]}
+    if review["mode"] == "full":
+        account = audit.accounting(bundle)
+        out["books"] = account["status"]
+        out["book_failures"] = [{"check": s["key"], "failures": s["failures"], "of": s["count"]}
+                                for s in account["summary"] if s["failures"]]
+        out["first_exceptions"] = [{k: e.get(k) for k in ("key", "date", "code", "gap")} for e in account["exceptions"][:5]]
+    return out
+
+
+def settings_for(bundle, args):
+    from . import audit_input
+    found = {p["key"]: p["value"] for p in audit_input.review(bundle)["parameters"]}
+    pick = lambda given, key, default: float(given if given is not None else
+                                             found.get(key) if isinstance(found.get(key), (int, float)) else default)
+    settings = {"commission_bp": pick(args.commission_bp, "commission_bp", 3.),
+                "minimum_commission": pick(args.min_commission, "minimum_commission", 5.),
+                "max_weight": (args.max_weight if args.max_weight is not None else 100.) / 100,
+                "broker_confirmed": bool(args.broker_confirmed)}
+    if args.premise_text or args.premise_direction:
+        settings["premise"] = {"text": args.premise_text.strip()[:200], "direction": args.premise_direction or ""}
+    return settings
+
+
+def summary(bundle, result):
+    """The audit's own conclusions in machine-readable form: what the skill may quote, nothing more."""
+    from . import audit_actions, audit_attribution, audit_report, audit_verdicts
+    perf = audit_report.performance(bundle)
+    cards = audit_actions.cards(result, bundle)
+    verdicts = audit_verdicts.conclusions(bundle, result)
+    premise = result["modules"].get("premise")
+    attr = audit_attribution.build(result) if result.get("mode", "full") == "full" else None
+    return {
+        "schema": "qwb_audit_summary_v1", "strategy": bundle["name"], "mode": result.get("mode", "full"),
+        "period": [bundle["snapshots"][0]["date"], bundle["snapshots"][-1]["date"]] if bundle["snapshots"] else None,
+        "input_digest": result["input_digest"], "result_digest": result["result_digest"],
+        "settings": result.get("settings"),
+        "conclusions": [{"tone": tone, "text": text} for tone, text in
+                        audit_report.headline(bundle, result, perf, premise, cards, verdicts)],
+        "books": (result["modules"].get("accounting") or {}).get("status"),
+        "performance": perf and {k: perf.get(k) for k in ("total", "annual", "volatility", "sharpe", "max_drawdown",
+                                                          "benchmark_total", "excess_total", "information_ratio", "basis")},
+        "platform_check": audit_report.platform_check(bundle, perf) if perf else [],
+        "premise": premise and {k: premise.get(k) for k in ("premise", "source", "status", "verdict", "overall",
+                                                            "spread_mean", "spread_t", "held_years", "reversed_years")},
+        "attribution": attr and attr["summary"],
+        "findings": [{"title": c["title"], "state": c["state"], "evidence": c["evidence"], "headline": c["headline"],
+                      "finding": c.get("finding"), "overturn": c.get("overturn")} for c in cards],
+        "stages": [{"title": v["title"], "state": v["state"], "reason": v["reason"]} for v in verdicts],
+        "scope": audit_report.scope(result),
+    }
+
+
+def run(args):
+    from . import audit_exports, audit_report, experiments as ex, strategy_audit as audit
+    from .governance_review_ui import csv_text
+    out = Path(args.out)
+    if out.exists() and any(out.iterdir()):
+        raise ValueError(f"{out} 已存在且不为空；审计输出不覆盖旧结果")
+    bundle, skipped = load(args)
+    settings = settings_for(bundle, args)
+    result = audit.analyze(bundle, settings)
+    result["confirmation"] = {"same_run": True, "settings": settings, "via": "qwb audit run",
+                              "scope": "report_assumptions_only_not_live_rules"}
+    result["result_digest"] = ex.object_digest({k: v for k, v in result.items() if k != "result_digest"})
+    out.mkdir(parents=True, exist_ok=True)
+    record = {"created_at": _now(), "skipped_files": skipped}
+    document = ('<!doctype html><html lang="zh-CN"><head><meta charset="utf-8">'
+                '<meta name="viewport" content="width=device-width,initial-scale=1"></head><body>'
+                + audit_report.render(record, bundle, result) + "</body></html>")
+    (out / "report.html").write_text(document, encoding="utf-8")
+    brief = summary(bundle, result)
+    (out / "summary.json").write_text(json.dumps(brief, ensure_ascii=False, indent=1, default=str), encoding="utf-8")
+    (out / "evidence.json").write_text(json.dumps({"record": record, "input": bundle, "result": result},
+                                                  ensure_ascii=False, default=str), encoding="utf-8")
+    written = ["report.html", "summary.json", "evidence.json"]
+    for kind in audit_exports.available(result):
+        rows, columns = audit_exports.table(result, kind)
+        (out / f"{kind}.csv").write_text("﻿" + csv_text(rows, columns), encoding="utf-8")
+        written.append(f"{kind}.csv")
+    return {"status": "done", "out": str(out), "files": written, "conclusions": brief["conclusions"],
+            "books": brief["books"], "skipped_files": skipped}
+
+
+def _now():
+    from datetime import datetime
+    return datetime.now().isoformat(timespec="seconds")
+
+
+def main(args):
+    try:
+        result = check(args) if args.audit_cmd == "check" else run(args)
+    except (ValueError, OSError) as exc:
+        print(json.dumps({"status": "error", "error": str(exc)}, ensure_ascii=False))
+        return 2
+    if args.json:
+        print(json.dumps(result, ensure_ascii=False, default=str))
+    else:
+        print(json.dumps(result, ensure_ascii=False, indent=1, default=str))
+    if args.audit_cmd == "check" and result.get("books") not in (None, "verified"):
+        return 1
+    return 0
+
+
+if __name__ == "__main__":
+    import argparse
+    p = argparse.ArgumentParser(prog="qwb")
+    add_parser(p.add_subparsers(dest="cmd", required=True))
+    sys.exit(main(p.parse_args()))

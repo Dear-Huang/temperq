@@ -311,8 +311,11 @@ def other_platform(files, *, adapter, name, opening_cash=None):
                 kind = 'snapshots'
                 for index, row in rows:
                     equity, current_cash = numeric(row['equity'], '权益'), numeric(row['cash'], '现金', nonnegative=False)
+                    # Optional: dividends declared but not yet paid, as RiceQuant's 应收股息; owed cash, booked as dividends.
+                    receivable = numeric(row.get('receivable_dividend') or '0', '应收股息')
                     result['snapshots'].append({'date': date_value(row['date'], '账户日期'),
-                        'equity': equity, 'cash': current_cash, 'market_value': equity - current_cash, 'ref': _ref(kind, index)})
+                        'equity': equity, 'cash': current_cash + receivable, 'market_value': equity - current_cash - receivable,
+                        'receivable_dividend': receivable, 'ref': _ref(kind, index)})
             elif {'order_book_id', 'last_quantity', 'transaction_cost'} <= fields:
                 # Native RQAlpha trades.csv: one row per fill; transaction_cost = commission + tax.
                 kind = 'fills'
@@ -420,9 +423,13 @@ def other_platform(files, *, adapter, name, opening_cash=None):
             elif {'date', 'code', 'score'} <= fields:
                 kind = 'scores'
                 for index, row in rows:
+                    picked = (row.get('selected') or '').strip().lower()
+                    if picked not in ('', 'true', 'false', '1', '0'):
+                        raise ValueError(f'打分表第 {index} 行：selected 只能是 true/false')
                     result['scores'].append({'date': date_value(row['date'], '打分日期'),
                         'code': code_value(row['code']), 'score': numeric(row['score'], '打分', nonnegative=False),
-                        'available_at': row.get('available_at', ''), 'ref': _ref(kind, index)})
+                        'available_at': row.get('available_at', ''), 'ref': _ref(kind, index),
+                        **({'selected': picked in ('true', '1')} if picked else {})})
             elif {'时间', '策略收益', '基准收益'} <= fields:
                 # JoinQuant 收益详情: the platform's own cumulative return, kept to cross-check equity.
                 kind = 'platform_returns'
@@ -443,7 +450,9 @@ def other_platform(files, *, adapter, name, opening_cash=None):
                 raise ValueError(source.name + '：未识别的表头，请使用平台原始导出或页面所列最小格式')
             row_count = len(rows)
         if kind in seen:
-            raise ValueError('每种材料只接收一个文件，请先合并同类导出')
+            other = next(s['name'] for s in result['sources'] if s['kind'] == kind)
+            raise ValueError(f'{other} 和 {source.name} 都被识别为同一种材料（{kind}），每种材料只接收一个文件；'
+                             '请合并同类导出，或移走其中不属于这次回测的文件')
         seen.add(kind)
         result['sources'].append({'kind': kind, 'name': source.name, 'encoding': encoding,
             'sha256': sha256(source.data).hexdigest(), 'bytes': len(source.data), 'rows': row_count})
@@ -462,7 +471,7 @@ def other_platform(files, *, adapter, name, opening_cash=None):
         identities = [(r['date'], r.get('code', '')) for r in result[key]]
         if key != 'fills' and len(identities) != len(set(identities)):
             raise ValueError('同日持仓、账户或打分重复')
-    if adapter == 'ricequant' and result['snapshots']:
+    if result['snapshots'] and (adapter == 'ricequant' or any(s.get('receivable_dividend') for s in result['snapshots'])):
         _receivable_dividends(result)
     if adapter == 'ricequant' and result['snapshots'] and result['fills']:
         _settle_rounded_prices(result)

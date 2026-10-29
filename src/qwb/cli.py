@@ -232,6 +232,8 @@ def main(argv: list[str] | None = None) -> int:
     rule_cli.add_parser(sub)
     from . import paper_cli
     paper_cli.add_parser(sub)
+    from . import audit_cli
+    audit_cli.add_parser(sub)
     from . import governance_cli
     governance_cli.add_parser(sub)
 
@@ -345,6 +347,9 @@ def main(argv: list[str] | None = None) -> int:
         return governance_cli.run(args)
     if args.cmd == "paper":
         return paper_cli.run(args)
+    if args.cmd == "audit":
+        from . import audit_cli
+        return audit_cli.main(args)
     if args.cmd == "e2e":
         import json
         from .portfolio.acceptance import run as check_e2e

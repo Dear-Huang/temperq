@@ -141,6 +141,24 @@ def platform_check(bundle, perf):
     return rows
 
 
+def scope(result):
+    """Which checks ran, which could not run for missing materials, and which the engine does not have yet.
+
+    Read from the engine's own coverage table; the report never claims a check it did not run.
+    """
+    done, blocked, absent = [], [], []
+    for stage in result.get("coverage") or []:
+        for method in stage.get("algorithms") or []:
+            row = {"stage": stage["title"], "check": method["name"], "missing": method.get("missing") or []}
+            if method["implementation"] in ("connected", "available") and method["inputs"] == "ready":
+                done.append(row)
+            elif method["implementation"] in ("connected", "available"):
+                blocked.append(row)                    # the engine can do it; the materials do not allow it
+            else:
+                absent.append(row)                     # not built yet, whatever the materials
+    return {"done": done, "blocked": blocked, "absent": absent}
+
+
 def headline(bundle, result, perf, premise, cards, verdicts):
     """Three to five sentences a reader can act on, most important first."""
     lines = []
@@ -371,7 +389,21 @@ def render(record, bundle, result):
         h.append('</div>')
 
     # 7. Scope and limitations
-    h.append('<h2>七、审计范围与限制</h2><h3>十五个环节的结论</h3><div class="tw"><table><tr><th>环节</th><th>结论</th><th>理由</th></tr>')
+    sc = scope(result)
+    h.append(f'<h2>七、审计范围与限制</h2><p>本次共列 {len(sc["done"]) + len(sc["blocked"]) + len(sc["absent"])} 项检查：'
+             f'<span class="pass">已审 {len(sc["done"])} 项</span>，<span class="evidence">缺材料未审 {len(sc["blocked"])} 项</span>，'
+             f'<span class="mut">本工具尚不具备 {len(sc["absent"])} 项</span>。没有审到的项目不代表没有问题。</p>')
+    h.append('<h3>已审</h3><div class="tw"><table><tr><th>环节</th><th>检查</th></tr>'
+             + "".join(f'<tr><td>{esc(r["stage"])}</td><td>{esc(r["check"])}</td></tr>' for r in sc["done"]) + '</table></div>')
+    if sc["blocked"]:
+        h.append('<h3>缺材料未审（补齐后可审）</h3><div class="tw"><table><tr><th>环节</th><th>检查</th><th>需要补充</th></tr>'
+                 + "".join(f'<tr><td>{esc(r["stage"])}</td><td>{esc(r["check"])}</td><td>{esc("；".join(r["missing"]) or "确认参数")}</td></tr>'
+                           for r in sc["blocked"]) + '</table></div>')
+    if sc["absent"]:
+        h.append('<h3>本工具尚不具备（补材料也审不了）</h3><div class="tw"><table><tr><th>环节</th><th>检查</th><th>所需材料</th></tr>'
+                 + "".join(f'<tr><td>{esc(r["stage"])}</td><td>{esc(r["check"])}</td><td>{esc("；".join(r["missing"]))}</td></tr>'
+                           for r in sc["absent"]) + '</table></div>')
+    h.append('<h3>十五个环节的结论</h3><div class="tw"><table><tr><th>环节</th><th>结论</th><th>理由</th></tr>')
     for v in verdicts:
         h.append(f'<tr><td>{esc(v["title"])}</td><td class="{v["state"]}">{STATE_WORDS[v["state"]]}</td><td>{esc(v["reason"])}</td></tr>')
     h.append('</table></div><h3>限制</h3><ul>'

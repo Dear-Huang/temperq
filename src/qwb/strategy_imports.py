@@ -347,7 +347,9 @@ def bigquant(files, *, name, opening_cash=None):
                     result["external_attribution"].append({**row, "ref": ref})
             row_count = len(rows)
         if kind in seen:
-            raise ValueError("每种材料只接收一个文件，请先合并同类导出")
+            other = next(s["name"] for s in result["sources"] if s["kind"] == kind)
+            raise ValueError(f"{other} 和 {source.name} 都被识别为同一种材料（{kind}），每种材料只接收一个文件；"
+                             "请合并同类导出，或移走其中不属于这次回测的文件")
         seen.add(kind)
         result["sources"].append({"kind": kind, "name": source.name, "sha256": sha256(source.data).hexdigest(),
                                   "bytes": len(source.data), "rows": row_count, 'encoding': encoding})

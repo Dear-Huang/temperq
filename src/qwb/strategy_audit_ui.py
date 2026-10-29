@@ -1305,38 +1305,15 @@ def register(app, workdir, *, page, guard, token):
 
     @app.get('/strategy-audits/{identity}/reports/{report_id}/{kind}.csv')
     def export(identity: str, report_id: str, kind: str):
+        from . import audit_exports
         _, _, result = load_report(identity, report_id)
-        required = {'stocks': 'attribution', 'daily': 'accounting', 'fees': 'fee_analysis', 'fee-units': 'fee_analysis',
-                    'risk': 'risk_analysis', 'tick-costs': 'tick_analysis', 'holding-lots': 'holding_analysis'}
-        if kind not in required or required[kind] not in result['modules']:
-            raise HTTPException(404, '本报告尚无该项结果')
-        if kind == 'stocks':
-            rows = result['modules']['attribution']['stocks']
-            columns = ['code', 'gross_pnl', 'fees', 'net_pnl', 'initial_capital_bp']
-        elif kind == 'daily':
-            rows = result['modules']['accounting']['contributions']
-            columns = ['date', 'code', 'gross_pnl', 'fees', 'net_pnl']
-        elif kind == 'fees' and 'fee_analysis' in result['modules']:
-            rows = result['modules']['fee_analysis']['fills']
-            columns = ['date', 'code', 'side', 'order_id', 'fill_id', 'charge_basis', 'charge_confirmed', 'quantity', 'price', 'notional', 'fee', 'modeled_commission', 'modeled_stamp_tax', 'modeled_fee', 'reported_minus_modeled']
-        elif kind == 'fee-units':
-            rows = result['modules']['fee_analysis'].get('charge_units')
-            if rows is None:
+        found = audit_exports.table(result, kind)
+        if found is None:
+            if kind == 'fee-units' and 'fee_analysis' in result['modules']:
                 raise HTTPException(404, '历史报告尚无收费单位核验，请重新审计')
-            columns = ['date', 'code', 'side', 'order_id', 'basis', 'declared_basis', 'status', 'evidence', 'fill_count', 'notional', 'reported_fee', 'modeled_fee', 'reported_minus_modeled']
-        elif kind == 'risk' and 'risk_analysis' in result['modules']:
-            rows = result['modules']['risk_analysis']['daily']
-            columns = ['date', 'equity', 'cash_weight', 'invested_weight', 'equity_hhi', 'invested_hhi', 'effective_names', 'max_weight', 'holdings_count']
-        elif kind == 'tick-costs' and 'tick_analysis' in result['modules']:
-            rows = result['modules']['tick_analysis']['fills']
-            columns = ['date', 'code', 'side', 'price', 'quantity', 'notional', 'tick_half_spread_bp', 'tick_scenario_cost', 'price_band', 'accounted_interval', 'execution_context']
-        elif kind == 'holding-lots' and 'holding_analysis' in result['modules']:
-            module = result['modules']['holding_analysis']
-            rows = module['closed'] + module['open']
-            columns = ['code', 'entry_date', 'exit_date', 'marked_at', 'quantity', 'entry_price', 'exit_or_mark_price', 'calendar_days', 'snapshot_intervals', 'gross_pnl', 'fees', 'net_pnl', 'tick_scenario_cost', 'net_after_tick_scenario', 'right_censored']
-        else:
-            raise HTTPException(404)
-        return Response('\ufeff'+csv_text(rows, columns), media_type='text/csv', headers={'Content-Disposition': f'attachment; filename="audit-{kind}.csv"'})
+            raise HTTPException(404, '本报告尚无该项结果')
+        rows, columns = found
+        return Response('﻿'+csv_text(rows, columns), media_type='text/csv', headers={'Content-Disposition': f'attachment; filename="audit-{kind}.csv"'})
 
     @app.get('/strategy-audits/{identity}/plan')
     def plan(identity: str, report_id: str | None = None):
