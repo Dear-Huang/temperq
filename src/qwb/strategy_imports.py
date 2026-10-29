@@ -340,10 +340,14 @@ def bigquant(files, *, name, opening_cash=None):
                         'code': stock_code(row['code'].replace('.XSHG', '.SH').replace('.XSHE', '.SZ')),
                         'close': numeric(row['close'], label), 'ref': ref})
                 elif kind == 'scores':
+                    picked = (row.get('selected') or '').strip().lower()
+                    if picked not in ('', 'true', 'false', '1', '0'):
+                        raise ValueError(label + '：selected 只能是 true/false')
                     result['scores'].append({'date': date_value(row['date'], label),
                         'code': stock_code(row['code'].replace('.XSHG', '.SH').replace('.XSHE', '.SZ')),
                         'score': numeric(row['score'], label, nonnegative=False),
-                        'available_at': row.get('available_at', '').strip(), 'ref': ref})
+                        'available_at': row.get('available_at', '').strip(), 'ref': ref,
+                        **({'selected': picked in ('true', '1')} if picked else {})})
                 else:
                     result["external_attribution"].append({**row, "ref": ref})
             row_count = len(rows)

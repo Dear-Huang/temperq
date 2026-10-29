@@ -36,6 +36,10 @@ def add_parser(sub):
             cmd.add_argument("--claimed-annual", type=float, help="claimed annual return in percent")
             cmd.add_argument("--claim-source", default="", help="where the claim comes from, e.g. a post title")
         cmd.add_argument("--json", action="store_true", help="print the machine-readable result only")
+    inst = commands.add_parser("instrument-check", help="prove an instrumented copy only adds TemperQ recording")
+    inst.add_argument("original", help="the strategy as the user wrote it")
+    inst.add_argument("instrumented", help="the copy with temperq_record(...) added")
+    inst.add_argument("--json", action="store_true")
 
 
 def _files(directory):
@@ -167,6 +171,13 @@ def _now():
 
 def main(args):
     try:
+        if args.audit_cmd == "instrument-check":
+            from . import audit_instrument
+            from .strategy_imports import decode_source, SourceFile
+            read = lambda p: decode_source(SourceFile(Path(p).name, Path(p).read_bytes()))[0]
+            result = audit_instrument.compare(read(args.original), read(args.instrumented))
+            print(json.dumps(result, ensure_ascii=False, indent=None if args.json else 1))
+            return 0 if result["same_logic"] else 1
         result = check(args) if args.audit_cmd == "check" else run(args)
     except (ValueError, OSError) as exc:
         print(json.dumps({"status": "error", "error": str(exc)}, ensure_ascii=False))
