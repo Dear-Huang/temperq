@@ -242,3 +242,22 @@ bases remain scenarios and cannot by themselves trigger a fee discrepancy verdic
 The source of the declaration is the user; this does not certify a broker contract.
 See the [research implementation note](research/TEMPERQ_EXTERNAL_AUDIT_20261027/11_研究落地增量_订单计费与受阻目标.md)
 for the field contract, economic examples and verification boundaries.
+
+## Command Line And Skill (2026-10-30)
+
+Two front ends share one engine. The local web page keeps every file on the machine; the
+`skills/strategy-audit` skill lets an AI convert any export to the standard format and then calls
+the same engine. The skill may only quote the engine's outputs.
+
+- `qwb audit check <dir>`: what each file was read as, counts, whether the books close (exit 1 if not).
+- `qwb audit run <dir> --out <dir>`: `report.html`, `summary.json`, `evidence.json`, evidence CSVs.
+- `qwb audit compare <original-out> <optimized-out>`: same-method comparison of two versions.
+- `qwb audit instrument-check <original> <copy>`: proves a copy only adds `temperq_record` calls.
+
+Materials the platforms do not export by default come from two scripts in `src/qwb/static/`:
+`temperq_recorder.py` (daily scores, written by the strategy run) and `temperq_supplement.py`
+(candidate closes and fill-day minute prices, from the research environment).
+
+Clean install check, 2026-10-30: `git clone` to a new folder, `install.ps1`, then `qwb audit run` on
+the 38 three-year RiceQuant export: books verified, ten output files, performance identical to the
+development environment. Not yet checked on a machine without the uv cache or on Linux.
