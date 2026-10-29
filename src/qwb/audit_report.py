@@ -147,6 +147,9 @@ def headline(bundle, result, perf, premise, cards, verdicts):
     account = result["modules"].get("accounting") or {}
     if account.get("status") == "verified":
         lines.append(("pass", "账目闭合：成交、持仓、现金与权益逐日核对一致，以下数字可以复算。"))
+    elif not bundle.get("fills"):
+        lines.append(("adjust", "回测期间没有任何成交：策略从未买入，收益为零不是策略结果。"
+                                "先查运行日志里的下单失败或信号条件，修正后重新回测再审计。"))
     else:
         lines.append(("adjust", "账目未闭合：以下盈亏与收益为暂算，须先修复材料再引用。"))
     if premise and premise.get("status") not in (None, "needs_prices", "needs_scores"):

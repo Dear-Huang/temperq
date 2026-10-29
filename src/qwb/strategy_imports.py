@@ -196,8 +196,9 @@ def is_platform_log(text):
     """JoinQuant: 'YYYY-MM-DD HH:MM:SS - LEVEL - message'. RQAlpha: '[YYYY-MM-DD HH:MM:SS.ffffff] LEVEL: message',
     possibly several logs joined under '===== name.log =====' headers, with warnings and tracebacks between."""
     head = [line for line in text.splitlines()[:20] if line.strip()]
-    matched = sum(bool(LOG_LINE.match(line)) for line in head)
-    if len(head) >= 3 and bool(LOG_LINE.match(head[0])) and matched >= .6 * len(head):
+    # Code never opens with a 'YYYY-MM-DD HH:MM:SS - LEVEL - ' line; messages may then run over many lines
+    # (printed DataFrames) and a short run may log a single line, so the first line alone decides.
+    if head and LOG_LINE.match(head[0]):
         return True
     lines = text.splitlines()[:400]
     sections = sum(bool(LOG_SECTION.match(line)) for line in lines)

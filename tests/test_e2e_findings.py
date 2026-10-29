@@ -105,3 +105,36 @@ SEC_LIST.sort(reverse=True)
 ranker_prediction = ranker_prediction.sort_values('score', ascending=False)
 '''
     assert premise_of(model) == "模型预测分数越高的标的，到下一次调仓前涨得更多"
+
+
+def test_joinquant_log_with_multiline_messages_or_one_line_is_a_log():
+    # Was: a printed DataFrame after the first log line, or a single-line log, was read as a second code file.
+    framed = "2017-01-03 15:00:00 - INFO -                 score\n513100.XSHG  0.299694\n518880.XSHG -0.122355\n" \
+             "2017-01-03 15:00:00 - INFO - 买入513100.XSHG\n"
+    assert imp.is_platform_log(framed)
+    assert imp.is_platform_log("2017-01-18 15:00:00 - INFO - RSRS择时模型发出清仓信号！\n")
+    rows = imp.parse_log(framed)
+    assert len(rows) == 2 and "513100.XSHG  0.299694" in rows[0]["内容"]
+
+
+def test_empty_rqalpha_table_is_accepted():
+    # Was: a run that never held anything writes '""' as stock_positions.csv and the import refused it.
+    from qwb.strategy_import_formats import other_platform
+    result = other_platform([imp.SourceFile("stock_positions.csv", '﻿""\n'.encode("utf-8"))], adapter="ricequant", name="x")
+    assert result["positions"] == [] and result["sources"][0]["kind"] == "empty"
+
+
+def test_index_in_trades_is_named_as_a_backtest_problem():
+    import pytest
+    from qwb.securities import security_code
+    with pytest.raises(ValueError, match="是指数，不能直接买卖"):
+        security_code("000300.XSHG")
+    with pytest.raises(ValueError, match="是指数"):
+        security_code("399006.XSHE")
+    assert security_code("510300.XSHG") == "510300.SH" and security_code("000001.XSHE") == "000001.SZ"
+
+
+def test_run_without_trades_says_so_instead_of_unclosed_books():
+    bundle = {"fills": [], "snapshots": snapshots(100., 100.)}
+    lines = audit_report.headline(bundle, {"modules": {}}, None, None, [], [])
+    assert "没有任何成交" in lines[0][1] and "账目未闭合" not in lines[0][1]

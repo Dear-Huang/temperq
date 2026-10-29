@@ -200,6 +200,11 @@ def other_platform(files, *, adapter, name, opening_cash=None):
             row_count = len(text.splitlines())
         else:
             header, rows, encoding, repaired = table(source)
+            if not any(header) and not rows:
+                # RQAlpha writes '""' for a table that has no rows, e.g. positions when nothing was ever held.
+                result['sources'].append({'kind': 'empty', 'name': source.name, 'encoding': encoding,
+                    'sha256': sha256(source.data).hexdigest(), 'bytes': len(source.data), 'rows': 0})
+                continue
             result['quality']['holdings_header_repaired'] |= repaired
             fields = set(header)
             if {'标的', '多空', '数量'} <= fields:

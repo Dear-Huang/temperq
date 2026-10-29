@@ -28,6 +28,9 @@ def security_code(value):
     match = re.fullmatch(r"(\d{6})\.(SH|SZ)", code)
     if match and match[1].startswith(FUND_PREFIX + BOND_PREFIX):
         return code
+    if re.fullmatch(r"000\d{3}\.SH|399\d{3}\.SZ", code):
+        raise ValueError(f"{code} 是指数，不能直接买卖：回测的成交或持仓里出现了指数，说明回测本身有问题，"
+                         "常见原因是策略把择时用的指数代码当成了交易标的。请先修正策略再审计")
     return stock_code(code)
 
 
