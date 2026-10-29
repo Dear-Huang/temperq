@@ -75,8 +75,12 @@ class ConvexAllocator:
             raise ValueError("allocator is not DPP compliant")
         self.parameters = [mu, root, previous, buy_cost, sell_cost, lower, upper, receivable]
         self.weight_variable = w
-        self.layer = CvxpyLayer(self.problem, parameters=self.parameters, variables=[w],
-                               solver="DIFFCP", solver_args={"solve_method": "SCS"})
+        try:
+            self.layer = CvxpyLayer(self.problem, parameters=self.parameters, variables=[w],
+                                   solver="DIFFCP", solver_args={"solve_method": "SCS"})
+        except TypeError:
+            # cvxpylayers 0.1.x (requirements-e2e-windows.lock) has no solver argument; it always uses diffcp + SCS.
+            self.layer = CvxpyLayer(self.problem, parameters=self.parameters, variables=[w])
 
     def reference_solve(self, args):
         """Separate CVXPY solve for numerical acceptance, with solver certificates."""

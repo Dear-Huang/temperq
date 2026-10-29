@@ -87,3 +87,17 @@ def test_attribution_page_answers_the_three_questions():
         assert words in html
     noise = ui.premise_section({"modules": {"premise": audit_premise.analyze(bundle(0., seed=2))}})
     assert "不宜折成年化" in noise
+
+
+def test_exported_report_has_professional_sections_and_benchmark():
+    from qwb import audit_report, strategy_audit as audit, strategy_audit_ui as view, strategy_imports as imp
+    bundle = imp.normalize(view.sample_files(), name="Synthetic audit", opening_cash=10000)
+    first = bundle["snapshots"][0]["equity"]
+    bundle["platform_returns"] = [{"date": s["date"], "strategy_pct": (s["equity"] / first - 1) * 100,
+                                   "benchmark_pct": i * .1} for i, s in enumerate(bundle["snapshots"])]
+    result = audit.analyze(bundle, {"commission_bp": 3, "minimum_commission": 5, "max_weight": 1.})
+    html = audit_report.render({"created_at": "2026-01-01T00:00:00"}, bundle, result)
+    for title in ("一、结论摘要", "二、策略前提检验", "三、收益与风险", "四、盈亏归因", "五、成本与执行",
+                  "六、发现与建议", "七、审计范围与限制", "附录 A", "基准收益", "超额收益"):
+        assert title in html
+    assert result["input_digest"] in html and "不构成投资建议" in html

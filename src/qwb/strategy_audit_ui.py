@@ -11,6 +11,7 @@ from starlette.concurrency import run_in_threadpool
 from starlette.formparsers import MultiPartException, MultiPartParser
 from starlette.datastructures import FormData, QueryParams
 
+from .securities import asset_class
 from . import experiments as ex, strategy_audit as audit, strategy_audit_store as store
 from . import strategy_imports as imports
 from .audit_catalog import coverage, STAGES
@@ -224,7 +225,7 @@ def overview(identity, bundle, token, inherited=None):
     fill_label = '条持仓净变动（由持仓推算）' if review['fills_inferred'] else '笔成交'
     body += f'<p class="review-meta">{period} · {len(days)} 个账户快照 · {len(bundle["fills"])} {fill_label}</p>'
     body += '<section class="review-section"><h2>01 · 材料核对</h2><div class="tw"><table><tr><th>文件</th><th>识别类型</th><th>行数</th></tr>'
-    labels = {"fills": "交易", "positions": "持仓与账户汇总", "snapshots": "账户汇总", "logs": "日志", "code": "策略代码", "external_attribution": "平台归因（待核口径）", "quote_observations": "日均报价价差（核对用途）", 'scores': '每日打分', 'platform_returns': '平台收益表（核对用途）', 'orders': '委托详情', 'auxiliary': '辅助表（不参与审计）', 'prices': '候选池收盘价'}
+    labels = {"fills": "交易", "positions": "持仓与账户汇总", "snapshots": "账户汇总", "logs": "日志", "code": "策略代码", "external_attribution": "平台归因（待核口径）", "quote_observations": "日均报价价差（核对用途）", 'scores': '每日打分', 'platform_returns': '平台收益表（核对用途）', 'orders': '委托详情', 'auxiliary': '辅助表（不参与审计）', 'platform_summary': '平台绩效汇总（核对用途）', 'prices': '候选池收盘价'}
     for source in bundle["sources"]:
         body += f'<tr><td>{esc(source["name"])}</td><td>{labels[source["kind"]]} · {esc(source.get("encoding", "历史记录"))}</td><td>{source["rows"]}</td></tr>'
     body += '</table></div>'
@@ -343,7 +344,7 @@ async def upload_fields(req):
             if len(pairs) > 12:
                 raise MultiPartException('表单字段过多')
             return FormData(pairs)
-        return await MultiPartParser(req.headers, bounded_stream(), max_files=6, max_fields=12,
+        return await MultiPartParser(req.headers, bounded_stream(), max_files=imports.MAX_FILES + 2, max_fields=12,
                                      max_part_size=imports.MAX_FILE_BYTES).parse()
     except (MultiPartException, UnicodeDecodeError) as exc:
         raise HTTPException(400, str(exc)) from None
@@ -380,10 +381,39 @@ def period_section(period):
     if period['non_default_settings']:
         labels = {'validation_fraction': '验证比例', 'minimum_triggers': '最少触发数', 'purge_days': '边界隔离日期数'}
         body += '<p class="notice">与默认值不同的设置：'+esc('；'.join(f'{labels[k]}={v}' for k,v in period['non_default_settings'].items()))+'</p>'
-    body += '<details><summary>逐环节可审范围</summary><div class="tw"><table><tr><th>环节</th><th>本次范围</th></tr>'
-    for row in period['stages']:
-        body += f'<tr><td>{esc(row["title"])}</td><td>{esc(row["message"])}</td></tr>'
-    return body+'</table></div></details></section>'
+    from collections import Counter
+    common = Counter(r['message'] for r in period['stages']).most_common(1)[0][0] if period['stages'] else ''
+    special = [r for r in period['stages'] if r['message'] != common]
+    body += f'<p>其余环节：{esc(common)}。</p>' if special else f'<p>全部环节：{esc(common)}。</p>'
+    if special:
+        body += '<div class="tw"><table><tr><th>环节</th><th>本次范围</th></tr>'
+        for row in special:
+            body += f'<tr><td>{esc(row["title"])}</td><td>{esc(row["message"])}</td></tr>'
+        body += '</table></div>'
+    return body+'</section>'
+
+
+def summary_section(bundle, result, base):
+    """Conclusions first: what a reader should take away before any detail."""
+    from . import audit_report
+    perf = audit_report.performance(bundle)
+    cards = audit_actions.cards(result, bundle)
+    verdicts = audit_verdicts.conclusions(bundle, result)
+    lines = audit_report.headline(bundle, result, perf, result['modules'].get('premise'), cards, verdicts)
+    body = '<section class="review-section" id="report-summary"><h2>结论摘要</h2><ol class="report-summary">'
+    for tone, text in lines:
+        body += f'<li><span class="audit-verdict verdict-{tone}">{audit_report.STATE_WORDS[tone]}</span> {esc(text)}</li>'
+    body += '</ol>'
+    if perf:
+        cells = [('区间收益', pct(perf['total'])), ('年化收益', pct(perf['annual']) if perf['annual'] is not None else '—'),
+                 ('最大回撤', pct(perf['max_drawdown'])), ('夏普比率', f"{perf['sharpe']:.2f}" if perf['sharpe'] is not None else '—')]
+        if perf.get('benchmark_total') is not None:
+            cells += [('基准收益', pct(perf['benchmark_total'])), ('超额收益', f"{perf['excess_total']:+.2%}")]
+        body += '<div class="review-metrics">' + ''.join(f'<div><span>{a}</span><strong>{b}</strong></div>' for a, b in cells) + '</div>'
+    body += (f'<p class="review-resources"><a class="btn primary" href="{base}/report.html" target="_blank" rel="noopener">打开审计报告（可打印为 PDF）</a>'
+             f'<a href="{base}/report.html?download=1">下载报告 HTML</a>'
+             f'<a href="/strategy-attribution?strategy={base.split("/")[2]}#attribution-premise">查看策略前提检验</a></p></section>')
+    return body
 
 
 def partial_report(identity, bundle, result):
@@ -562,18 +592,20 @@ def attribution_page(identity, report_id, result):
 
     conc = data['concentration']
     body += '<section class="review-section" id="attribution-stocks"><h2>谁赚的、谁亏的</h2>'
-    body += (f'<p>{conc["stocks"]} 只股票：赚钱 {conc["winners"]} 只，合计 ¥{money(conc["winning_total"])}；'
+    noun = conc.get('noun', '股票')
+    body += (f'<p>{conc["stocks"]} 只{noun}：赚钱 {conc["winners"]} 只，合计 ¥{money(conc["winning_total"])}；'
              f'亏钱 {conc["losers"]} 只，合计 ¥{money(conc["losing_total"])}。</p><div class="attribution-split">')
-    for title, rows in (('赚得最多的 5 只', conc['top']), ('亏得最多的 5 只', conc['bottom'])):
+    shown = min(5, len(conc['top']))
+    for title, rows in ((f'赚得最多的 {shown} 只' if conc['bottom'] else f'全部 {conc["stocks"]} 只', conc['top']), ('亏得最多的 5 只', conc['bottom'])):
         if not rows:
             continue
-        body += f'<div><h3>{title}</h3><div class="tw"><table><tr><th>股票</th><th>费用前</th><th>费用</th><th>净贡献</th></tr>'
+        body += f'<div><h3>{title}</h3><div class="tw"><table><tr><th>{noun if noun != "标的" else "标的"}</th><th>费用前</th><th>费用</th><th>净贡献</th></tr>'
         for row in rows:
             body += f'<tr><td>{esc(row["code"])}</td>{_money_cell(row["gross_pnl"])}<td>¥{money(row["fees"])}</td>{_money_cell(row["net_pnl"])}</tr>'
         body += '</table></div></div>'
     body += '</div>'
     if conc['top5_net'] > 0 and data['net'] > 0 and conc['rest_net'] < 0:
-        body += f'<p class="notice">结果集中：盈利前 5 只合计 ¥{money(conc["top5_net"])}，其余股票合计亏 ¥{money(-conc["rest_net"])}。少数股票决定了整体盈亏，换一段时间结果可能差别很大。</p>'
+        body += f'<p class="notice">结果集中：盈利前 5 只合计 ¥{money(conc["top5_net"])}，其余{noun}合计亏 ¥{money(-conc["rest_net"])}。少数股票决定了整体盈亏，换一段时间结果可能差别很大。</p>'
     body += '</section>'
 
     for key, title, label, note in (
@@ -703,7 +735,7 @@ def coverage_section(bundle, result, *, identity='', expand_reviews=True):
         body += f'<summary><span class="audit-stage-number">{index:02d}</span><span>{esc(item["title"])}<small>{esc(verdict["summary"])}</small></span><span class="audit-verdict verdict-{verdict["state"]}">{verdict["label"]}</span></summary>'
         body += f'<div class="audit-stage-body"><p class="verdict-reason verdict-{verdict["state"]}">{esc(verdict["reason"])}</p><p>{esc(item["observation"])}</p>'
         period = next((r for r in result.get('period_review', {}).get('stages', []) if r['id'] == item['id']), None)
-        if period:
+        if period and period['state'] != 'length_eligible':
             body += '<p class="notice audit-period-gate">'+esc(period['message'])+'</p>'
         if metrics:
             body += '<div class="audit-stage-metrics">'+metrics+'</div>'
@@ -789,6 +821,8 @@ def research_section(result, base):
     body += '</details>'
     body += '<h3>低价暴露：摩擦主要花在哪里</h3><div class="tw"><table><tr><th>成交价分组</th><th>成交额占比</th><th>成交额</th><th>报告费用</th><th>半档情景成本</th></tr>'
     for row in tick['price_bands']:
+        if not row['traded_notional']:
+            continue
         share = pct(row['notional_share']) if row['notional_share'] is not None else '—'
         body += f'<tr><td>{esc(row["label"])}</td><td>{share}</td><td>{money(row["traded_notional"])}</td><td>{money(row["reported_fees"])}</td><td>{money(row["tick_scenario_cost"])}</td></tr>'
     body += f'</table></div><p><b>候选调整：</b>{esc(tick["candidate_action"])}</p>'
@@ -814,6 +848,8 @@ def research_section(result, base):
     body += '</table></div><h3>按买入价看贡献，未平仓另列</h3><div class="tw"><table><tr><th>买入价分组</th><th>已平仓毛收益</th><th>已平仓费用</th><th>已平仓净收益</th><th>已平仓半档情景</th><th>未平仓净贡献</th></tr>'
     for row in holding['entry_price_bands']:
         c, o = row['closed'], row['open']
+        if not c.get('matches') and not o.get('matches') and not o['net_pnl']:
+            continue
         body += f'<tr><td>{esc(row["label"])}</td><td>{money(c["gross_pnl"])}</td><td>{money(c["fees"])}</td><td>{money(c["net_pnl"])}</td><td>{money(c["tick_scenario_cost"])}</td><td>{money(o["net_pnl"])}</td></tr>'
     body += '</table></div><p class="mut">买入价分组与上面的逐笔成交价分组口径不同。未平仓净贡献为期末市值减分摊买入金额及买入费；买入半档仅在情景中扣除，未虚构卖出和退出费用。</p>'
     body += f'<p>覆盖限制：{coverage["excluded_action_or_invalid_codes"]} 只有公司行动或数量/估值异常的证券整段暂不匹配，共 {coverage["excluded_fill_count"]} 笔成交、金额 ¥{money(coverage["excluded_notional"])}。未知期初被卖出 {coverage["unknown_opening_sale_quantity"]:g} 股；未匹配异常 {len(coverage["unmatched"])} 项。</p>'
@@ -918,16 +954,17 @@ def report_body(identity, report_id, bundle, result):
     body += f'<p class="review-meta">{bundle["snapshots"][0]["date"]} 至 {bundle["snapshots"][-1]["date"]} · {len(account["daily"])} 个归因期间</p>'
     state = "账目已核对" if attr["status"] == "verified" else "账目待核对，归因暂为草稿"
     body += f'<p class="notice">{state} · '+('从空仓期初开始' if account['baseline'] == 'declared_empty_opening' else '从首个收盘账户之后开始')+'</p>'
+    body += summary_section(bundle, result, base)
     if result.get('period_review'):
         body += period_section(result['period_review'])
     body += '<nav class="audit-tabs" aria-label="报告章节"><a href="#tick-cost">价位成本</a><a href="#holding-age">持有期</a><a href="#computed-actions">费用与建议</a><a href="#risk-diagnostics">风险与回撤</a><a href="#coverage">全流程覆盖</a><a href="#contributions">盈亏归因</a><a href="#governance-audit">治理与候选动作</a><a href="#reconciliation">账户核对</a></nav>'
     body += '<div class="review-metrics">'
     for label, value in (("区间净盈亏", '¥'+money(attr['net_pnl'])), ("费用前贡献", '¥'+money(attr['gross_pnl'])), ("已扣交易费用", '¥'+money(attr['fees'])), ("前三名 / 正贡献", pct(attr['top3_positive_share']) if attr['top3_positive_share'] is not None else '—')):
         body += f'<div><span>{label}</span><strong>{value}</strong></div>'
-    body += '</div>'+research_section(result, base)+diagnostics_section(result, base)+coverage_section(bundle, result)+'<section class="review-section" id="contributions"><h2>盈亏来自哪些股票</h2>'
+    body += '</div>'+research_section(result, base)+diagnostics_section(result, base)+coverage_section(bundle, result)+'<section class="review-section" id="contributions"><h2>盈亏来自哪些标的</h2>'
     body += f'<p>盈利贡献合计 ¥{money(attr["positive_total"])}，亏损贡献合计 ¥{money(attr["negative_total"])}。</p>'
     if attr['top1_positive_share'] is not None:
-        body += f'<p>最大单只股票占全部正贡献的 {pct(attr["top1_positive_share"])}。该比例反映盈利集中度，不等同于策略能力。</p>'
+        body += f'<p>最大单只{"标的" if any(asset_class(r["code"]) != "stock" for r in attr["stocks"]) else "股票"}占全部正贡献的 {pct(attr["top1_positive_share"])}。该比例反映盈利集中度，不等同于策略能力。</p>'
     body += '<div class="tw"><table class="holdings-table"><tr><th>证券</th><th>费用前盈亏</th><th>费用</th><th>净贡献</th><th>基线资金 bp</th></tr>'
     for row in attr["stocks"]:
         bp = f'{row["initial_capital_bp"]:.2f}' if row['initial_capital_bp'] is not None else '—'
@@ -1206,6 +1243,18 @@ def register(app, workdir, *, page, guard, token):
     def report(identity: str, report_id: str):
         _, bundle, result = load_report(identity, report_id)
         return page('归因与治理审计', report_body(identity, report_id, bundle, result), identity=identity)
+
+    @app.get('/strategy-audits/{identity}/reports/{report_id}/report.html')
+    def report_document(identity: str, report_id: str, download: int = 0):
+        from . import audit_report
+        record, bundle, result = load_report(identity, report_id)
+        if result.get('mode', 'full') != 'full':
+            raise HTTPException(404, '材料不全的审计没有正式报告')
+        headers = {'Content-Disposition': 'attachment; filename="strategy-audit-report.html"'} if download else {}
+        return Response('<!doctype html><html lang="zh-CN"><head><meta charset="utf-8">'
+                        '<meta name="viewport" content="width=device-width,initial-scale=1"></head><body>'
+                        + audit_report.render(record, bundle, result) + '</body></html>',
+                        media_type='text/html; charset=utf-8', headers=headers)
 
     @app.get('/strategy-audits/{identity}/reports/{report_id}/evidence.json')
     def evidence(identity: str, report_id: str):

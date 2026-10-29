@@ -10,6 +10,11 @@ from __future__ import annotations
 TOLERANCE = 1.0  # yuan
 
 
+def _y(v):
+    """Whole yuan without a stray minus on rounding to zero."""
+    return f"¥{(0. if abs(v) < .5 else v):,.0f}"
+
+
 def _band_rows(bands, key="closed"):
     rows = []
     for b in bands or []:
@@ -43,7 +48,9 @@ def build(result):
 
     # 2. concentration: how much of the net result the top names carry
     top = stocks[:5]
-    concentration = {
+    from .securities import asset_class
+    noun = "股票" if all(asset_class(s["code"]) == "stock" for s in stocks) else "标的"
+    concentration = {"noun": noun,
         "stocks": len(stocks), "winners": len(winners), "losers": len(losers),
         "winning_total": sum(s["net_pnl"] for s in winners), "losing_total": sum(s["net_pnl"] for s in losers),
         "top": top, "bottom": list(reversed(stocks[-5:])) if len(stocks) > 5 else [],
@@ -82,17 +89,23 @@ def summary(net, gross, fees, spread, conc, by_holding, drawdown):
     """Three plain sentences for the top of the page."""
     lines = []
     fee_share = fees / gross if gross > 0 else None
-    line = f"费用前赚 ¥{gross:,.0f}，佣金和印花税扣掉 ¥{fees:,.0f}"
+    line = f"费用前赚 {_y(gross)}，佣金和印花税扣掉 {_y(fees)}"
     line += f"（占 {fee_share:.0%}）" if fee_share is not None else ""
-    line += f"，回测净盈亏 ¥{net:,.0f}。"
+    line += f"，回测净盈亏 {_y(net)}。"
     if spread is not None:
-        line += f"再按最小价位估算买卖价差约 ¥{spread:,.0f}，扣除后为 ¥{net - spread:,.0f}。"
+        line += f"再按最小价位估算买卖价差约 {_y(spread)}，扣除后为 {_y(net - spread)}。"
     lines.append(line)
-    lines.append(f"{conc['stocks']} 只股票里 {conc['winners']} 只赚钱、{conc['losers']} 只亏钱；"
-                 f"盈利前 5 只合计 ¥{conc['top5_net']:,.0f}，其余合计 ¥{conc['rest_net']:,.0f}。")
+    noun = conc.get("noun", "股票")
+    line = f"{conc['stocks']} 只{noun}里 {conc['winners']} 只赚钱、{conc['losers']} 只亏钱"
+    if conc["stocks"] > 5:
+        line += f"；盈利前 5 只合计 {_y(conc['top5_net'])}，其余合计 {_y(conc['rest_net'])}"
+    elif conc["top"]:
+        best = conc["top"][0]
+        line += f"；贡献最大的是 {best['code']}，净赚 {_y(best['net_pnl'])}"
+    lines.append(line + "。")
     if by_holding:
         worst = min(by_holding, key=lambda r: r["after_tick"])
-        lines.append(f"按持有期看，亏得最多的是「{worst['label']}」的 {worst['matches']} 笔交易，扣价差情景后 ¥{worst['after_tick']:,.0f}。")
+        lines.append(f"按持有期看，亏得最多的是「{worst['label']}」的 {worst['matches']} 笔交易，扣价差情景后 {_y(worst['after_tick'])}。")
     elif drawdown:
         lines.append(f"最大回撤 {drawdown['ratio']:.1%}，从 {drawdown['peak']} 到 {drawdown['trough']}。")
     return lines

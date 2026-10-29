@@ -34,19 +34,25 @@ DIRECTIONS = {"higher": "分数越高", "lower": "分数越低"}
 # Factor families recognised in strategy code. First match per family, in file order.
 FACTORS = (
     ("momentum", "动量（过去一段时间涨得多）",
-     r"momentum|\bmom\b|\bMOM\(|polyfit|slope|linregress|pct_change\(\s*\d|\[-1\]\s*/\s*\w+\[0\]|\broc\b|涨幅|动量"),
+     r"momentum|\bmom\b|\bMOM\(|polyfit|slope|linregress|pct_change\(\s*\d|\[-1\]\s*/\s*\w+\[0\]|\broc\b|涨幅|动量"
+     r"|close\w*\s*\[\s*-\d+[^\]]*\][^\n]*/"),                      # a price ratio over a window is a return
     ("reversal", "反转（过去一段时间跌得多）", r"reversal|反转"),
     ("low_vol", "低波动", r"\.std\(|np\.std|volatility|\batr\b|波动"),
-    ("value", "估值（市盈率、市净率等）", r"pe_ratio|pb_ratio|ps_ratio|pcf_ratio|\bpe\b|\bpb\b|valuation|市盈|市净"),
+    ("model", "模型预测分数", r"predict|ranker|\bmodel\b"),
+    ("value", "估值（市盈率、市净率等）", r"pe_ratio|pb_ratio|ps_ratio|pcf_ratio|\bpe\b|\bpb\b|book_to_market|市盈|市净"),
+    ("growth", "成长（利润或收入增速）", r"growth_rate|_growth\b|yoy|增长率|增速"),
     ("size", "市值", r"market_cap|circulating_market_cap|a_share_market_val|市值"),
     ("dividend", "股息率", r"dividend_yield|dividend_ratio|股息"),
     ("turnover", "换手率或成交额", r"turnover_ratio|turnover|换手"),
     ("quality", "盈利质量（ROE、ROA 等）", r"\broe\b|\broa\b|gross_profit_margin|净资产收益"),
     ("trend_fit", "趋势拟合度（R²）", r"r_squared|r2\b|判定系数"),
 )
-SORT_HIGH = re.compile(r"reverse\s*=\s*True|ascending\s*=\s*False|\.desc\(\)")
-SORT_LOW = re.compile(r"ascending\s*=\s*True|\.asc\(\)")
-LOOKBACK = re.compile(r"\b(lookback|m_days|n_days|momentum_days|mom_days|period|window|days)\b\s*=\s*(\d+)", re.I)
+# Keyword (ascending=False) and dict-config ('ascending': False) forms.
+SORT_HIGH = re.compile(r"reverse\s*=\s*True|['\"]?ascending['\"]?\s*[=:]\s*False|\.desc\(\)")
+SORT_LOW = re.compile(r"['\"]?ascending['\"]?\s*[=:]\s*True|\.asc\(\)")
+# Window lengths are statements (g.m_days = 25, N=21), not keyword arguments such as timedelta(days=250).
+LOOKBACK = re.compile(r"^\s*(?:\w+\.)?(lookback|LOOKBACK|m_days|n_days|momentum_days|mom_days|period|window|N)\s*=\s*(\d+)\s*$")
+WINDOWED = {"momentum", "reversal", "low_vol", "trend_fit", "trend_momentum"}
 
 
 def _ranks(values):
@@ -122,7 +128,18 @@ def from_code(bundle):
         direction, sort_line = "higher", high
     elif low and not high:
         direction, sort_line = "lower", low
-    window = next((int(m.group(2)) for _, ln in code_lines for m in [LOOKBACK.search(ln)] if m), None)
+    if sort_line and factors:
+        # The factor on (or nearest to) the line that orders the candidates is the one the strategy acts on.
+        factors.sort(key=lambda f: abs(f["line"] - sort_line[0]))
+    keys = [f["key"] for f in factors]
+    if "momentum" in keys and "trend_fit" in keys and abs(keys.index("momentum") - keys.index("trend_fit")) <= 1:
+        # The common ETF rotation score: annualised slope of log price times R² of the fit.
+        fit = next(f for f in factors if f["key"] == "trend_fit")
+        factors = [{**fit, "key": "trend_momentum", "name": "趋势动量（年化涨幅×拟合度 R²）"}] + \
+                  [f for f in factors if f["key"] not in ("momentum", "trend_fit")]
+    window = next((int(m.group(2)) for _, ln in code_lines for m in [LOOKBACK.match(ln)] if m), None)
+    if not factors or factors[0]["key"] not in WINDOWED:
+        window = None
     if not factors and direction is None:
         return None
     return {"factors": factors, "direction": direction,
@@ -195,6 +212,8 @@ def analyze(bundle, premise=None, partition=None, thresholds=None):
         source = "用户填写前提，方向" + ("从策略选股行为识别" if behaviour else "从代码排序识别" if direction else "未知")
     elif behaviour:
         source = "从代码和策略选股行为识别" if code and code.get("factors") else "从策略选股行为识别"
+    elif code and code.get("factors"):
+        source = "从代码识别" if direction else "从代码识别因子，方向未定（按分数越高处理）"
     else:
         source = "从代码识别" if direction else "未知"
     direction = direction or "higher"

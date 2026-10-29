@@ -91,10 +91,12 @@ def inspect_code(source):
             "start_date", "end_date", "start", "end", "frequency", "rebalance_period_type",
             "open_commission", "close_commission", "min_commission", "close_tax", "open_tax",
             "use_real_price", "avoid_future_data", "hold_count", "hold_num", "n_hold"}
+    aliases = {"target_num", "stock_num", "buy_num", "max_hold", "etf_num"}
     candidates = []
 
     def add(key, value, line):
-        if key not in keys:
+        alias = key if key in aliases else None
+        if key not in keys and not alias:
             return
         try:
             literal = ast.literal_eval(value)
@@ -103,8 +105,8 @@ def inspect_code(source):
         if isinstance(literal, (str, int, float)) and (not isinstance(literal, bool) or key in {'use_real_price', 'avoid_future_data'}):
             if isinstance(literal, float) and not math.isfinite(literal):
                 return
-            candidates.append({"key": key, "value": literal, "line": line,
-                               "scope": "unconfirmed_literal"})
+            candidates.append({"key": key, "value": literal, "line": line, "scope": "unconfirmed_literal",
+                               **({"alias": alias} if alias else {})})
 
     for node in ast.walk(tree):
         if isinstance(node, ast.Assign):
@@ -119,9 +121,42 @@ def inspect_code(source):
                 except (ValueError, TypeError):
                     continue
                 add(key, node.args[1], node.lineno)
+    embedded = False
+    for node in ast.walk(tree):
+        # Local RQAlpha bridges keep the original strategy as a SOURCE string and the run settings in __config__.
+        if not (isinstance(node, ast.Assign) and len(node.targets) == 1 and isinstance(node.targets[0], ast.Name)):
+            continue
+        name = node.targets[0].id
+        if name.upper() == "SOURCE" and isinstance(node.value, ast.Constant) and isinstance(node.value.value, str):
+            inner = inspect_code(node.value.value) if "\n" in node.value.value else {}
+            for c in inner.get("candidates", []):
+                candidates.append({**c, "embedded": True})
+            embedded = embedded or bool(inner.get("candidates"))
+        elif name == "__config__":
+            try:
+                config = ast.literal_eval(node.value)
+            except (ValueError, TypeError, SyntaxError, RecursionError, MemoryError):
+                continue
+            base = config.get("base", {}) if isinstance(config, dict) else {}
+            accounts = base.get("accounts") if isinstance(base.get("accounts"), dict) else {}
+            for key, value in (("start_date", base.get("start_date")), ("end_date", base.get("end_date")),
+                               ("capital_base", accounts.get("stock"))):
+                if isinstance(value, (int, float, str)) and value != "":
+                    candidates.append({"key": key, "value": value, "line": node.lineno,
+                                       "scope": "unconfirmed_literal", "config": True})
+    candidates.extend(_alias_candidates(candidates))
     return {"status": "parsed", "candidates": candidates, "skipped_header_lines": skipped,
             "note": "静态字面量候选，可能位于未调用函数或分支；未执行代码，未激活规则"
-                    + (f"；已跳过开头 {skipped} 行说明文字" if skipped else "")}
+                    + (f"；已跳过开头 {skipped} 行说明文字" if skipped else "")
+                    + ("；含代码内嵌的原策略与回测配置" if embedded else "")}
+
+
+def _alias_candidates(candidates):
+    """Common JoinQuant names for the holding count (target_num, stock_num) as hold_num."""
+    have = {c["key"] for c in candidates}
+    if "hold_num" in have:
+        return []
+    return [{**c, "key": "hold_num", "alias_of": c["alias"]} for c in candidates if c.get("alias")]
 
 
 MAX_UNPACKED_BYTES = 40_000_000
@@ -158,13 +193,42 @@ def unpack_archives(files):
 
 
 def is_platform_log(text):
-    """JoinQuant run logs are plain text: 'YYYY-MM-DD HH:MM:SS - LEVEL - message'."""
+    """JoinQuant: 'YYYY-MM-DD HH:MM:SS - LEVEL - message'. RQAlpha: '[YYYY-MM-DD HH:MM:SS.ffffff] LEVEL: message',
+    possibly several logs joined under '===== name.log =====' headers, with warnings and tracebacks between."""
     head = [line for line in text.splitlines()[:20] if line.strip()]
     matched = sum(bool(LOG_LINE.match(line)) for line in head)
-    return len(head) >= 3 and bool(LOG_LINE.match(head[0])) and matched >= .6 * len(head)
+    if len(head) >= 3 and bool(LOG_LINE.match(head[0])) and matched >= .6 * len(head):
+        return True
+    lines = text.splitlines()[:400]
+    sections = sum(bool(LOG_SECTION.match(line)) for line in lines)
+    rq = sum(bool(RQ_LOG_LINE.match(line)) for line in lines)
+    # Strategy code never starts with a log section header, and has no bracketed timestamps at line start.
+    return bool(lines) and (bool(LOG_SECTION.match(lines[0])) or rq >= 3) and (sections or rq >= .3 * len([l for l in lines if l.strip()]))
+
+
+def parse_log(text):
+    """Rows {时间, 级别, 内容, line} from either format; continuation lines join the previous message.
+    RQAlpha console.log and engine.log repeat the same lines; each (time, level, message) is kept once."""
+    rows, seen = [], set()
+    for index, line in enumerate(text.splitlines(), 1):
+        if LOG_SECTION.match(line):
+            continue
+        match = LOG_LINE.match(line) or RQ_LOG_LINE.match(line)
+        if match:
+            key = (match[1], match[2], match[3].strip())
+            if key in seen:
+                rows.append(None)                 # a duplicate swallows its own continuation lines
+                continue
+            seen.add(key)
+            rows.append({'时间': match[1], '级别': match[2], '内容': match[3].strip(), 'line': index})
+        elif rows and rows[-1] is not None and line.strip():
+            rows[-1]['内容'] += chr(10) + line
+    return [r for r in rows if r is not None]
 
 
 LOG_LINE = re.compile(r"(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}) - ([A-Z]+)\s*- (.*)")
+RQ_LOG_LINE = re.compile(r"\[(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})(?:\.\d+)?\] ([A-Z]+): (.*)")
+LOG_SECTION = re.compile(r"=====\s*[\w.\-]+\.log\s*=====\s*$")
 
 
 def decode_source(source):
@@ -309,7 +373,7 @@ def normalize(files, *, adapter="auto", name="导入策略", opening_cash=None):
     if adapter not in {'auto', 'bigquant', 'joinquant', 'ricequant', 'generic'}:
         raise ValueError("暂不支持该平台适配器")
     files = unpack_archives(files)
-    if not 1 <= len(files) <= MAX_FILES:
+    if not 1 <= len(files) <= MAX_FILES:  # the web parser admits two more so this message, not a bare 400, explains it
         raise ValueError(f"每次最多上传 {MAX_FILES} 个文件（ZIP 按解压后的文件计）")
     if not name.strip() or len(name) > 80:
         raise ValueError("策略名称应为 1–80 个字符")

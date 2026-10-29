@@ -46,7 +46,13 @@ artifacts/environments/e2e-clean/Scripts/python.exe -m qwb.cli e2e check --outpu
 artifacts/environments/e2e-clean/Scripts/python.exe -m pytest -q tests/test_portfolio_optimization.py
 ```
 
-Linux 将 Python 路径改为 `bin/python`。Windows 的 diffcp 目前需 MSVC C++ 构建工具、Windows SDK 与 CMake/Ninja；缺少编译环境时安装可能失败。跨平台 CI 会显式安装并运行，CI 配置存在不代表本地已验证 Linux。GPU 研究另建环境并单独记录，不把 CPU lock 随意改为未记录的 CUDA 版本。
+Linux 将 Python 路径改为 `bin/python`。Windows 改用 `requirements-e2e-windows.lock`（加 `--only-binary :all:`），全部来自预编译包，不需要 MSVC、Windows SDK 或 CMake：
+
+```powershell
+uv pip install --python artifacts/environments/e2e-clean/Scripts/python.exe --only-binary :all: -r requirements-e2e-windows.lock --torch-backend cpu
+```
+
+原因：diffcp 1.1.x 没有 Windows 预编译包，cvxpylayers 1.x 又要求 diffcp ≥ 1.1；最后一个带 Windows 包的 diffcp 1.0.23 按 numpy 1.x 编译，与 numpy 2 同用会崩溃。因此 Windows 组合为 cvxpylayers 0.1.6、diffcp 1.0.23、cvxpy 1.5.3、scs 3.2.7、numpy 1.26.4、scipy 1.13.1，其余与主锁一致；`ConvexAllocator` 对 0.1.x 没有 `solver` 参数做了回退（0.1.x 固定用 diffcp + SCS）。2026-10-29 在全新虚拟环境中安装 60 个包，`uv pip check` 通过，`qwb e2e check` PASS，全量测试 1129 passed。由 `requirements-e2e-windows.in` 生成。跨平台 CI 会显式安装并运行，CI 配置存在不代表本地已验证 Linux。GPU 研究另建环境并单独记录，不把 CPU lock 随意改为未记录的 CUDA 版本。
 
 检查输出目录必须不存在，避免覆盖旧证据。`acceptance.json` 保存成功和失败，`checksums.json` 保存结果哈希。基础环境未装求解器时，账户检查可通过，数值检查明确失败，CLI 返回 1。
 

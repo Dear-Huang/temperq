@@ -7,7 +7,7 @@ from hashlib import sha256
 import io
 import re
 
-from .strategy_imports import (LOG_LINE, is_platform_log, SCHEMA, MAX_ROWS, _ref, date_value, decode_source,
+from .strategy_imports import (LOG_LINE, is_platform_log, parse_log, SCHEMA, MAX_ROWS, _ref, date_value, decode_source,
                                inspect_code, numeric)
 from .securities import security_code as stock_code
 from .audit_fee_units import order_fields
@@ -127,7 +127,8 @@ def detect_adapter(files):
               or {'event', 'order_id', 'status', 'filled_quantity'} <= fields
               or {'order_book_id', 'last_quantity', 'transaction_cost'} <= fields
               or {'order_book_id', 'quantity', 'last_price', 'market_value'} <= fields
-              or {'cash', 'transaction_cost', 'market_value', 'total_value'} <= fields):
+              or {'cash', 'transaction_cost', 'market_value', 'total_value'} <= fields
+              or {'日期', '策略净值', '基准净值'} <= fields):
             found.add('ricequant')
         elif {'买/卖', '成交价'} <= fields or {'持仓均价', '持仓市值'} <= fields:
             found.add('bigquant')
@@ -189,13 +190,9 @@ def other_platform(files, *, adapter, name, opening_cash=None):
         text, encoding = decode_source(source)
         if source.name.lower().endswith('.txt') and is_platform_log(text):
             kind = 'logs'
-            for index, line in enumerate(text.splitlines(), 1):
-                match = LOG_LINE.match(line)
-                if match:
-                    result['logs'].append({'时间': match[1], '级别': match[2], '内容': match[3].strip(),
-                                           'ref': _ref(kind, index)})
-                elif result['logs']:
-                    result['logs'][-1]['内容'] += chr(10) + line  # continuation of a multi-line message
+            for row in parse_log(text):
+                line = row.pop('line')
+                result['logs'].append({**row, 'ref': _ref(kind, line)})
             row_count = len(result['logs'])
         elif source.name.lower().endswith(('.py', '.txt')):
             kind = 'code'
@@ -359,8 +356,18 @@ def other_platform(files, *, adapter, name, opening_cash=None):
                     result['platform_returns'] = []
                     for index, row in rows:
                         value = numeric(row['unit_net_value'], '单位净值')
+                        bench = (row.get('benchmark_unit_net_value') or '').strip()
                         result['platform_returns'].append({'date': date_value(row['date'], '净值日期'),
-                            'strategy_pct': (value - 1) * 100, 'ref': _ref(kind, index)})
+                            'strategy_pct': (value - 1) * 100,
+                            'benchmark_pct': (numeric(bench, '基准净值') - 1) * 100 if bench else None,
+                            'ref': _ref(kind, index)})
+            elif {'日期', '策略净值', '基准净值'} <= fields:
+                # RiceQuant local 每日净值: strategy and benchmark net values, kept to cross-check equity and as benchmark.
+                kind = 'platform_returns'
+                result['platform_returns'] = [{'date': date_value(row['日期'], '净值日期'),
+                    'strategy_pct': (numeric(row['策略净值'], '策略净值') - 1) * 100,
+                    'benchmark_pct': (numeric(row['基准净值'], '基准净值') - 1) * 100 if row['基准净值'].strip() else None,
+                    'ref': _ref(kind, index)} for index, row in rows]
             elif {'event', 'order_id', 'status', 'filled_quantity'} <= fields:
                 # RQAlpha 委托详情: one row per order event; keep the final state of each order.
                 kind = 'orders'
@@ -416,10 +423,17 @@ def other_platform(files, *, adapter, name, opening_cash=None):
                 kind = 'platform_returns'
                 result['platform_returns'] = [{'date': date_value(row['时间'], '收益日期'),
                     'strategy_pct': numeric(row['策略收益'], '策略收益', nonnegative=False),
+                    'benchmark_pct': numeric(row['基准收益'], '基准收益', nonnegative=False) if row['基准收益'].strip() else None,
                     'ref': _ref(kind, index)} for index, row in rows]
             elif {'时间', '级别', '内容'} <= fields:
                 kind = 'logs'
                 result['logs'] = [{**row, 'ref': _ref(kind, i)} for i, row in rows]
+            elif len(header) == 2 and header[0] in {'指标', '策略名'}:
+                # RiceQuant 回测收益: one metric per row. Kept to compare with the audit's own figures, never used for them.
+                kind = 'platform_summary'
+                pairs = ([('策略名', header[1])] if header[0] == '策略名' else []) + [
+                    (r[header[0]].strip(), r[header[1]].strip()) for _, r in rows]
+                result['platform_summary'] = {k: v for k, v in pairs if k}
             else:
                 raise ValueError(source.name + '：未识别的表头，请使用平台原始导出或页面所列最小格式')
             row_count = len(rows)

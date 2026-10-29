@@ -493,3 +493,16 @@ def test_report_handoff_preserves_confirmed_cap_and_legacy_report_is_not_recompu
     assert '未运行新增费用与风险检查' in c.get(legacy_path).text
     assert c.get(legacy_path+'/fees.csv').status_code == 404
     assert target.read_bytes() == raw
+
+
+def test_report_page_leads_with_summary_and_exports_document(client):
+    _, c, _ = client
+    _, report = run_report(client)
+    page = c.get(report).text
+    assert page.index('结论摘要') < page.index('回测长度与内部验证')
+    assert 'report.html' in page
+    doc = c.get(report + '/report.html')
+    assert doc.status_code == 200 and doc.text.startswith('<!doctype html>')
+    assert '一、结论摘要' in doc.text and '七、审计范围与限制' in doc.text
+    download = c.get(report + '/report.html?download=1')
+    assert 'attachment' in download.headers['content-disposition']

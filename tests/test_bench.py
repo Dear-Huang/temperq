@@ -463,6 +463,7 @@ def test_verify_detects_changed_original_predictions(market, tmp_path):
     evaluate_model(market["anchor"], market["path"], out, log=lambda *_: None)
     path = market["anchor"] / "predictions.parquet"
     table = pd.read_parquet(path)
+    table["prediction"] = table["prediction"].astype("float64")
     table.loc[0, "prediction"] += 1
     table.to_parquet(path, index=False)
     assert verify_result(out)["status"] == "PASS"

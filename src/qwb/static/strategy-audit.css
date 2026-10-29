@@ -83,3 +83,8 @@ main>.strategy-picker{margin:8px 0 12px;padding:10px 0}.review-heading{margin-bo
 button.link{background:none;border:0;color:var(--accent,#2453d6);cursor:pointer;padding:0;margin-top:8px}
 .action-rerun{margin:10px 0;padding:8px 12px;border-left:3px solid #8a8f98;background:var(--bg,#f6f7f9)}
 .rerun-better{border-color:#18724a}.rerun-worse{border-color:#b42318}.rerun-mixed{border-color:#b54708}
+
+/* Conclusions at the top of the report page */
+.report-summary{padding-left:20px;margin:8px 0 12px}
+.report-summary li{margin:6px 0;line-height:1.6}
+.report-summary .audit-verdict{margin-right:6px}

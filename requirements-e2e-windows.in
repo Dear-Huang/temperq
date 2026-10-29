@@ -1,0 +1,11 @@
+# Windows e2e research set that installs from wheels only (no MSVC/CMake needed).
+# diffcp 1.1.x ships no Windows wheel; 1.0.23 does but is built against numpy 1.x,
+# so the solver stack moves to the last releases that accept numpy 1.26.
+torch==2.11.0
+cvxpylayers==0.1.6
+diffcp==1.0.23
+cvxpy==1.5.3
+scs==3.2.7
+numpy==1.26.4
+scipy==1.13.1
+pyarrow==25.0.1
