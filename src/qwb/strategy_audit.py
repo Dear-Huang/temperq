@@ -230,6 +230,10 @@ def analyze(bundle, settings=None, *, policy=None):
     timing = audit_timing.analyze(bundle, context["accounting"], thresholds)
     if timing:
         context["fill_timing"] = timing
+    from . import audit_completion
+    completion = audit_completion.analyze(bundle, context["accounting"], thresholds)
+    if completion:
+        context["partial_entry"] = completion
     settings = {**settings, "broker_confirmed": broker_confirmed, **({"premise": premise} if premise else {}),
                 **({"claim": claim} if claim else {}),
                 **({"thresholds": {k: v for k, v in thresholds.items() if v != audit_rules.defaults()[k]}}

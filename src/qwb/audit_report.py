@@ -484,6 +484,19 @@ def render(record, bundle, result):
             rows.append(("年化双边换手（成交额 / 期初权益）", f'{notional / perf["start_equity"] / perf["years"]:.1f} 倍'))
     h.append('<div class="tw"><table><tr><th>项目</th><th class="n">数值</th></tr>' + "".join(f'<tr><td>{a}</td><td class="n">{b}</td></tr>' for a, b in rows) + '</table></div>')
     h.append('<p class="mut">价差为按最小价位估算的情景，不是实测成本；原回测若已计滑点，需先分离再比较。逐笔费用见附件 fees.csv、tick-costs.csv。</p>')
+    partial = modules.get("partial_entry")
+    if partial:
+        h.append('<h3>部分成交与补单</h3>')
+        h.append(f'<p><span class="tag {"evidence" if partial["status"] == "found" else "pass"}">结论</span>{esc(partial["verdict"])}。</p>')
+        long = sorted((e for e in partial.get("episodes", []) if e["days_without_order"] >= partial.get("long_days", 5)),
+                      key=lambda e: -e["days_without_order"])[:5]
+        if long:
+            h.append('<div class="tw"><table><tr><th>日期</th><th>标的</th><th class="n">下单 / 成交</th><th class="n">未补单交易日</th>'
+                     '<th class="n">期间现金占比</th><th>平台原因</th></tr>' + "".join(
+                f'<tr><td>{e["date"]}</td><td>{esc(e["code"])}</td><td class="n">{e["ordered"]:,} / {e["filled"]:,}</td>'
+                f'<td class="n">{e["days_without_order"]}</td><td class="n">{_pct(e["mean_cash_share"], 0)}</td><td>{esc(e["reason"])}</td></tr>'
+                for e in long) + '</table></div>')
+        h.append(f'<p class="mut">{esc(partial["scope"])}。</p>')
     timing = modules.get("fill_timing")
     if timing:
         h.append('<h3>成交时点敏感性</h3>')

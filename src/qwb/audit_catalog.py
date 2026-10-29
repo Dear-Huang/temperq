@@ -221,6 +221,8 @@ def coverage(bundle, result):
                       algorithm("成交时点敏感性", inputs="ready" if (modules.get("fill_timing") or {}).get("status") in ("sensitive", "stable", "unscaled")
                                 else "missing", missing=[] if (modules.get("fill_timing") or {}).get("status") in ("sensitive", "stable", "unscaled")
                                 else ["成交时间与成交日分钟价（date, time, code, close）"]),
+                      algorithm("部分成交与补单", inputs="ready" if modules.get("partial_entry") else "missing",
+                                missing=[] if modules.get("partial_entry") else ["委托记录（下单数与成交数）"]),
                       algorithm("实现短缺及延迟分解", "not_implemented", "missing", ["带时点的目标订单、决策价及完整生命周期"])],
         "account_integrity": [algorithm("库存、现金、公司行动与盈亏桥", inputs=reconciled)],
         "attribution": [algorithm("逐股及回撤期会计贡献", inputs=reconciled), algorithm("基准/风格与可行反事实分解", "not_implemented", "missing", ["时点基准、因子收益及构建目标历史"])],

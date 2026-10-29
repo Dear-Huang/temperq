@@ -21,12 +21,35 @@ _RULES = {
     "rank_churn": ("M-RANK-REPLAY", "M-FIFO", "T-BUFFER-RANK", "T-WHIPSAW-DAYS", "T-CHURN-SHARE", "T-CHURN-MIN"),
     "cash_buffer": ("T-CASH-SHORT", "T-CASH-BUFFER"),
     "fill_timing": ("M-FILL-TIMING", "T-TIMING-SHARE"),
+    "partial_entry": ("M-PARTIAL-ENTRY", "T-PARTIAL-DAYS"),
 }
 STATES = {"act": "建议处理", "review": "建议核对", "hold": "暂不改"}
 
 
 def _yuan(value):
     return f"¥{value:,.0f}"
+
+
+def _partial_card(completion):
+    """A buy that filled in part and was never topped up: the target is held, the order is not complete."""
+    if not completion or completion.get("status") != "found":
+        return None
+    w = completion["worst"]
+    return {
+        "id": "partial_entry", "state": "review", "title": "买单没成交完，之后也没补",
+        "finding": completion["verdict"] + "。",
+        "headline": f"{completion['long_episodes']} 笔买单成交不足、之后很久没补单：持有了目标，不等于完成了原买单",
+        "edits": [],
+        "options": [{"label": "维持原样", "effect": "策略本意就是只在信号日下一次单、不追单时"},
+                    {"label": "成交不足时次日补单", "effect": "在下单函数里比较目标股数和实际持仓，差额下次补上"},
+                    {"label": "分笔下单", "effect": "单笔超过当根成交量上限时，拆成多根K线成交"}],
+        "saving": "不省钱；资金按策略本意投入",
+        "sacrifice": "补单会增加成交次数和费用",
+        "net": "需要回原平台加上补单逻辑重跑才能知道",
+        "evidence": "recomputed",
+        "basis": "委托记录的下单数与成交数；期间现金占比来自账户",
+        "overturn": "策略本来就设计为不追单；或补单后的重跑收益不优于原版。",
+    }
 
 
 def _timing_card(timing):
@@ -435,7 +458,8 @@ def cards(result, bundle=None):
            _minimum_card(fees_module, edits, thresholds),
            _churn_card(modules.get("signal_mapping"), edits, result.get("opening_state"), thresholds),
            _cash_buffer_card(modules.get("signal_mapping"), edits, thresholds),
-           _timing_card(modules.get("fill_timing"))]
+           _timing_card(modules.get("fill_timing")),
+           _partial_card(modules.get("partial_entry"))]
     order = {"act": 0, "review": 1, "hold": 2}
     cards = sorted((c for c in out if c), key=lambda c: order[c["state"]])
     for card in cards:

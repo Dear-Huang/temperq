@@ -66,6 +66,8 @@ RULES = {r.id: r for r in (
     Rule("T-PREMISE-MIN-PERIODS", "threshold", "至少这么多个调仓周期才检验前提", UNTESTED, 20, "期", range=(5, 500)),
     Rule("T-TIMING-SHARE", "threshold", "换个成交时点，盈亏变化达到净盈亏的这个比例，就说结论依赖成交时点", UNTESTED, .25, "比例", range=(.01, 1.)),
     Rule("M-FILL-TIMING", "method", "固定原成交股数和费用，把成交价换成同日其他分钟的收盘价，比较盈亏；不重跑策略决策", "本项目，见 audit_timing"),
+    Rule("T-PARTIAL-DAYS", "threshold", "买单只成交一部分后，连续这么多个交易日没有补单才列出", UNTESTED, 5, "交易日", range=(1, 60)),
+    Rule("M-PARTIAL-ENTRY", "method", "按委托记录的下单数和成交数找部分成交的买单，跟踪到该标的下一次委托或成交为止", "本项目，见 audit_completion"),
     Rule("T-FEE-GAP-MIN", "threshold", "费用差额至少这么多元才出现费用卡", UNTESTED, 1., "元", range=(0., 1000.)),
 )}
 

@@ -174,3 +174,21 @@ def test_holding_the_runner_up_without_an_order_is_retention_not_a_miss():
     bundle = {"scores": scores, "positions": positions, "fills": [], "orders": []}
     out = audit_signals.analyze(bundle, {"accounting": {"status": "verified", "daily": [{"date": days[0]}]}})
     assert out["retained_days"] == 12 and out["days"] - out["followed_days"] - out["retained_days"] == 0
+
+
+def test_partial_buy_not_topped_up_is_reported():
+    # From v14b: a buy filled 30%, then 71 trading days with no further order while 67% of equity sat in cash.
+    from qwb import audit_completion
+    days = [f"2024-02-{d:02d}" for d in range(1, 21)]
+    snaps = [{"date": d, "equity": 100., "cash": 70.} for d in days]
+    positions = [{"date": d, "code": "A.SH", "quantity": 300} for d in days]
+    orders = [{"date": days[0], "code": "A.SH", "side": "buy", "quantity": 1000, "filled": 300, "reason": "超过当根成交量上限"}]
+    fills = [{"date": days[0], "code": "A.SH"}]
+    out = audit_completion.analyze({"orders": orders, "snapshots": snaps, "positions": positions, "fills": fills},
+                                   {"status": "verified"})
+    assert out["status"] == "found" and out["worst"]["days_without_order"] == 19
+    assert abs(out["worst"]["mean_cash_share"] - .7) < 1e-9 and "没有补单" in out["verdict"]
+    topped = orders + [{"date": days[2], "code": "A.SH", "side": "buy", "quantity": 700, "filled": 700, "reason": ""}]
+    out = audit_completion.analyze({"orders": topped, "snapshots": snaps, "positions": positions, "fills": fills},
+                                   {"status": "verified"})
+    assert out["status"] == "short"
