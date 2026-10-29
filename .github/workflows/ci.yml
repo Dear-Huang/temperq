@@ -47,7 +47,7 @@ jobs:
       - run: uv pip install --system -r requirements-e2e.lock --torch-backend cpu
         if: runner.os != 'Windows'
       # Windows: wheels only, no compiler (diffcp 1.1.x has no Windows wheel).
-      - run: uv pip install --system --only-binary :all: -r requirements-e2e-windows.lock --torch-backend cpu
+      - run: "uv pip install --system --only-binary :all: -r requirements-e2e-windows.lock --torch-backend cpu"
         if: runner.os == 'Windows'
       - run: uv pip install --system --no-deps -e . -e third_party/ashare-tcost
       - run: python -m pytest -q tests/test_portfolio_contracts.py tests/test_portfolio_reference.py tests/test_observations.py tests/test_time_folds.py tests/test_portfolio_optimization.py tests/test_sequence_model.py tests/test_sequence_runs.py tests/test_target_bench.py tests/test_prediction_allocation.py
