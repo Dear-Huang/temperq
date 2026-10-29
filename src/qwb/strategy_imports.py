@@ -279,7 +279,8 @@ def bigquant(files, *, name, opening_cash=None):
             elif {'date', 'code', 'close'} <= columns:
                 kind = 'prices'; required = set()
             else:
-                raise ValueError(f"{source.name}：未识别的 BigQuant 表头")
+                raise ValueError(f"{source.name}：表头既不是已支持平台（BigQuant、聚宽、米筐）的原始导出，也不是标准格式；"
+                                 "请按标准格式整理（trades.csv 等，见 docs/STRATEGY_AUDIT_FORMAT.md）")
             if required - columns:
                 raise ValueError(f"{source.name}：缺少列 {','.join(sorted(required - columns))}")
             prior_date = ""
