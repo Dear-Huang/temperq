@@ -403,12 +403,12 @@ def summary_section(bundle, result, base):
     from . import audit_report
     perf = audit_report.performance(bundle)
     cards = audit_actions.cards(result, bundle)
-    verdicts = audit_verdicts.conclusions(bundle, result)
-    lines = audit_report.headline(bundle, result, perf, result['modules'].get('premise'), cards, verdicts)
-    body = '<section class="review-section" id="report-summary"><h2>结论摘要</h2><ol class="report-summary">'
-    for tone, text in lines:
-        body += f'<li><span class="audit-verdict verdict-{tone}">{audit_report.STATE_WORDS[tone]}</span> {esc(text)}</li>'
-    body += '</ol>'
+    body = '<section class="review-section" id="report-summary"><h2>结论摘要</h2><div class="report-answers">'
+    for item in audit_report.answers(bundle, result, perf, result['modules'].get('premise'), cards):
+        body += (f'<div class="report-answer"><h3>{esc(item["q"])} <span class="audit-verdict verdict-{item["tone"]}">'
+                 f'{audit_report.STATE_WORDS[item["tone"]]}</span></h3><p><strong>{esc(item["lead"])}</strong></p>'
+                 + ('<ul>' + ''.join(f'<li>{esc(n)}</li>' for n in item["notes"]) + '</ul>' if item["notes"] else '') + '</div>')
+    body += '</div>'
     if perf:
         cells = [('区间收益', pct(perf['total'])), ('年化收益', pct(perf['annual']) if perf['annual'] is not None else '—'),
                  ('最大回撤', pct(perf['max_drawdown'])), ('夏普比率', f"{perf['sharpe']:.2f}" if perf['sharpe'] is not None else '—')]

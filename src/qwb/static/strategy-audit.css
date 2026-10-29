@@ -88,3 +88,8 @@ button.link{background:none;border:0;color:var(--accent,#2453d6);cursor:pointer;
 .report-summary{padding-left:20px;margin:8px 0 12px}
 .report-summary li{margin:6px 0;line-height:1.6}
 .report-summary .audit-verdict{margin-right:6px}
+
+.report-answers{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:12px;margin:8px 0 12px}
+.report-answer{border:1px solid #d9dee6;border-radius:6px;padding:10px 12px}
+.report-answer h3{margin:0 0 6px;font-size:15px;display:flex;justify-content:space-between;gap:8px}
+.report-answer ul{margin:6px 0 0;padding-left:18px}
