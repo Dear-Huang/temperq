@@ -160,3 +160,17 @@ def test_first_screen_answers_three_questions():
     out = audit_report.answers(bundle, {"modules": {}}, None, None, [])
     assert [a["q"] for a in out] == ["收益能信吗", "你的想法对吗", "该改什么"]
     assert out[0]["tone"] == "adjust" and "没有任何成交" in out[0]["notes"][0]
+
+
+def test_holding_the_runner_up_without_an_order_is_retention_not_a_miss():
+    # From v14b: a retention rule kept the rank-2 name on 193 days; the audit had counted them as execution misses.
+    from qwb import audit_signals
+    days = [f"2024-01-{d:02d}" for d in range(2, 26)]
+    scores, positions = [], []
+    for i, d in enumerate(days):
+        top, second = ("A.SH", "B.SH") if i % 2 else ("B.SH", "A.SH")
+        scores += [{"date": d, "code": top, "rank": 1, "selected": True}, {"date": d, "code": second, "rank": 2, "selected": False}]
+        positions.append({"date": d, "code": "B.SH"})             # always keeps B, never trades
+    bundle = {"scores": scores, "positions": positions, "fills": [], "orders": []}
+    out = audit_signals.analyze(bundle, {"accounting": {"status": "verified", "daily": [{"date": days[0]}]}})
+    assert out["retained_days"] == 12 and out["days"] - out["followed_days"] - out["retained_days"] == 0

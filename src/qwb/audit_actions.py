@@ -357,7 +357,8 @@ def _churn_card(signals, edits, opening=None, t=None):
               ("期初状态", opening.get("text", "未确认")),
               ("平均每笔成本", f"¥{signals['cost_per_round_trip']:,.2f}（费用 + 价差情景）"),
               ("每笔成本是否随审计佣金变化", "否：取导出的实际费用")]
-    missed = signals["days"] - signals["followed_days"]
+    retained = signals.get("retained_days", 0)
+    missed = signals["days"] - signals["followed_days"] - retained
     groups = signals.get("missed_groups") or []
     reasons = "；".join(f"{g['days']} 天{'全部' if g['days'] > 1 else ''}是 {g['code']}，"
                        f"{(g['time'][:5] + ' 下单，') if g['time'] else ''}平台原因：{g['reason'].replace('委托未成交：', '')}"
@@ -370,7 +371,9 @@ def _churn_card(signals, edits, opening=None, t=None):
         "finding": f"按策略自己的每日排名，{signals['days']} 个交易日里第一名换了 {switches} 次，平均每 {signals['average_hold_days']:.0f} 天换一次；"
                    f"每次换仓的费用和价差约 {_yuan(signals['cost_per_round_trip'])}。"
                    f"有 {signals['whipsaw_lots']} 笔卖出后 5 天内又排回第一，这些交易付出约 {_yuan(signals['whipsaw_cost'])}。"
-                   + (f"另有 {missed} 天没有持有选中的目标（{reasons}）。" if missed else "持仓每天都跟上了信号。"),
+                   + (f"另有 {missed} 天没有持有选中的目标（{reasons}）。" if missed else "持仓每天都跟上了信号。")
+                   + (f"{retained} 天没有下单、继续持有紧随第一之后的标的，像是策略自带的保留规则，未计入上面的天数；"
+                      "要确认，需要策略每天的最终目标（不只排名）。" if retained else ""),
         "headline": (f"固定成交下，排进前 {signals['buffer_rank']} 就不卖可少换 {avoided} 次，费用和价差情景约 "
                      f"{_yuan(signals['avoided_cost'])}；收益影响需重跑" if worth
                      else f"固定成交下保留带只能少换 {avoided} 次，暂不改"),

@@ -46,7 +46,7 @@ def analyze(bundle, context, thresholds=None):
             failed[o["date"]].append(o)
 
     # 1. Did the account hold what the signal chose?
-    missed = []
+    missed, retained = [], []
     for prev, d in zip([None] + days, days):
         want = chosen[d]
         if want <= held[d]:
@@ -54,6 +54,13 @@ def analyze(bundle, context, thresholds=None):
         changed = prev is not None and chosen[prev] != want
         orders = failed.get(d, [])
         platform = orders[-1]["message"] if orders and orders[-1].get("message") else ""
+        held_ranks = [ranks[d][c] for c in held[d] if c in ranks[d]]
+        if (not orders and not traded[d] and held[d] and len(held_ranks) == len(held[d])
+                and max(held_ranks) <= len(want) + 1):
+            # Holding a name just behind the top with no order that day looks like the strategy's own retention
+            # rule (keep while still near the top), not an execution gap. Reported apart from misses.
+            retained.append({"date": d, "wanted": sorted(want), "held": sorted(held[d])})
+            continue
         if orders:
             reason = "委托未成交：" + (orders[-1]["reason"] or "未说明")
         elif changed or traded[d]:
@@ -91,7 +98,10 @@ def analyze(bundle, context, thresholds=None):
              and 0 < o["required_cash"] - o["available_cash"] <= short_share * o["required_cash"]]
     short_days = {o["date"] for o in short}
     return {
-        "id": "signal_mapping", "days": len(days), "followed_days": len(days) - len(missed),
+        "id": "signal_mapping", "days": len(days), "followed_days": len(days) - len(missed) - len(retained),
+        "retained_days": len(retained),
+        "retained_note": "没有下单、继续持有排名紧随第一之后的标的：像是策略自带的保留规则，不算执行失败；"
+                         "只有排名、没有策略的最终目标时，审计无法区分保留规则和漏单",
         "cash_short_orders": len(short), "cash_short_days": sum(m["date"] in short_days for m in missed),
         "cash_short_gap": max((o["required_cash"] - o["available_cash"] for o in short), default=0.),
         "cash_short_examples": [{"date": o["date"], "code": o["code"], "available": o["available_cash"],
