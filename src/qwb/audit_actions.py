@@ -358,7 +358,9 @@ def _cash_buffer_card(signals, edits, t=None):
         "headline": f"下单留约 {keep:.0%} 余量可消除这 {signals['cash_short_orders']} 笔拒单；收益和回撤影响需重跑",
         "edits": edits.get("cash_buffer", []),
         "options": [{"label": "维持原样", "effect": "空仓天数由当天价格碰巧决定，回测结果含这部分偶然"},
-                    {"label": f"下单金额乘 {1 - keep:g}", "effect": "留出佣金和滑点，买单不再被拒"}],
+                    {"label": f"下单金额乘 {1 - keep:g}", "effect": "留出佣金和滑点，买单不再被拒；比例是经验值"},
+                    {"label": "按预算算最大整手数", "effect": "下单前按 价格+滑点、佣金（含最低佣金）和整手单位，算出现金买得起的最大股数再下单；"
+                                                          "不需要经验比例，现金留得最少"}],
         "saving": "不省钱：修的是本该持仓却空仓的天数",
         "sacrifice": f"每次少买约 {keep:.0%} 的金额，现金略多",
         "net": "空仓这些天的涨跌原回测没有吃到，改后结果可能更好也可能更差，需回原平台重跑",

@@ -68,3 +68,13 @@ def test_recorded_scores_import_with_selected():
              imp.SourceFile("code.py", STRATEGY.encode())]
     bundle = imp.normalize(files)
     assert [s["selected"] for s in bundle["scores"]] == [True, False]
+
+
+def test_budget_lot_is_the_largest_affordable_round_lot():
+    scope = {}
+    exec((STATIC / "temperq_budget_lot.py").read_text(encoding="utf-8"), scope)
+    f = scope["temperq_max_lot"]
+    cost = lambda q, p=4.531, s=.001: 0 if q == 0 else q * (p + s) + max(.0003 * q * (p + s), 5)
+    q = f(100000, 4.531, slippage=.001)
+    assert q == 22000 and cost(q) <= 100000 < cost(q + 100)       # matches the v14b certificate for this row
+    assert f(3, 4.0) == 0 and f(410, 4.0, minimum=5) == 100 and f(404, 4.0, minimum=5) == 0
