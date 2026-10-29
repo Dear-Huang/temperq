@@ -86,3 +86,15 @@ def test_generic_account_with_receivable_dividend_closes_on_the_ex_date(tmp_path
     (target / "code.txt").write_text("def initialize(context):\n    pass\n", encoding="utf-8")
     code, out = run(["audit", "check", str(target), "--json"], capsys)
     assert out["books"] == "verified", out.get("first_exceptions")
+
+
+def test_compare_two_audited_versions(tmp_path, capsys):
+    a, b = tmp_path / "a", tmp_path / "b"
+    for d in (a, b):
+        assert run(["audit", "run", str(SAMPLES / "generic"), "--out", str(d), "--json"], capsys)[0] == 0
+    code, out = run(["audit", "compare", str(a), str(b), "--json"], capsys)
+    assert code == 0 and out["comparable"] and out["same_trades"] and out["evidence"] == "E4"
+    c = tmp_path / "c"
+    assert run(["audit", "run", str(SAMPLES / "generic"), "--out", str(c), "--commission-bp", "1", "--json"], capsys)[0] == 0
+    code, out = run(["audit", "compare", str(a), str(c), "--json"], capsys)
+    assert code == 2 and "费用情景不同" in out["error"]

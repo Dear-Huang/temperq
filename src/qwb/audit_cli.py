@@ -36,6 +36,10 @@ def add_parser(sub):
             cmd.add_argument("--claimed-annual", type=float, help="claimed annual return in percent")
             cmd.add_argument("--claim-source", default="", help="where the claim comes from, e.g. a post title")
         cmd.add_argument("--json", action="store_true", help="print the machine-readable result only")
+    cmp = commands.add_parser("compare", help="original vs optimized: was the change worth it (from two qwb audit run outputs)")
+    cmp.add_argument("original", help="output directory of the original version's qwb audit run")
+    cmp.add_argument("optimized", help="output directory of the optimized version's qwb audit run")
+    cmp.add_argument("--json", action="store_true")
     inst = commands.add_parser("instrument-check", help="prove an instrumented copy only adds TemperQ recording")
     inst.add_argument("original", help="the strategy as the user wrote it")
     inst.add_argument("instrumented", help="the copy with temperq_record(...) added")
@@ -164,6 +168,26 @@ def run(args):
             "books": brief["books"], "skipped_files": skipped}
 
 
+def compare_runs(original_dir, optimized_dir):
+    """The engine's same-method comparison of two audited versions; nothing is computed here."""
+    from . import audit_verification
+    loaded = []
+    for d in (original_dir, optimized_dir):
+        path = Path(d) / "evidence.json"
+        if not path.exists():
+            raise ValueError(f"{d} 里没有 evidence.json；先对这一版运行 qwb audit run")
+        loaded.append(json.loads(path.read_text(encoding="utf-8"))["result"])
+    a, b = loaded
+    if (a.get("settings") or {}).get("commission_bp") != (b.get("settings") or {}).get("commission_bp") or             (a.get("settings") or {}).get("minimum_commission") != (b.get("settings") or {}).get("minimum_commission"):
+        raise ValueError("两版的费用情景不同，不能同口径比较；用相同的 --commission-bp 和 --min-commission 重跑其中一版")
+    out = audit_verification.compare(a, b)
+    if out is None:
+        raise ValueError("其中一版账目未闭合或材料不全，无法比较")
+    keep = ("comparable", "reason", "start", "end", "same_period", "full_gain", "validation_gain", "drawdown",
+            "same_trades", "drawdown_deeper", "evidence", "verdict", "state")
+    return {k: out.get(k) for k in keep if k in out}
+
+
 def _now():
     from datetime import datetime
     return datetime.now().isoformat(timespec="seconds")
@@ -171,6 +195,10 @@ def _now():
 
 def main(args):
     try:
+        if args.audit_cmd == "compare":
+            result = compare_runs(args.original, args.optimized)
+            print(json.dumps(result, ensure_ascii=False, indent=None if args.json else 1, default=str))
+            return 0 if result.get("comparable") else 1
         if args.audit_cmd == "instrument-check":
             from . import audit_instrument
             from .strategy_imports import decode_source, SourceFile
