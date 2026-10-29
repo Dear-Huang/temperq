@@ -98,3 +98,25 @@ def test_compare_two_audited_versions(tmp_path, capsys):
     assert run(["audit", "run", str(SAMPLES / "generic"), "--out", str(c), "--commission-bp", "1", "--json"], capsys)[0] == 0
     code, out = run(["audit", "compare", str(a), str(c), "--json"], capsys)
     assert code == 2 and "费用情景不同" in out["error"]
+
+
+def test_interaction_of_two_changes(tmp_path, capsys):
+    outs = []
+    for i in range(4):
+        d = tmp_path / f"r{i}"
+        assert run(["audit", "run", str(SAMPLES / "generic"), "--out", str(d), "--json"], capsys)[0] == 0
+        outs.append(str(d))
+    code, out = run(["audit", "interaction", *outs, "--labels", "保留带,留现金", "--json"], capsys)
+    assert code == 0 and out["comparable"] and out["evidence"] == "E4"
+    assert out["realistic"]["interaction"] == 0 and "大致可以相加" in out["verdict"]
+
+
+def test_interaction_flags_a_margin_that_changes_sign():
+    from qwb import audit_factorial
+    def run_of(daily):
+        return {"mode": "full", "settings": {"commission_bp": 3, "minimum_commission": 5}, "modules": {
+            "accounting": {"baseline_equity": 100., "daily": [{"date": "2024-01-02", "net_pnl": daily}]}}}
+    out = audit_factorial.analyze(run_of(0.), run_of(-10.), run_of(1.), run_of(-14.), labels=("A", "B"))
+    gains = {(m["change"], m["given"]): m["gain"] for m in out["reported"]["margins"]}
+    assert gains[("B", "不加A")] == 1. and gains[("B", "已加A")] == -4.
+    assert out["reported"]["flips"] == ["B"] and "不能直接叠加" in out["verdict"]

@@ -40,6 +40,11 @@ def add_parser(sub):
     cmp.add_argument("original", help="output directory of the original version's qwb audit run")
     cmp.add_argument("optimized", help="output directory of the optimized version's qwb audit run")
     cmp.add_argument("--json", action="store_true")
+    fac = commands.add_parser("interaction", help="two changes alone and together: can the suggestions be added up")
+    for name in ("base", "only_a", "only_b", "both"):
+        fac.add_argument(name, help=f"qwb audit run output directory: {name}")
+    fac.add_argument("--labels", default="A,B", help="names of the two changes, e.g. 保留带,留现金")
+    fac.add_argument("--json", action="store_true")
     inst = commands.add_parser("instrument-check", help="prove an instrumented copy only adds TemperQ recording")
     inst.add_argument("original", help="the strategy as the user wrote it")
     inst.add_argument("instrumented", help="the copy with temperq_record(...) added")
@@ -170,6 +175,13 @@ def run(args):
             "books": brief["books"], "skipped_files": skipped}
 
 
+def _evidence(directory):
+    path = Path(directory) / "evidence.json"
+    if not path.exists():
+        raise ValueError(f"{directory} 里没有 evidence.json；先对这一版运行 qwb audit run")
+    return json.loads(path.read_text(encoding="utf-8"))["result"]
+
+
 def compare_runs(original_dir, optimized_dir):
     """The engine's same-method comparison of two audited versions; nothing is computed here."""
     from . import audit_verification
@@ -199,6 +211,13 @@ def main(args):
     try:
         if args.audit_cmd == "compare":
             result = compare_runs(args.original, args.optimized)
+            print(json.dumps(result, ensure_ascii=False, indent=None if args.json else 1, default=str))
+            return 0 if result.get("comparable") else 1
+        if args.audit_cmd == "interaction":
+            from . import audit_factorial
+            runs = [_evidence(d) for d in (args.base, args.only_a, args.only_b, args.both)]
+            labels = tuple((args.labels.split(",") + ["A", "B"])[:2])
+            result = audit_factorial.analyze(*runs, labels=labels)
             print(json.dumps(result, ensure_ascii=False, indent=None if args.json else 1, default=str))
             return 0 if result.get("comparable") else 1
         if args.audit_cmd == "instrument-check":
