@@ -144,11 +144,34 @@ def self_check(bundle, model):
             "priced_fills": priced, "unpriced_fills": unpriced}
 
 
+def charged_tax_check(bundle):
+    """When the export separates tax per fill, compare it with the rate in force that day (a fact)."""
+    sells = [f for f in bundle.get("fills", []) if f["side"] == "sell" and asset_class(f["code"]) == "stock" and "tax" in f]
+    if not sells:
+        return None
+    wrong, charged, due, rule_bps = 0, 0., 0., set()
+    for f in sells:
+        try:
+            bp = tax_rules.stamp_tax_sell_bp(date.fromisoformat(f["date"]))
+        except ValueError:
+            continue
+        rule_bps.add(bp)
+        expected = f["notional"] * bp / 1e4
+        charged += f["tax"]
+        due += expected
+        wrong += abs(f["tax"] - expected) > max(.02, .02 * expected)
+    return {"declared_bp": charged / sum(f["notional"] for f in sells) * 1e4, "rule_bp": sorted(rule_bps),
+            "mismatched_sells": wrong, "sells": len(sells), "charged": charged, "due": due, "line": None,
+            "source": "成交导出的税费列"}
+
+
 def stamp_check(bundle, model):
     """Declared stock sell tax against the rate in force on each trade date (a fact)."""
     m = model["models"].get("stock")
     sells = [f for f in bundle.get("fills", []) if f["side"] == "sell" and asset_class(f["code"]) == "stock"]
-    if m is None or not sells:
+    if m is None:
+        return charged_tax_check(bundle)
+    if not sells:
         return None
     declared_bp = 1e4 * ((m["commission_sell"] - m["commission_buy"]) if m.get("tax_inside_sell_cost") else m["tax_sell"])
     wrong, rule_bps = 0, set()

@@ -128,7 +128,7 @@ def upload_form(token, error=""):
 <label>导出平台<select name="adapter"><option value="auto">自动识别</option><option value="bigquant">BigQuant</option><option value="joinquant">聚宽</option><option value="ricequant">米筐</option><option value="generic">其他 / 标准 CSV</option></select></label>
 <label>风格（可留空，由你确认）<input name="style" maxlength="40" placeholder="例如短期反转、趋势、多因子"></label>
 </div><p class="notice">推荐至少 2 年，最好 3 年以上，并覆盖至少一段明显下跌。较短回测也可导入，报告会区分可核账目与规则效果。</p>
-<label>原样上传代码、交易和可选持仓、日志、每日打分；平台下载的 ZIP 不用解压（最多7个文件）<input type="file" name="files" accept=".csv,.txt,.py,.zip" multiple></label>
+<label>原样上传代码、交易和可选持仓、日志、每日打分；平台下载的 ZIP 不用解压（最多10个文件）<input type="file" name="files" accept=".csv,.txt,.py,.zip" multiple></label>
 <details><summary>也可以直接粘贴策略代码</summary><label>策略代码<textarea name="code_text" rows="7" maxlength="200000" placeholder="只读解析，不运行代码；已上传代码文件时不必再粘贴"></textarea></label></details>
 <p class="mut">代码必填；仅有代码时可做静态检查。交易必填，聚宽持仓可推算净变动；持仓强烈推荐、日志推荐、每日打分选填。支持 UTF-8 / GBK，不用改列名。</p>
 <details open class="platform-guide"><summary>各平台怎么导出、能拿到什么</summary>
@@ -148,6 +148,27 @@ def upload_form(token, error=""):
         body += f'<a data-template-kind="{kind}" href="/strategy-audits/templates/{kind}.zip">下载{materials.MATERIALS[kind][0]}模板</a>'
     body += '</div></section><script>(function(){var s=document.querySelector("select[name=adapter]");function update(){document.querySelectorAll("[data-template-kind]").forEach(function(a){a.href="/strategy-audits/templates/"+a.dataset.templateKind+".zip?adapter="+(s.value==="auto"?"generic":s.value);a.hidden=a.dataset.templateKind==="snapshots"&&["bigquant","joinquant"].includes(s.value)})}s.addEventListener("change",update);update()})();</script>'
     return body
+
+
+def premise_fields(bundle, premise=None):
+    """The idea the strategy rests on; checked against the backtest in 盈亏归因."""
+    from . import audit_premise
+    premise = premise or {}
+    scores = bundle.get('scores') or []
+    guess = audit_premise.infer_direction(scores) if scores else None
+    code = audit_premise.from_code(bundle)
+    factors = '、'.join(f['name'] for f in (code or {}).get('factors', [])[:3])
+    direction = premise.get('direction') or ''
+    options = ''.join(f'<option value="{k}"{" selected" if direction == k else ""}>{v}的标的，随后涨得更多</option>'
+                      for k, v in audit_premise.DIRECTIONS.items())
+    hint = ('已导入策略打分：' + (f'从选股行为看，策略选的是{audit_premise.DIRECTIONS[guess]}的标的。' if guess else '未能从选股行为判断方向。')
+            if scores else '未导入策略打分：盈亏归因里只能记录前提，不能检验。上传每日打分（date, code, score）和候选池收盘价（date, code, close）后可检验。')
+    return ('<details class="import-details" open><summary>策略前提（你认为这个策略为什么能赚钱）</summary>'
+            f'<p class="mut">{esc(hint)}' + (f'代码里识别到的因子：{esc(factors)}。' if factors else '') + '留空时按代码和选股行为识别。</p><div class="review-fields">'
+            f'<label>前提（一句话）<input name="premise_text" maxlength="200" value="{esc(premise.get("text", ""))}" '
+            'placeholder="例如：过去20天涨得多的股票，下周还会继续跑赢"></label>'
+            f'<label>分数方向<select name="premise_direction"><option value="">按选股行为识别</option>{options}</select></label>'
+            '</div></details>')
 
 
 def threshold_fields(values=None):
@@ -203,7 +224,7 @@ def overview(identity, bundle, token, inherited=None):
     fill_label = '条持仓净变动（由持仓推算）' if review['fills_inferred'] else '笔成交'
     body += f'<p class="review-meta">{period} · {len(days)} 个账户快照 · {len(bundle["fills"])} {fill_label}</p>'
     body += '<section class="review-section"><h2>01 · 材料核对</h2><div class="tw"><table><tr><th>文件</th><th>识别类型</th><th>行数</th></tr>'
-    labels = {"fills": "交易", "positions": "持仓与账户汇总", "snapshots": "账户汇总", "logs": "日志", "code": "策略代码", "external_attribution": "平台归因（待核口径）", "quote_observations": "日均报价价差（核对用途）", 'scores': '每日打分', 'platform_returns': '平台收益表（核对用途）', 'orders': '委托详情'}
+    labels = {"fills": "交易", "positions": "持仓与账户汇总", "snapshots": "账户汇总", "logs": "日志", "code": "策略代码", "external_attribution": "平台归因（待核口径）", "quote_observations": "日均报价价差（核对用途）", 'scores': '每日打分', 'platform_returns': '平台收益表（核对用途）', 'orders': '委托详情', 'auxiliary': '辅助表（不参与审计）', 'prices': '候选池收盘价'}
     for source in bundle["sources"]:
         body += f'<tr><td>{esc(source["name"])}</td><td>{labels[source["kind"]]} · {esc(source.get("encoding", "历史记录"))}</td><td>{source["rows"]}</td></tr>'
     body += '</table></div>'
@@ -225,6 +246,7 @@ def overview(identity, bundle, token, inherited=None):
     checked = ' checked' if inherited and inherited.get('broker_confirmed') else ''
     body += (f'<label class="check"><input type="checkbox" name="broker_confirmed" value="yes"{checked}>'
              '上面的佣金和最低佣金是我券商合同的费率（不勾选时只作费率情景，不判断回测成本偏高或偏低）</label>')
+    body += premise_fields(bundle, (inherited or {}).get('premise'))
     body += threshold_fields((inherited or {}).get('thresholds'))
     body += '<input type="hidden" name="destination" value="workspace">'
     button = '完成导入，进入策略治理'
@@ -433,6 +455,91 @@ def _money_cell(value):
     return f'<td{cls}>¥{money(value)}</td>'
 
 
+def premise_section(result):
+    from . import audit_rules
+    p = (result.get('modules') or {}).get('premise')
+    head = '<section class="review-section" id="attribution-premise"><h2>你的策略前提：回测期间对了吗</h2>'
+    if not p:
+        return (head + '<p class="mut">没有识别出策略依据的因子，也没有导入每日打分，无法检验前提。上传每日打分（date, code, score，覆盖全部候选）'
+                '和候选池收盘价（date, code, close）后，这里会回答：前提对不对、对多少、哪段时间对。</p></section>')
+    tone = {'held': 'pass', 'reversed': 'adjust', 'not_supported': 'adjust'}.get(p['status'], 'evidence')
+    body = head + f'<p>前提（{esc(p["source"])}）：<strong>{esc(p["premise"])}</strong></p>'
+    code = p.get('code') or {}
+    if code.get('factors') and not p.get('stated'):
+        hits = '；'.join(f'第 {f["line"]} 行 <code>{esc(f["code"])}</code>（{esc(f["name"])}）' for f in code['factors'][:3])
+        body += f'<p class="mut">识别依据：{hits}' + ('（来自代码内嵌的原策略）' if code.get('embedded') else '') + f'。{esc(code["note"])}。</p>'
+    if p.get('conflict'):
+        body += '<p class="notice">代码里的排序方向和策略实际选股方向不一致，检验按实际选股方向进行；请核对代码。</p>'
+    body += f'<p class="audit-verdict verdict-{tone}">{esc(p["verdict"])}</p>'
+    if p['status'] in ('needs_prices', 'needs_scores'):
+        return body + '</section>'
+    o = p['overall']
+    # 1. 对不对 / 对多少
+    lines = []
+    if o['mean'] is not None:
+        lines.append(f'对不对：{o["periods"]} 个调仓周期里，{o["positive_share"]:.0%} 的周期按前提排得靠前的标的整体涨得更多'
+                     f'（秩相关 IC 平均 {o["mean"]:+.3f}' + (f'，t = {o["t"]:.2f}' if o['t'] is not None else '') + '）。'
+                     if o['positive_share'] is not None else f'IC 平均 {o["mean"]:+.3f}。')
+    bar = p['thresholds']['t']
+    sig = lambda v: v is not None and abs(v) >= bar
+    if p.get('spread_mean') is not None:
+        t_txt = f'，t = {p["spread_t"]:.2f}' if p.get('spread_t') is not None else ''
+        line = (f'对多少：按前提排在前三分之一的标的，每期平均比后三分之一{"多" if p["spread_mean"] >= 0 else "少"}涨 '
+                f'{abs(p["spread_mean"]):.2%}（不计费用{t_txt}）')
+        if sig(p.get('spread_t')) and p.get('spread_annual') is not None:
+            line += f'，折合每年约 {p["spread_annual"]:+.1%}。'
+        else:
+            line += '。这个差距统计上不显著，不能当作前提带来的收益，也不宜折成年化。'
+        lines.append(line)
+    if p.get('selected_excess_mean') is not None:
+        lines.append(f'实际选中的标的平均每期比候选池{"多" if p["selected_excess_mean"] >= 0 else "少"}涨 '
+                     f'{abs(p["selected_excess_mean"]):.2%}，{p["selected_beat_share"]:.0%} 的周期跑赢候选池'
+                     + ('。' if sig(p.get('selected_excess_t')) else '（统计上不显著）。'))
+    if p.get('pool_compound') is not None and p.get('selected_compound') is not None:
+        gap = p['selected_compound'] - p['pool_compound']
+        if gap <= 0:
+            tail = '：回测赚的钱主要来自候选池整体上涨，不是来自前提。'
+        elif sig(p.get('selected_excess_t')):
+            tail = f'：选股多出约 {gap:+.1%}。'
+        else:
+            tail = f'：选股多出约 {gap:+.1%}，但逐期差额不显著，这部分可能来自少数几期的运气。'
+        lines.append(f'同期等权买入全部候选（不计费用）累计约 {p["pool_compound"]:+.1%}，选中的标的累计约 {p["selected_compound"]:+.1%}' + tail)
+    body += '<ul class="attribution-lines">' + ''.join(f'<li>{esc(x)}</li>' for x in lines) + '</ul>'
+    # 2. 哪段对
+    words = {'held': '成立', 'reversed': '反了', 'unclear': '不显著', 'too_few': '期数太少'}
+    groups = [('按年份', p.get('by_year') or []), ('按市场涨跌', p.get('by_market') or []),
+              ('按开发段 / 验证段', [p['segments'][k] for k in ('development', 'validation') if k in (p.get('segments') or {})])]
+    if any(rows for _, rows in groups):
+        summary = []
+        if p.get('held_years'):
+            summary.append('前提成立的年份：' + '、'.join(p['held_years']))
+        if p.get('reversed_years'):
+            summary.append('前提反了的年份：' + '、'.join(p['reversed_years']))
+        if not summary:
+            summary.append('没有哪一年单独达到显著；逐年结果只看方向，期数少时波动很大')
+        body += f'<h3>哪段时间对</h3><p>{esc("；".join(summary))}。</p>'
+        body += '<div class="tw"><table><tr><th>时间段</th><th>周期数</th><th>前提占优的周期</th><th>IC 平均</th><th>t</th><th>前1/3减后1/3（每期）</th><th>判断</th></tr>'
+        for title, rows in groups:
+            if not rows:
+                continue
+            body += f'<tr><th colspan="7">{esc(title)}</th></tr>'
+            for r in rows:
+                body += (f'<tr><td>{esc(r["label"])}</td><td>{r["periods"]}</td>'
+                         f'<td>{"" if r["positive_share"] is None else format(r["positive_share"], ".0%")}</td>'
+                         f'<td>{"" if r["mean"] is None else format(r["mean"], "+.3f")}</td>'
+                         f'<td>{"" if r["t"] is None else format(r["t"], ".2f")}</td>'
+                         f'<td>{"" if r.get("spread_mean") is None else format(r["spread_mean"], "+.2%")}</td>'
+                         f'<td>{words.get(r["status"], "")}</td></tr>')
+        body += '</table></div>'
+    th = p['thresholds']
+    body += (f'<p class="action-evidence"><span class="tag">{esc(audit_rules.EVIDENCE["E2"])}</span>'
+             f'{esc(p["scope"])}。收益区间：{esc(p["return_window"])}。判断口径：至少 {th["min_periods"]} 期；|t| ≥ {th["t"]:g} 才说成立或反了。'
+             '分段越细期数越少，单段结果容易受运气影响。</p>')
+    body += ('<p class="mut action-rules">依据：M-RANK-IC 每个调仓日全部候选的分数与随后收益做秩相关（因子检验常用方法）；'
+             'T-PREMISE-T、T-PREMISE-MIN-PERIODS（经验阈值，未经样本检验）</p></section>')
+    return body
+
+
 def attribution_page(identity, report_id, result):
     data = audit_attribution.build(result)
     if not data:
@@ -442,6 +549,7 @@ def attribution_page(identity, report_id, result):
     body += f'<p class="audit-verdict verdict-{"pass" if data["verified"] else "evidence"}">{state}</p>'
     body += '<ul class="attribution-lines">' + ''.join(f'<li>{esc(line)}</li>' for line in data['summary']) + '</ul></section>'
 
+    body += premise_section(result)
     body += '<section class="review-section" id="attribution-waterfall"><h2>钱去哪了</h2><div class="waterfall">'
     peak = max(abs(w['value']) for w in data['waterfall']) or 1
     for w in data['waterfall']:
@@ -1043,6 +1151,12 @@ def register(app, workdir, *, page, guard, token):
             settings['max_weight'] /= 100
             settings['broker_confirmed'] = form.get('broker_confirmed') == 'yes'
             settings['thresholds'] = threshold_values(form)
+            text = str(form.get('premise_text', '')).strip()[:200]
+            direction = str(form.get('premise_direction', '')).strip()
+            if direction not in ('', 'higher', 'lower'):
+                raise ValueError('分数方向无效')
+            if text or direction:
+                settings['premise'] = {'text': text, 'direction': direction}
             policy = {'validation_fraction': float(form.get('validation_fraction', 25)) / 100,
                       'minimum_triggers': float(form.get('minimum_triggers', 20)),
                       'purge_days': float(form.get('purge_days', 20))}
@@ -1075,6 +1189,9 @@ def register(app, workdir, *, page, guard, token):
             return RedirectResponse('/strategy-audits/'+identity, 303)
         # Same settings and the same judgement thresholds as the confirmed report.
         settings = {**previous['settings'], 'thresholds': (previous.get('rules') or {}).get('thresholds')}
+        settings.pop('premise', None)
+        if previous['settings'].get('premise'):
+            settings['premise'] = previous['settings']['premise']
         result = await run_in_threadpool(audit.analyze, bundle, settings,
             policy=previous.get('period_review', {}).get('settings'))
         result['confirmation'] = previous['confirmation']

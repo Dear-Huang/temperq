@@ -177,6 +177,7 @@ def analyze(bundle, settings=None, *, policy=None):
     import math
     from . import audit_rules
     broker_confirmed = bool(settings.pop("broker_confirmed", False))
+    premise = settings.pop("premise", None) or {}
     thresholds = audit_rules.resolve(settings.pop("thresholds", None))
     if set(settings) != {"commission_bp", "minimum_commission", "max_weight"}:
         raise ValueError("审计设置字段不完整")
@@ -213,9 +214,13 @@ def analyze(bundle, settings=None, *, policy=None):
     from . import audit_signals, audit_fee_model
     context["fee_model"] = audit_fee_model.analyze(bundle, context, {**settings, "broker_confirmed": broker_confirmed})
     signals = audit_signals.analyze(bundle, context, thresholds)
+    from . import audit_premise
+    checked = audit_premise.analyze(bundle, premise, period_review.get("partition"), thresholds)
+    if checked:
+        context["premise"] = checked
     if signals:
         context["signal_mapping"] = signals
-    settings = {**settings, "broker_confirmed": broker_confirmed,
+    settings = {**settings, "broker_confirmed": broker_confirmed, **({"premise": premise} if premise else {}),
                 **({"thresholds": {k: v for k, v in thresholds.items() if v != audit_rules.defaults()[k]}}
                    if thresholds != audit_rules.defaults() else {})}
     result = {"schema_version": VERSION, "input_digest": ex.object_digest(bundle),

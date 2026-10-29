@@ -13,6 +13,8 @@ from .securities import security_code as stock_code
 from .audit_fee_units import order_fields, validate_orders
 
 SCHEMA = "strategy_export_v1"
+# Trades, positions, account, code, log, scores, candidate prices, plus the extras a native report writes.
+MAX_FILES = 10
 MAX_FILE_BYTES = 8_000_000
 MAX_TOTAL_BYTES = 24_000_000
 MAX_ROWS = 50_000
@@ -184,7 +186,7 @@ def bigquant(files, *, name, opening_cash=None):
               "opening": {"kind": "empty" if opening_cash is not None else "first_close",
                           "cash": opening_cash},
               "fills": [], "positions": [], "snapshots": [], "actions": [],
-              "logs": [], "external_attribution": [], "quote_observations": [], "scores": [], "code": {}, "sources": []}
+              "logs": [], "external_attribution": [], "quote_observations": [], "scores": [], "prices": [], "code": {}, "sources": []}
     seen = set()
     for source in files:
         text, encoding = decode_source(source)
@@ -209,6 +211,8 @@ def bigquant(files, *, name, opening_cash=None):
                 kind = "quote_observations"; required = set()
             elif {'date', 'code', 'score'} <= columns:
                 kind = 'scores'; required = set()
+            elif {'date', 'code', 'close'} <= columns:
+                kind = 'prices'; required = set()
             else:
                 raise ValueError(f"{source.name}：未识别的 BigQuant 表头")
             if required - columns:
@@ -265,6 +269,10 @@ def bigquant(files, *, name, opening_cash=None):
                     result["quote_observations"].append({"date": date_value(row["date"], label),
                         "code": stock_code(row["code"]), "quoted_spread_bp": spread, "sample_count": int(count),
                         "measurement_scope": row["measurement_scope"], "ref": ref})
+                elif kind == 'prices':
+                    result['prices'].append({'date': date_value(row['date'], label),
+                        'code': stock_code(row['code'].replace('.XSHG', '.SH').replace('.XSHE', '.SZ')),
+                        'close': numeric(row['close'], label), 'ref': ref})
                 elif kind == 'scores':
                     result['scores'].append({'date': date_value(row['date'], label),
                         'code': stock_code(row['code'].replace('.XSHG', '.SH').replace('.XSHE', '.SZ')),
@@ -301,8 +309,8 @@ def normalize(files, *, adapter="auto", name="导入策略", opening_cash=None):
     if adapter not in {'auto', 'bigquant', 'joinquant', 'ricequant', 'generic'}:
         raise ValueError("暂不支持该平台适配器")
     files = unpack_archives(files)
-    if not 1 <= len(files) <= 7:
-        raise ValueError("每次上传 2–7 个文件")
+    if not 1 <= len(files) <= MAX_FILES:
+        raise ValueError(f"每次最多上传 {MAX_FILES} 个文件（ZIP 按解压后的文件计）")
     if not name.strip() or len(name) > 80:
         raise ValueError("策略名称应为 1–80 个字符")
     if opening_cash is not None:

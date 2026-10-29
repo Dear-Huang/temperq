@@ -182,8 +182,14 @@ def _fee_model_card(model, edits, t):
                          f"{check['mismatched_fills']} 笔对不上，差 {_yuan(check['gap'])}。")
     tax_wrong = stamp and stamp["mismatched_sells"]
     if tax_wrong:
-        lines.append(f"声明的卖出印花税约 {stamp['declared_bp']:.1f}bp，与成交日适用税率 {'/'.join(f'{b:g}' for b in stamp['rule_bp'])}bp "
-                     f"不符的卖出 {stamp['mismatched_sells']} 笔。")
+        if stamp.get("source") == "成交导出的税费列":
+            lines.append(f"成交导出的税费列：卖出股票实收印花税约 {stamp['declared_bp']:.1f}bp，成交日适用税率为 "
+                         f"{'/'.join(f'{b:g}' for b in stamp['rule_bp'])}bp，{stamp['mismatched_sells']}/{stamp['sells']} 笔不符；"
+                         f"实收 {_yuan(stamp['charged'])}，按适用税率应为 {_yuan(stamp['due'])}，"
+                         f"回测少扣 {_yuan(stamp['due'] - stamp['charged'])}。")
+        else:
+            lines.append(f"声明的卖出印花税约 {stamp['declared_bp']:.1f}bp，与成交日适用税率 {'/'.join(f'{b:g}' for b in stamp['rule_bp'])}bp "
+                         f"不符的卖出 {stamp['mismatched_sells']} 笔。")
     broker, versus = model["broker"], model.get("broker_check")
     gap_min, gap_share = t.get("T-FEE-GAP-MIN", 1.), t.get("T-FEE-GAP-SHARE", .01)
     if versus is not None:

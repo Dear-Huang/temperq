@@ -45,6 +45,8 @@ RULES = {r.id: r for r in (
     Rule("M-FIFO", "method", "按先进先出配对买卖，计算每笔已平仓交易的持有期和盈亏", "通用会计配对方法"),
     Rule("M-SLIPPAGE", "method", "回测已计的滑点按平台文档换算为每边成本，价差情景只补差额",
          "聚宽 set_slippage 文档；RQAlpha 滑点模型文档"),
+    Rule("M-RANK-IC", "method", "每个调仓日，用全部候选标的的分数与到下一调仓日的收益做秩相关（Spearman IC）",
+         "因子检验常用方法（信息系数）"),
     Rule("M-RANK-REPLAY", "method", "用策略导出的每日排名回放换仓次数；不重算收益", "本项目，见 audit_signals"),
     # Thresholds
     Rule("T-HOLD-SHORT", "threshold", "持有不超过这个自然日数算短持有", UNTESTED, 5, "自然日", range=(1, 60)),
@@ -58,6 +60,8 @@ RULES = {r.id: r for r in (
     Rule("T-CASH-SHORT", "threshold", "拒单所差金额不超过下单金额的这个比例，算“差一点”", UNTESTED, .01, "比例", range=(.001, .1)),
     Rule("T-FEE-GAP-SHARE", "threshold", "费用差额占复算费用达到这个比例才出现费用卡", UNTESTED, .01, "比例", range=(0., .1)),
     Rule("T-DD-TOLERANCE", "threshold", "改版最大回撤比原版多出这么多（百分点）就不算更好", UNTESTED, .01, "比例", range=(0., .2)),
+    Rule("T-PREMISE-T", "threshold", "IC 均值的 t 统计量达到这个值，才说前提成立或反了（全期与各分段相同）", UNTESTED, 2., "", range=(1., 5.)),
+    Rule("T-PREMISE-MIN-PERIODS", "threshold", "至少这么多个调仓周期才检验前提", UNTESTED, 20, "期", range=(5, 500)),
     Rule("T-FEE-GAP-MIN", "threshold", "费用差额至少这么多元才出现费用卡", UNTESTED, 1., "元", range=(0., 1000.)),
 )}
 

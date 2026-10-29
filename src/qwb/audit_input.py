@@ -148,6 +148,12 @@ def review(bundle):
         check('receivable_dividend', '应收股息', 'consistent',
               f'账户详情有 {receivable} 天含已宣告未到账的股息，计入账户现金；到账当天只是从应收转为现金，不算盈亏。',
               '无需处理。')
+    if bundle.get('scores'):
+        priced = len({p['code'] for p in bundle.get('prices', [])})
+        scored = len({s['code'] for s in bundle['scores']})
+        check('prices', '候选池收盘价', 'consistent' if priced else 'missing',
+              f'识别 {priced} 只标的的收盘价，打分覆盖 {scored} 只。' if priced else '有打分但没有候选池收盘价，策略前提只能记录、不能检验。',
+              '用于在盈亏归因里检验策略前提：分数高的标的随后是否真的涨得更多。')
     ranked = [s for s in bundle.get('scores', []) if s.get('rank') is not None]
     if ranked:
         days = len({s['date'] for s in ranked})
