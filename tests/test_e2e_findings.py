@@ -36,7 +36,8 @@ def test_ricequant_summary_table_is_kept_for_comparison():
 
 
 def snapshots(*equity):
-    return [{"date": f"2025-01-{i + 2:02d}", "equity": e} for i, e in enumerate(equity)]
+    from datetime import date, timedelta
+    return [{"date": (date(2025, 1, 2) + timedelta(days=i)).isoformat(), "equity": e} for i, e in enumerate(equity)]
 
 
 def test_returns_start_from_capital_before_the_first_trade():
@@ -138,3 +139,24 @@ def test_run_without_trades_says_so_instead_of_unclosed_books():
     bundle = {"fills": [], "snapshots": snapshots(100., 100.)}
     lines = audit_report.headline(bundle, {"modules": {}}, None, None, [], [])
     assert "没有任何成交" in lines[0][1] and "账目未闭合" not in lines[0][1]
+
+
+def test_claimed_return_is_compared_not_inferred():
+    perf = {"total": 1.0, "annual": .25}
+    out = audit_report.claim_check({"settings": {"claim": {"total": 1.5, "source": "帖子"}}}, perf)
+    assert out["rows"][0]["gap"] == -.5 and "复现不出" in out["verdict"]
+    assert audit_report.claim_check({"settings": {}}, perf) is None
+
+
+def test_platform_252_day_annualisation_is_recognised():
+    bundle = {"snapshots": snapshots(*([100.] * 251 + [120.])), "platform_summary": {"年化收益率": "0.2"}}
+    perf = audit_report.performance(bundle)
+    rows = {r["label"]: r for r in audit_report.platform_check(bundle, perf)}
+    assert rows["年化收益"]["agree"] and "252" in rows["年化收益"]["note"]
+
+
+def test_first_screen_answers_three_questions():
+    bundle = {"fills": [], "snapshots": snapshots(100., 100.)}
+    out = audit_report.answers(bundle, {"modules": {}}, None, None, [])
+    assert [a["q"] for a in out] == ["收益能信吗", "你的想法对吗", "该改什么"]
+    assert out[0]["tone"] == "adjust" and "没有任何成交" in out[0]["notes"][0]

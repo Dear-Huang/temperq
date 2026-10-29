@@ -32,6 +32,9 @@ def add_parser(sub):
             cmd.add_argument("--broker-confirmed", action="store_true", help="the commission given is the broker contract rate")
             cmd.add_argument("--premise-text", default="", help="the user's own premise, one sentence")
             cmd.add_argument("--premise-direction", choices=("higher", "lower"), help="higher or lower scores are better")
+            cmd.add_argument("--claimed-total", type=float, help="claimed total return in percent, e.g. 520 for 520%%")
+            cmd.add_argument("--claimed-annual", type=float, help="claimed annual return in percent")
+            cmd.add_argument("--claim-source", default="", help="where the claim comes from, e.g. a post title")
         cmd.add_argument("--json", action="store_true", help="print the machine-readable result only")
 
 
@@ -85,6 +88,10 @@ def settings_for(bundle, args):
                 "minimum_commission": pick(args.min_commission, "minimum_commission", 5.),
                 "max_weight": (args.max_weight if args.max_weight is not None else 100.) / 100,
                 "broker_confirmed": bool(args.broker_confirmed)}
+    if args.claimed_total is not None or args.claimed_annual is not None:
+        settings["claim"] = {"total": None if args.claimed_total is None else args.claimed_total / 100,
+                             "annual": None if args.claimed_annual is None else args.claimed_annual / 100,
+                             "source": args.claim_source.strip()[:200]}
     if args.premise_text or args.premise_direction:
         settings["premise"] = {"text": args.premise_text.strip()[:200], "direction": args.premise_direction or ""}
     return settings
@@ -109,6 +116,7 @@ def summary(bundle, result):
         "performance": perf and {k: perf.get(k) for k in ("total", "annual", "volatility", "sharpe", "max_drawdown",
                                                           "benchmark_total", "excess_total", "information_ratio", "basis")},
         "platform_check": audit_report.platform_check(bundle, perf) if perf else [],
+        "claim_check": audit_report.claim_check(result, perf),
         "premise": premise and {k: premise.get(k) for k in ("premise", "source", "status", "verdict", "overall",
                                                             "spread_mean", "spread_t", "held_years", "reversed_years")},
         "attribution": attr and attr["summary"],

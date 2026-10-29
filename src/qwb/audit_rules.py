@@ -47,6 +47,8 @@ RULES = {r.id: r for r in (
          "聚宽 set_slippage 文档；RQAlpha 滑点模型文档"),
     Rule("M-RANK-IC", "method", "每个调仓日，用全部候选标的的分数与到下一调仓日的收益做秩相关（Spearman IC）",
          "因子检验常用方法（信息系数）"),
+    Rule("M-PREMISE-POWER", "method", "最小可检测 IC = (显著性 t 门槛 + 0.84) × IC 标准差 / √期数，0.84 对应八成检验力",
+         "统计检验力的正态近似（单侧）"),
     Rule("M-RANK-REPLAY", "method", "用策略导出的每日排名回放换仓次数；不重算收益", "本项目，见 audit_signals"),
     # Thresholds
     Rule("T-HOLD-SHORT", "threshold", "持有不超过这个自然日数算短持有", UNTESTED, 5, "自然日", range=(1, 60)),

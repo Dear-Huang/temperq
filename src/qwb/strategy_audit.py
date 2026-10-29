@@ -178,6 +178,12 @@ def analyze(bundle, settings=None, *, policy=None):
     from . import audit_rules
     broker_confirmed = bool(settings.pop("broker_confirmed", False))
     premise = settings.pop("premise", None) or {}
+    claim = settings.pop("claim", None) or {}
+    if claim:
+        # What a post or vendor says the strategy returned; kept as stated, compared in the report.
+        if not isinstance(claim.get("total"), (int, float)) and not isinstance(claim.get("annual"), (int, float)):
+            raise ValueError("声称收益须给出累计收益或年化收益")
+        claim = {k: claim[k] for k in ("total", "annual", "source") if claim.get(k) not in (None, "")}
     thresholds = audit_rules.resolve(settings.pop("thresholds", None))
     if set(settings) != {"commission_bp", "minimum_commission", "max_weight"}:
         raise ValueError("审计设置字段不完整")
@@ -225,6 +231,7 @@ def analyze(bundle, settings=None, *, policy=None):
     if timing:
         context["fill_timing"] = timing
     settings = {**settings, "broker_confirmed": broker_confirmed, **({"premise": premise} if premise else {}),
+                **({"claim": claim} if claim else {}),
                 **({"thresholds": {k: v for k, v in thresholds.items() if v != audit_rules.defaults()[k]}}
                    if thresholds != audit_rules.defaults() else {})}
     result = {"schema_version": VERSION, "input_digest": ex.object_digest(bundle),

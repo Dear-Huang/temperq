@@ -187,6 +187,32 @@ def _segment(rows, t_bar, label):
             "start": rows[0]["date"] if rows else None, "end": rows[-1]["next"] if rows else None}
 
 
+Z_POWER = .84      # one-sided normal quantile for 80% power (M-PREMISE-POWER)
+
+
+def _power(rows, overall, t_bar, per_year):
+    """How large an effect this sample could have detected, and how long a history the observed one would need.
+
+    Minimum detectable mean IC at 80% power = (t_bar + 0.84) x sd(IC) / sqrt(periods). Small candidate pools
+    make each period's IC noisy (its spread under no effect is about 1/sqrt(candidates - 1)), which is often
+    why a premise cannot be tested at all.
+    """
+    n, mean, t = overall["periods"], overall["mean"], overall["t"]
+    if n < 2 or mean is None or not t:
+        return None
+    sd = abs(mean) * math.sqrt(n) / abs(t)
+    mde = (t_bar + Z_POWER) * sd / math.sqrt(n)
+    pool = statistics.median(r["candidates"] for r in rows)
+    needed = math.ceil(((t_bar + Z_POWER) * sd / abs(mean)) ** 2) if mean else None
+    years = needed / per_year if needed and per_year else None
+    text = (f"以每期约 {pool:.0f} 个候选、{n} 期计，IC 均值至少要达到 ±{mde:.3f} 才有八成把握测出（现为 {mean:+.3f}）")
+    if needed and mean * (1 if mean > 0 else -1) > 0 and needed > n:
+        text += f"；按现在的效果大小，约需 {needed:,} 期" + (f"（约 {years:.0f} 年）" if years else "") + "才能测出"
+    if pool < 10:
+        text += f"。候选池只有 {pool:.0f} 个，每期的排序比较很粗，这本身就让前提难以检验"
+    return {"mde": mde, "sd": sd, "candidates": pool, "needed_periods": needed, "needed_years": years, "text": text}
+
+
 def _premise_text(direction, code):
     factor = (code or {}).get("factors") or []
     if factor:
@@ -293,13 +319,16 @@ def analyze(bundle, premise=None, partition=None, thresholds=None):
         "reversed": "回测期间前提反了：分数越符合前提的标的，随后反而涨得更少，且统计上显著",
         "not_supported": "回测期间前提没有得到支持：分数和随后收益的排序没有稳定关系",
     }[status]
+    power = _power(rows, overall, t_bar, per_year)
+    if status == "not_supported" and power:
+        verdict = ("回测期间没有测出前提的效果，这不等于前提错了：" + power["text"])
     val = segments.get("validation")
     if status == "held" and val and val["periods"] >= 2 and (val["mean"] or 0) <= 0:
         verdict += "；但验证段不成立，前段的效果没有延续"
     good = [s["label"] for s in by_year if s["status"] == "held"]
     bad = [s["label"] for s in by_year if s["status"] == "reversed"]
     pool_c, sel_c = compound([r["pool"] for r in rows]), compound([r["selected"] for r in rows if r["selected"] is not None])
-    return {**base, "status": status, "verdict": verdict, "overall": overall, "segments": segments,
+    return {**base, "status": status, "verdict": verdict, "overall": overall, "segments": segments, "power": power,
             "by_year": by_year, "by_market": by_market, "held_years": good, "reversed_years": bad,
             "spread_mean": statistics.mean(spreads) if spreads else None,
             "spread_t": _summary(spreads)["t"] if spreads else None,

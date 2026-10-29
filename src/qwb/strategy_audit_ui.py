@@ -169,7 +169,12 @@ def premise_fields(bundle, premise=None):
             f'<label>前提（一句话）<input name="premise_text" maxlength="200" value="{esc(premise.get("text", ""))}" '
             'placeholder="例如：过去20天涨得多的股票，下周还会继续跑赢"></label>'
             f'<label>分数方向<select name="premise_direction"><option value="">按选股行为识别</option>{options}</select></label>'
-            '</div></details>')
+            '</div></details>'
+            '<details class="import-details"><summary>帖子或宣传里声称的收益（选填）</summary>'
+            '<p class="mut">填了之后，报告会把声称收益和同一份材料复算的收益放在一起对照。</p><div class="review-fields">'
+            '<label>声称累计收益（%）<input name="claimed_total" inputmode="decimal" placeholder="例如 520"></label>'
+            '<label>声称年化收益（%）<input name="claimed_annual" inputmode="decimal" placeholder="例如 59"></label>'
+            '<label>出处<input name="claim_source" maxlength="200" placeholder="例如 帖子标题"></label></div></details>')
 
 
 def threshold_fields(values=None):
@@ -1199,6 +1204,13 @@ def register(app, workdir, *, page, guard, token):
                 raise ValueError('分数方向无效')
             if text or direction:
                 settings['premise'] = {'text': text, 'direction': direction}
+            claimed = {}
+            for key in ('total', 'annual'):
+                raw = str(form.get('claimed_' + key, '')).strip().rstrip('%')
+                if raw:
+                    claimed[key] = float(raw) / 100
+            if claimed:
+                settings['claim'] = {**claimed, 'source': str(form.get('claim_source', '')).strip()[:200]}
             policy = {'validation_fraction': float(form.get('validation_fraction', 25)) / 100,
                       'minimum_triggers': float(form.get('minimum_triggers', 20)),
                       'purge_days': float(form.get('purge_days', 20))}

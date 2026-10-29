@@ -101,3 +101,9 @@ def test_exported_report_has_professional_sections_and_benchmark():
                   "六、发现与建议", "七、审计范围与限制", "附录 A", "基准收益", "超额收益"):
         assert title in html
     assert result["input_digest"] in html and "不构成投资建议" in html
+
+
+def test_weak_sample_says_not_detected_is_not_wrong():
+    result = audit_premise.analyze(bundle(0., seed=2))
+    assert result["status"] == "not_supported" and result["power"]
+    assert "不等于前提错了" in result["verdict"] and result["power"]["mde"] > 0

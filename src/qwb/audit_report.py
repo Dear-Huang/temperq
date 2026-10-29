@@ -63,6 +63,8 @@ def performance(bundle):
     out = {"start": snaps[0]["date"], "end": snaps[-1]["date"], "years": years, "days": len(snaps),
            "start_equity": equity[0], "end_equity": equity[-1], "total": total, "basis": basis,
            "annual": (1 + total) ** (1 / years) - 1 if total > -1 else None,
+           # Platforms such as RiceQuant annualise over 252 trading days per year instead of calendar time.
+           "annual_252": (1 + total) ** (252 / len(snaps)) - 1 if total > -1 else None,
            "volatility": statistics.stdev(daily) * math.sqrt(252) if len(daily) > 1 else None}
     out["sharpe"] = (statistics.mean(daily) / statistics.stdev(daily) * math.sqrt(252)
                      if len(daily) > 1 and statistics.stdev(daily) else None)
@@ -137,6 +139,8 @@ def platform_check(bundle, perf):
         gap = ours - value
         agree = abs(gap) <= (.001 if ratio else .05)
         note = "一致" if agree else ("平台扣除了无风险利率，审计按 0 计" if key == "sharpe" else "不一致，需核对材料是否来自同一次回测")
+        if key == "annual" and not agree and perf.get("annual_252") is not None and abs(perf["annual_252"] - value) <= .001:
+            agree, note = True, f"一致：平台按每年 252 个交易日年化（{perf['annual_252']:.2%}），本报告按日历年"
         rows.append({"label": label, "platform": value, "audit": ours, "ratio": ratio, "agree": agree, "note": note})
     return rows
 
@@ -157,6 +161,104 @@ def scope(result):
             else:
                 absent.append(row)                     # not built yet, whatever the materials
     return {"done": done, "blocked": blocked, "absent": absent}
+
+
+def claim_check(result, perf):
+    """A claimed return beside the audited one. The claim is the user's entry, never inferred."""
+    claim = (result.get("settings") or {}).get("claim")
+    if not claim or not perf:
+        return None
+    rows = []
+    for key, label in (("total", "累计收益"), ("annual", "年化收益")):
+        if isinstance(claim.get(key), (int, float)) and perf.get(key) is not None:
+            rows.append({"label": label, "claimed": claim[key], "audited": perf[key], "gap": perf[key] - claim[key]})
+    if not rows:
+        return None
+    worst = min(rows, key=lambda r: r["gap"])
+    if all(abs(r["gap"]) <= .01 for r in rows):
+        verdict = "复算收益与声称收益一致（相差不超过 1 个百分点）"
+    elif worst["gap"] < 0:
+        verdict = f"复算{worst['label']}比声称低 {-worst['gap']:.1%}：同一份材料复现不出声称的收益"
+    else:
+        verdict = f"复算{worst['label']}比声称高 {worst['gap']:.1%}"
+    return {"source": claim.get("source", ""), "rows": rows, "verdict": verdict,
+            "note": "声称收益常用不同区间、不同费率或未扣滑点；不一致时先核对区间和费用设置"}
+
+
+# Professional terms stay in the report; each gets a short hint the first time it appears.
+GLOSSARY = {
+    "IC": "信息系数：每期按分数排序和随后收益排序的相关程度，+1 完全一致，0 无关",
+    "t": "t 值：均值除以它的标准误；绝对值越大越不像运气，常用 2 为门槛",
+    "检验力": "样本能测出真实效果的把握；不足时，没测出不等于不存在",
+    "最大回撤": "从净值高点到其后低点的最大跌幅",
+    "夏普比率": "年化收益除以年化波动；本报告无风险利率按 0 计",
+    "信息比率": "相对基准的年化超额收益除以超额收益的波动",
+    "卡玛比率": "年化收益除以最大回撤",
+    "HHI": "赫芬达尔指数：各持仓权重平方和，越大越集中",
+    "FIFO": "先进先出：卖出时先配对最早买入的那一批，用来算每笔持有期",
+    "右删失": "期末仍未卖出的持仓，持有期还没结束，只能算到期末",
+    "STRUCT": "按最小报价单位估计的买卖价差下限情景，不是实测成本",
+    "bp": "基点，0.01%",
+    "样本内": "结果来自用来设计或调参的同一段历史，不代表以后",
+}
+
+
+def term(word, label=None):
+    """A term with its hint on hover and in print."""
+    return f'<abbr title="{esc(GLOSSARY[word])}">{esc(label or word)}</abbr>'
+
+
+def answers(bundle, result, perf, premise, cards):
+    """The three questions a client asks, answered only from what the engine computed."""
+    modules = result["modules"]
+    account = (modules.get("accounting") or {}).get("status")
+    out = []
+    # 1. Can the return be trusted?
+    trust, notes = "evidence", []
+    if account != "verified":
+        trust = "adjust"
+        notes.append("没有任何成交" if not bundle.get("fills") else "账目没有闭合，收益是暂算")
+    else:
+        notes.append("成交、持仓、现金逐日对得上")
+    checks = platform_check(bundle, perf) if perf else []
+    if checks:
+        bad = [c for c in checks if not c["agree"] and c["label"] != "夏普比率"]
+        notes.append("与平台自报的收益和回撤一致" if not bad else "与平台自报数字不一致：" + "、".join(c["label"] for c in bad))
+        trust = "adjust" if bad else trust
+    claim = claim_check(result, perf)
+    if claim:
+        notes.append(claim["verdict"])
+        trust = "adjust" if "复现不出" in claim["verdict"] else trust
+    timing = modules.get("fill_timing") or {}
+    if timing.get("status") in ("sensitive", "stable"):
+        notes.append(timing["verdict"])
+        trust = "adjust" if timing["status"] == "sensitive" else trust
+    elif timing.get("open_share"):
+        notes.append(f"{timing['open_share']:.0%} 的成交在开盘几分钟内，但没有分钟价，没检验换个时点成交会怎样")
+    tick = (modules.get("tick_analysis") or {}).get("accounted_intervals") or {}
+    if tick.get("profit_covers_scenario") is False:
+        notes.append("扣掉最小价位的买卖价差情景后不再盈利")
+        trust = "adjust"
+    if account == "verified" and trust == "evidence" and checks and not timing.get("status") == "sensitive":
+        trust = "pass"
+    ret = (f"区间收益 {_pct(perf['total'])}，最大回撤 {_pct(perf['max_drawdown'])}"
+           + (f"，同期基准 {_pct(perf['benchmark_total'])}" if perf.get("benchmark_total") is not None else "")) if perf else "无法计算收益"
+    out.append({"q": "收益能信吗", "tone": trust, "lead": ret, "notes": notes})
+    # 2. Was the idea right?
+    if not premise:
+        out.append({"q": "你的想法对吗", "tone": "evidence", "lead": "没有识别出策略依据的因子，也没有每日打分，本次没检验",
+                    "notes": ["补每日打分和候选池收盘价后可检验（见第七节）"]})
+    else:
+        tone = {"held": "pass", "reversed": "adjust"}.get(premise["status"], "evidence")
+        out.append({"q": "你的想法对吗", "tone": tone, "lead": f"前提：{premise['premise']}",
+                    "notes": [premise["verdict"]]})
+    # 3. What to change (at most three, most urgent first)
+    picks = [c for c in cards if c["state"] in ("act", "review")][:3]
+    out.append({"q": "该改什么", "tone": "adjust" if any(c["state"] == "act" for c in picks) else ("evidence" if picks else "pass"),
+                "lead": f"{len(picks)} 条建议" if picks else "本次没有需要改的",
+                "notes": [c["headline"] + (f"（{'原策略' if c['edits'][0].get('embedded') else ''}第 {c['edits'][0]['line']} 行）"
+                                           if c.get("edits") and c["edits"][0].get("line") else "") for c in picks]})
+    return out
 
 
 def headline(bundle, result, perf, premise, cards, verdicts):
@@ -212,6 +314,12 @@ ol.findings{padding-left:20px}ol.findings li{margin:6px 0}
 .tag{display:inline-block;font-size:12px;border:1px solid currentColor;border-radius:4px;padding:0 6px;margin-right:6px;white-space:nowrap}
 .pass{color:var(--pass)}.evidence{color:var(--evidence)}.adjust{color:var(--adjust)}
 .card{border:1px solid var(--line);border-radius:6px;padding:12px 14px;margin:10px 0;break-inside:avoid}
+.answers{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:12px;margin:18px 0}
+.answer{border:1px solid var(--line);border-left:4px solid currentColor;border-radius:6px;padding:12px 14px}
+.answer h3{margin:0 0 6px;display:flex;justify-content:space-between;align-items:center;color:var(--ink)}
+.answer .lead{font-weight:600;color:var(--ink)}.answer ul{margin:6px 0 0;padding-left:18px;color:var(--ink)}
+abbr{text-decoration:underline dotted;cursor:help}
+dl.glossary{display:grid;grid-template-columns:max-content 1fr;gap:4px 14px}dl.glossary dt{font-weight:600}dl.glossary dd{margin:0}
 .card h3{margin:0 0 6px}.neg{color:var(--adjust)}
 footer{margin-top:40px;border-top:1px solid var(--line);padding-top:10px;color:var(--mut);font-size:12px}
 @media print{body{font-size:12px}main{padding:0;max-width:none}h2{break-after:avoid}.card,table{break-inside:avoid}a{color:inherit;text-decoration:none}}
@@ -243,6 +351,21 @@ def render(record, bundle, result):
              f'<div><span>输入摘要</span><br><code>{esc(result["input_digest"][7:19])}</code></div>'
              f'<div><span>结果摘要</span><br><code>{esc(result["result_digest"][7:19])}</code></div></div></header>')
 
+    # First screen: the three questions a client asks
+    h.append('<section class="answers">')
+    for a in answers(bundle, result, perf, premise, cards):
+        h.append(f'<div class="answer {a["tone"]}"><h3>{a["q"]}<span class="tag {a["tone"]}">{STATE_WORDS[a["tone"]]}</span></h3>'
+                 f'<p class="lead">{esc(a["lead"])}</p>'
+                 + ('<ul>' + "".join(f'<li>{esc(n)}</li>' for n in a["notes"]) + '</ul>' if a["notes"] else '') + '</div>')
+    h.append('</section>')
+    claim = claim_check(result, perf)
+    if claim:
+        h.append('<div class="tw"><table><tr><th>声称收益对照</th><th class="n">声称</th><th class="n">复算</th><th class="n">差</th></tr>'
+                 + "".join(f'<tr><td>{r["label"]}</td><td class="n">{_pct(r["claimed"])}</td><td class="n">{_pct(r["audited"])}</td>'
+                           f'<td class="n{" neg" if r["gap"] < 0 else ""}">{r["gap"]:+.1%}</td></tr>' for r in claim["rows"])
+                 + '</table></div>' + (f'<p class="mut">出处：{esc(claim["source"])}。' if claim["source"] else '<p class="mut">')
+                 + f'{esc(claim["note"])}。</p>')
+
     # 1. Conclusions
     h.append('<h2>一、结论摘要</h2><ol class="findings">')
     for tone, text in lines:
@@ -266,12 +389,12 @@ def render(record, bundle, result):
             bar = premise["thresholds"]["t"]
             sig = lambda v: v is not None and abs(v) >= bar
             h.append('<div class="tw"><table><tr><th>问题</th><th>指标</th><th class="n">数值</th><th>读法</th></tr>')
-            h.append(f'<tr><td>对不对</td><td>秩相关 IC 均值（t）</td><td class="n">{o["mean"]:+.3f}（{o["t"]:.2f}）</td>'
+            h.append(f'<tr><td>对不对</td><td>秩相关 {term("IC")} 均值（{term("t")}）</td><td class="n">{o["mean"]:+.3f}（{o["t"]:.2f}）</td>'
                      f'<td>{o["periods"]} 期中 {o["positive_share"]:.0%} 为正；|t| ≥ {bar:g} 才算显著</td></tr>')
             if premise.get("spread_mean") is not None:
                 ann = (f'，约年化 {premise["spread_annual"]:+.1%}' if sig(premise.get("spread_t")) and premise.get("spread_annual") is not None
                        else "；不显著，不折年化")
-                h.append(f'<tr><td>对多少</td><td>前 1/3 减后 1/3（每期，t）</td><td class="n">{premise["spread_mean"]:+.2%}（{premise["spread_t"]:.2f}）</td>'
+                h.append(f'<tr><td>对多少</td><td>前 1/3 减后 1/3（每期，{term("t")}）</td><td class="n">{premise["spread_mean"]:+.2%}（{premise["spread_t"]:.2f}）</td>'
                          f'<td>不计费用{ann}</td></tr>')
             if premise.get("selected_excess_mean") is not None:
                 h.append(f'<tr><td>选股</td><td>选中减候选池（每期，t）</td><td class="n">{premise["selected_excess_mean"]:+.2%}（{premise["selected_excess_t"]:.2f}）</td>'
@@ -302,7 +425,8 @@ def render(record, bundle, result):
         if perf.get("benchmark_total") is not None:
             k += [("基准收益", _pct(perf["benchmark_total"])), ("超额收益", f'{perf["excess_total"]:+.1%}'),
                   ("信息比率", "—" if perf.get("information_ratio") is None else f'{perf["information_ratio"]:.2f}')]
-        h.append('<div class="kpis">' + "".join(f'<div><span>{a}</span><strong>{b}</strong></div>' for a, b in k) + '</div>')
+        h.append('<div class="kpis">' + "".join(f'<div><span>{term(a) if a in GLOSSARY else a}</span><strong>{b}</strong></div>'
+                                                for a, b in k) + '</div>')
         h.append('<div class="tw"><table><tr><th>年份</th><th class="n">收益</th><th>说明</th></tr>' + "".join(
             f'<tr><td>{r["year"]}</td><td class="n">{_pct(r["return"])}</td><td>{"不足一年" if r["partial"] else ""}</td></tr>' for r in perf["by_year"])
             + '</table></div>')
@@ -416,9 +540,7 @@ def render(record, bundle, result):
                  + "".join(f'<tr><td>{esc(r["stage"])}</td><td>{esc(r["check"])}</td><td>{esc("；".join(r["missing"]) or "确认参数")}</td></tr>'
                            for r in sc["blocked"]) + '</table></div>')
     if sc["absent"]:
-        h.append('<h3>本工具尚不具备（补材料也审不了）</h3><div class="tw"><table><tr><th>环节</th><th>检查</th><th>所需材料</th></tr>'
-                 + "".join(f'<tr><td>{esc(r["stage"])}</td><td>{esc(r["check"])}</td><td>{esc("；".join(r["missing"]))}</td></tr>'
-                           for r in sc["absent"]) + '</table></div>')
+        h.append(f'<p class="mut">另有 {len(sc["absent"])} 项检查本工具尚不具备，补材料也审不了，列在附录 C。</p>')
     h.append('<h3>十五个环节的结论</h3><div class="tw"><table><tr><th>环节</th><th>结论</th><th>理由</th></tr>')
     for v in verdicts:
         h.append(f'<tr><td>{esc(v["title"])}</td><td class="{v["state"]}">{STATE_WORDS[v["state"]]}</td><td>{esc(v["reason"])}</td></tr>')
@@ -436,6 +558,11 @@ def render(record, bundle, result):
     for c in (result.get("input_review") or {}).get("checks") or []:
         h.append(f'<tr><td>{esc(c["title"])}</td><td>{esc(CHECK_WORDS.get(c["status"], c["status"]))}</td><td>{esc(c["detail"])}</td></tr>')
     h.append('</table></div><h2>附录 B · 证据等级</h2><ul>' + "".join(f'<li><strong>{k}</strong>：{esc(v)}</li>' for k, v in EVIDENCE.items()) + '</ul>')
+    if sc["absent"]:
+        h.append('<h2>附录 C · 本工具尚不具备的检查</h2><div class="tw"><table><tr><th>环节</th><th>检查</th><th>所需材料</th></tr>'
+                 + "".join(f'<tr><td>{esc(r["stage"])}</td><td>{esc(r["check"])}</td><td>{esc("；".join(r["missing"]))}</td></tr>'
+                           for r in sc["absent"]) + '</table></div>')
+    h.append('<h2>附录 D · 术语</h2><dl class="glossary">' + "".join(f'<dt>{esc(k)}</dt><dd>{esc(v)}</dd>' for k, v in GLOSSARY.items()) + '</dl>')
     h.append(f'<footer>TemperQ 本地生成，数据不离开本机。审计版本 {esc(result["schema_version"])}；输入 {esc(result["input_digest"])}；结果 {esc(result["result_digest"])}。'
              '可下载 evidence.json 与各 CSV 复算。本报告不构成投资建议。</footer></main>')
     return "".join(h)
