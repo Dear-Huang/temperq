@@ -87,6 +87,8 @@ def signal_after_fill(bundle):
 
 
 OPEN_BEFORE = "10:00"
+# Fields of today's daily bar that are already fixed at the open; reading only these is not look-ahead.
+KNOWN_AT_OPEN = {"open", "pre_close", "paused", "high_limit", "low_limit", "is_st"}
 _SCHEDULE = re.compile(r"run_(?:daily|weekly|monthly)\s*\(\s*(\w+)[^)]*?(?:time\s*=\s*)?['\"](\d{1,2}):(\d{2})['\"]")
 
 
@@ -120,7 +122,8 @@ def code_hints(bundle):
                 freq = kw.get("frequency", kw.get("unit", "'daily'")).strip("'\"")
                 ends_now = "current_dt" in kw.get("end_date", "") or kw.get("include_now", "") == "True" \
                     or kw.get("end_dt", "").endswith("current_dt")
-                if freq in ("daily", "1d") and ends_now:
+                fields = set(re.findall(r"['\"](\w+)['\"]", kw.get("fields", "")))
+                if freq in ("daily", "1d") and ends_now and not (fields and fields <= KNOWN_AT_OPEN):
                     hints.append({"line": call.lineno, "function": part, "code": ast.unparse(call)[:160]})
     return {"id": "code_hints", "early_functions": sorted(early), "guarded": guarded, "hints": hints[:10],
             "verdict": (f"{len(hints)} 处在 {OPEN_BEFORE} 前运行的函数里读日线、截止时间是当前时刻，可能读到当天的数据，需人工核"

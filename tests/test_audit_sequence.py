@@ -30,3 +30,13 @@ def trade(context):
     assert out["hints"] and out["hints"][0]["line"] == 5 and "需人工核" in out["verdict"]
     clean = code.replace("context.current_dt", "context.previous_date")
     assert not audit_sequence.code_hints({"code": {"source": clean}})["hints"]
+
+
+def test_fields_fixed_at_the_open_are_not_hinted():
+    code = """def initialize(context):
+    run_daily(trade, '9:30')
+
+def trade(context):
+    df = get_price('510300.XSHG', end_date=context.current_dt, frequency='daily', fields=['open', 'pre_close'], count=1)
+"""
+    assert not audit_sequence.code_hints({"code": {"source": code}})["hints"]
