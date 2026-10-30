@@ -2,9 +2,12 @@
 
 # TemperQ
 
-**How much of your backtest profit is real?**
+**Would your backtest survive an audit?**
 
-Open source · Runs locally · Never executes your code · BigQuant / JoinQuant / RiceQuant
+Hand TemperQ the files your backtest platform exports and get back an audit report:<br>
+can the return be trusted, was your idea right, and what to change.
+
+Open source · Runs locally · Never executes your code · BigQuant / JoinQuant / RiceQuant, other platforms via a standard format
 
 English · [中文](README.md)
 
@@ -13,76 +16,108 @@ English · [中文](README.md)
 ![Python](https://img.shields.io/badge/python-3.10%2B-blue.svg)
 ![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20Linux-lightgrey.svg)
 
-[Quick start](#quick-start) · [Import format](docs/STRATEGY_AUDIT_FORMAT.md) · [Feedback](https://github.com/Dear-Huang/temperq/issues)
+[Quick start](#quick-start) · [What it finds](#what-it-finds) · [Import format](docs/STRATEGY_AUDIT_FORMAT.md) · [Feedback](https://github.com/Dear-Huang/temperq/issues)
 
 </div>
 
-TemperQ is a **local backtest auditor** for daily China A-share strategies. Build and backtest your strategy on BigQuant, JoinQuant or RiceQuant, drop in the platform's raw exports, and TemperQ reconciles the account fill by fill. It tells you whether fees were charged correctly, how much the bid-ask spread costs, which stocks made the money, and what to change and whether the change is worth it.
+The equity curve looks great, but do you know where it came from? Were the fees charged right? Could you really have filled at that price in the 9:30 minute? Did you make money because of your factor, or because everything in the pool went up?
 
-It audits the backtest **output** only. It does not run your strategy code and does not replace the platform you use.
+TemperQ looks only at the backtest's **outputs**: fills, holdings, account, logs and strategy code. It reconciles the books day by day, audits each stage, and writes a report you can recompute. Your code is read, never run.
+
+TemperQ targets China A-shares (stocks, ETFs and convertible bonds, long only). Reports are in Chinese.
+
+## What it finds
+
+These are real results: public JoinQuant community strategies, migrated to a local RiceQuant (RQAlpha) install, backtested, then audited by TemperQ.
+
+| You think | The audit finds |
+| --- | --- |
+| It made ¥4,318 in a year, so the strategy works | Moving the fill to another minute of the same day changes P&L by −¥736 to +¥9,215, more than the profit itself: **the conclusion depends on when you assume it filled** |
+| The momentum factor is doing the work | The candidate pool has 4 ETFs; at the observed effect size it would take about 9 years of data to detect it: **not detected is not wrong, but this backtest cannot show it** |
+| Keep 1% cash and add a retention band, two improvements at once | 1% cash alone adds 0.71 percentage points; together with the band it costs 3.80: **the two suggestions do not add up** |
+| It bought the target ETF, so execution was fine | One buy filled 30%, then 71 trading days with no top-up while 67% of equity sat in cash: **holding the target is not completing the order** |
+| 219 days not holding the rank-1 name means execution failed | 193 of them were the strategy's own retention rule; the real execution gaps were 26 days: **the strategy's design is not mistaken for a fault** |
+
+For 10 RiceQuant one-year backtests, the audit's recomputed total return, maximum drawdown and benchmark return match RiceQuant's own figures (the Sharpe ratio differs because RiceQuant subtracts a risk-free rate; the report says so).
+
+## What the report looks like
+
+The report opens with three questions:
+
+<table>
+<tr>
+<td width="33%" valign="top"><b>Can the return be trusted?</b><br><sub>Do the books close, does it match the platform's own figures, can a claimed return be reproduced, what if fills happened at another minute, is it still profitable after the bid-ask spread</sub></td>
+<td width="33%" valign="top"><b>Was your idea right?</b><br><sub>The factor your strategy relies on, read from the code and its picks, tested: right or not, by how much, in which periods. When not detected, it says whether the sample was too small or the idea did not hold</sub></td>
+<td width="33%" valign="top"><b>What to change</b><br><sub>At most three changes, each pointing to a line of code, with what it saves, what it gives up, and when the suggestion would not hold</sub></td>
+</tr>
+</table>
+
+Seven sections follow: conclusions, premise check, return and risk (with the platform's own figures alongside), P&L attribution, costs and execution, findings and suggestions, scope and limits. The report lists **which checks ran, which could not run for missing materials and what would make them possible**. Not checked does not mean no problem, and the report never pretends otherwise.
 
 <p align="center">
-  <img src="docs/img/audit-governance.png" width="100%" alt="TemperQ strategy governance: account reconciliation, findings and suggested changes">
+  <img src="docs/img/audit-attribution.png" width="100%" alt="TemperQ P&L attribution: from gross P&L to P&L after the spread scenario">
 </p>
+<p align="center"><sub>P&L attribution page, built-in synthetic sample. Interface only; not investment performance.</sub></p>
 
-<p align="center"><sub>Strategy governance page on the built-in synthetic sample. Illustrates the interface, not investment performance.</sub></p>
+## Why the report can be trusted
 
-The interface and user documentation are currently in Chinese.
+- **Books first, conclusions second.** Each day: equity = cash + market value, change in holdings = fills, change in cash = traded value + fees. A stage whose books do not close is marked "to reconcile" and gets no conclusion.
+- **Every number can be recomputed.** The report ships with all inputs, intermediate results and per-trade detail, and the hashes of input and result. The same materials always give the same report.
+- **Every judgement has a source.** Exchange rules, tax rates, statistical methods and rule-of-thumb thresholds are registered separately; each suggestion cites the ones it rests on. Thresholds are labelled "not tested on samples" and can be changed. See [audit rules](docs/AUDIT_RULES.md).
+- **Evidence is graded.** Recomputed records, after-the-fact description, scenario estimates and same-period re-runs are labelled as such. A scenario is not a fact, and in-sample is not out-of-sample.
+- **The report is not written by an AI.** Even in the AI version, the audit engine generates the report; the AI only converts formats and relays the result, and may not add its own judgement.
 
-## Three pages, one backtest
+## Two ways to use it
 
-| Page | Question | What you get |
+| | Local web app | AI version (skill) |
 | --- | --- | --- |
-| **Strategy governance** | What is wrong and what to change | One card per issue: finding, whether to change it, which code line to edit, options (always including "keep as is"), what it saves, what it may give up, evidence level, and what would overturn it |
-| **P&L attribution** | Where the money came from | A waterfall from gross P&L through commissions and stamp tax to net P&L and the spread scenario; concentration by stock, holding period and price band; who caused the maximum drawdown |
-| **Effect verification** | Is the changed version actually better | First restates the original with realistic costs; then compares an optimized re-run, exported from the original platform, on the full period and an internal validation segment: better / mixed / worse |
+| For | Nothing may leave your computer | Messy materials you would rather not reformat |
+| Materials | Drop in BigQuant, JoinQuant or RiceQuant exports as they are; other platforms in the [standard format](docs/STRATEGY_AUDIT_FORMAT.md) | Anything; the AI reads the headers and writes a conversion script |
+| Who writes the report | The audit engine | The same engine; the report is identical |
+| Where data goes | Stays on your machine | The audit runs locally; file headers and a few sample rows are sent to the model |
 
-<p align="center">
-  <img src="docs/img/audit-attribution.png" width="100%" alt="TemperQ P&L attribution waterfall from gross P&L to after-spread P&L">
-</p>
+The AI version lives in [`skills/strategy-audit/`](skills/strategy-audit/SKILL.md). After converting, the AI must reconcile the books with the engine first; if they do not close, the conversion is wrong and has to be redone.
 
-## Why the audit can be trusted
+## Want more checks? Add two materials
 
-- **Reconcile first, then conclude.** Every day: equity = cash + market value, position changes = fills, cash changes = traded amounts + fees, and P&L bridges day to day. Modules whose books do not close are marked "needs reconciliation" and draw no conclusion.
-- **Fees recomputed with the rules of the day.** Commission, minimum commission and stamp tax are recomputed at the rate in force on each trade date and compared fill by fill with what the platform charged.
-- **A spread floor anyone can check.** The A-share tick is 0.01 yuan, so each side pays at least half a tick: `half spread (bp) = 10000 × 0.01 / (2 × price)`. For low-priced, high-turnover strategies this often exceeds commission. It is a scenario, not measured execution cost, and the page says so.
-- **Every inference is labelled.** With holdings but no fills, trades are inferred from holdings. JoinQuant and RiceQuant do not export dividends or bonus shares; TemperQ recovers them from cash and share changes and lists them as "inferred from the account" for you to confirm.
-- **Changes can be tested.** For BigQuant strategies TemperQ can generate optimized code. Re-run it on the platform, upload the result, and both versions are measured with the same ruler.
+Platforms do not export these by default. With them, two more checks run:
 
-## Supported platforms
+- **Daily scores** (does your factor work): paste [`temperq_recorder.py`](src/qwb/static/temperq_recorder.py) into a copy of the strategy, add one line `temperq_record(context, scores, selected)`, and re-run once on the platform. `qwb audit instrument-check` proves the copy differs from the original only by the recording lines.
+- **Candidate closes and minute prices on fill days** (factor and fill-time checks): run [`temperq_supplement.py`](src/qwb/static/temperq_supplement.py) in the platform's research environment.
 
-| Platform | Upload | Coverage |
-| --- | --- | --- |
-| **BigQuant** | Trades, holdings and log exports + strategy code | Full audit; optimized code |
-| **JoinQuant** | Transaction and position exports + strategy code | Full audit; dividends and bonus shares inferred; written suggestions |
-| **RiceQuant** | Trade, position and account detail exports + strategy code | Full audit; dividends and bonus shares inferred; written suggestions |
-| **Others** | trades / holdings / account in the [generic format](docs/STRATEGY_AUDIT_FORMAT.md) | Fees, spread, attribution; only obvious code parameters are read |
+## Was the change worth it
 
-Upload the raw files **unchanged** (JoinQuant zips need no unpacking); the format is detected from table headers. Files from different platforms cannot be mixed in one backtest. All three platforms have been reconciled end to end on real backtest exports.
+After the report suggests a change, edit the code, re-run on the platform and audit the new export:
 
-Daily stock scores are optional. None of the three platforms makes them easy to export, and no 1.0 audit depends on them. When provided, they add an analysis of how long the signal lasts.
+- `qwb audit compare <original> <changed>`: compares the two versions by the same method and says better, mixed or worse. When both versions made exactly the same trades, it says the difference comes from fees alone.
+- `qwb audit interaction <base> <only A> <only B> <both>`: whether two suggestions can be used together.
 
-## Privacy and safety
-
-- Strategy code is parsed **read-only** with the Python AST. It is never imported or executed.
-- All files and reports stay on your computer and are not uploaded anywhere.
-- The workbench listens on the local address (`127.0.0.1`) only.
+A same-period re-run is still in-sample, and the report says so.
 
 ## Quick start
 
-Runs on **Windows 10/11 and Linux** with CPU only; 8GB+ RAM recommended. The first install needs network access to prepare an isolated Python 3.11 environment.
+**Windows 10/11 and Linux**, CPU only, 8 GB RAM or more recommended. The first install needs internet; the script sets up its own Python 3.11 and leaves any Python you already have alone.
 
 ### Windows
 
-1. Install [uv](https://docs.astral.sh/uv/getting-started/installation/) and reopen the terminal.
-2. [Download the source ZIP](https://github.com/Dear-Huang/temperq/archive/refs/heads/main.zip) and extract it.
-3. Double-click `install.bat` and wait for the self-check.
-4. Double-click `start.bat`; the local workbench opens in your browser. Keep the window open while using it.
+1. Install [uv](https://docs.astral.sh/uv/getting-started/installation/), then reopen the terminal.
+2. [Download the source ZIP](https://github.com/Dear-Huang/temperq/archive/refs/heads/main.zip) and extract it fully.
+3. Double-click `install.bat` and wait for the install and self-check.
+4. Double-click `start.bat`; the browser opens the local workbench. Under 策略导入 (strategy import), 下载合成示例 (download the synthetic sample) lets you try the full flow first.
+
+### Command line
+
+```powershell
+.venv\Scripts\qwb audit check D:\my_backtest_export                    # what was read, do the books close
+.venv\Scripts\qwb audit run   D:\my_backtest_export --out D:\audit_out  # writes report.html and more
+```
+
+Open `report.html` in a browser; it prints to PDF. Options include `--commission-bp` (broker contract commission), `--premise-text` (your own statement of the strategy's premise) and `--claimed-total` (a claimed total return to compare against); see `qwb audit run --help`.
 
 <details>
 <summary>Install with Git / Linux</summary>
 
-**Windows** (uv and Git required):
+**Windows** (install uv and Git first):
 
 ```powershell
 git clone https://github.com/Dear-Huang/temperq.git
@@ -91,7 +126,7 @@ cd temperq
 .\start.bat
 ```
 
-**Linux** (Git and curl required; uv is installed if missing):
+**Linux** (needs Git and curl; the script installs uv if missing):
 
 ```bash
 git clone https://github.com/Dear-Huang/temperq.git
@@ -100,39 +135,50 @@ sh install.sh
 sh start.sh
 ```
 
-The default address is `http://127.0.0.1:8765`; the startup window shows the actual one.
+The default address is `http://127.0.0.1:8765`; the start window shows the actual one. Troubleshooting: [user manual](docs/使用手册.md) (Chinese).
 
 </details>
 
-### First run
+## Supported platforms
 
-1. Open "策略导入" (import), download the synthetic sample and upload it as is to walk through the three pages.
-2. Open a backtest on your platform, export the files listed above and drop them in with the strategy code.
-3. On the review page, check what was recognized and inferred, confirm the files come from the same run, and continue.
-4. Apply the suggested changes, re-run on the original platform, and upload the optimized version under "效果验证" (verification).
+| Platform | What to provide |
+| --- | --- |
+| BigQuant | Trades, holdings and log from the backtest result page, plus the strategy code, as exported |
+| JoinQuant | Trade details and holdings, plus the strategy code; ZIP files need not be extracted |
+| RiceQuant | Web exports of trades, holdings and account, or a local RQAlpha native report, plus the strategy code |
+| Myquant, QMT, PTrade, in-house backtesters | Three CSVs in the [standard format](docs/STRATEGY_AUDIT_FORMAT.md) (trades, holdings, account), or let the AI version convert them |
+
+China A-share stocks, ETFs/funds and convertible bonds, long only. Futures, options and the Beijing Stock Exchange are not supported yet.
+
+## Privacy and safety
+
+- Strategy code is parsed **read-only** with Python's AST; it is never imported or executed.
+- In the local web app, all files and reports stay on your computer and are never uploaded.
+- The workbench listens on the local address only (`127.0.0.1`).
 
 ## Scope and limits
 
-- The spread scenario counts only the tick-size floor. **Market impact of large orders is not yet included**; for large accounts trading small caps, real costs will be higher.
-- Inferred dividends are allocated by the previous day's market value and are estimates; platform corporate-action records take precedence when available.
-- Attribution and verification describe what happened in the historical backtest and do not forecast returns. This project is for research and learning and is not investment advice.
+- The bid-ask spread is a lower bound from the minimum price tick; **market impact of large orders is not included yet**. Large accounts trading small caps will pay more.
+- The fill-time check changes only the fill price; it does not re-run the strategy's decisions. Inferred dividends and splits are listed for you to confirm.
+- Every conclusion describes this historical backtest only and does not predict future returns. For research and learning; not investment advice.
 
 <details>
-<summary>Retained features: model training, account review and paper tracking</summary>
+<summary>Other retained features: model training, account diagnostics and paper tracking</summary>
 
-Visual model training (LightGBM / Ridge), account adjustment review, historical replay and local paper accounts from earlier versions remain available from the workbench settings. See the [strategy workspace guide](docs/STRATEGY_WORKSPACE.md) and the [governance guide](docs/GOVERNANCE_REVIEW.md).
+The visual training (LightGBM / Ridge), account adjustment diagnostics, historical replay and local paper account from earlier versions remain available from the workbench settings. See the [strategy workspace guide](docs/STRATEGY_WORKSPACE.md) and the [governance workbench guide](docs/GOVERNANCE_REVIEW.md).
 
 </details>
 
-## Documentation and contributing
+## Docs and contributing
 
-- [Strategy audit import format](docs/STRATEGY_AUDIT_FORMAT.md): exports per platform, generic fields and coverage.
-- [Why this design](docs/WHY_THIS_DESIGN.md): why audit outputs, never run code and not rank returns.
-- [Pitfalls](docs/PITFALLS.md): look-ahead, overnight gaps, mistaking forecast metrics for returns.
-- [Development](docs/DEVELOPMENT.md): project structure, tests and environment.
+- [Strategy audit import format](docs/STRATEGY_AUDIT_FORMAT.md): how to export from each platform, standard format fields.
+- [Audit rules](docs/AUDIT_RULES.md): the source of every rule, method and threshold.
+- [Why this design](docs/WHY_THIS_DESIGN.md): why audit outputs, never run code, and not compete on returns.
+- [Pitfalls](docs/PITFALLS.md): look-ahead, overnight gaps, mistaking prediction metrics for returns, and more.
+- [Development](docs/DEVELOPMENT.md): project layout, tests and environment.
 
-TemperQ is at an early stage. [Issues and requests](https://github.com/Dear-Huang/temperq/issues) are welcome. If your platform is not supported yet, attach a redacted export header and it will be prioritized.
+TemperQ is at an early stage. Try it on one of your own backtests. If it finds a problem, if the report is hard to read, or if you think a judgement is wrong, please [open an issue](https://github.com/Dear-Huang/temperq/issues). If your platform is not supported yet, attach the headers of an anonymised export and we will prioritise it.
 
 ## License
 
-Code is licensed under [AGPL-3.0](LICENSE), copyright Dear-Huang. Third-party components follow their own licenses; see [NOTICE](NOTICE).
+Code under [AGPL-3.0](LICENSE), copyright Dear-Huang. Third-party components follow their own licenses; see [NOTICE](NOTICE).
