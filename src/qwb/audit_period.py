@@ -165,7 +165,7 @@ def development_bundle(bundle, plan):
         raise ValueError('当前历史不足以建立建议段和验证段')
     allowed = set(plan['development_dates'])
     out = deepcopy(bundle)
-    for key in ('fills', 'positions', 'snapshots', 'actions', 'scores', 'quote_observations', 'minute_prices'):
+    for key in ('fills', 'positions', 'snapshots', 'actions', 'scores', 'quote_observations', 'minute_prices', 'day_ranges'):
         out[key] = [r for r in bundle.get(key, []) if r['date'] in allowed]
     out['logs'] = [r for r in bundle['logs'] if r.get('时间', '')[:10] in allowed]
     # Full-period external attribution is not a development-only observation.

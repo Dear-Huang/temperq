@@ -182,7 +182,7 @@ def other_platform(files, *, adapter, name, opening_cash=None):
     result = {'schema_version': SCHEMA, 'adapter': adapter + '_v1', 'name': name,
         'opening': {'kind': 'empty' if opening_cash is not None else 'first_close', 'cash': opening_cash},
         'fills': [], 'positions': [], 'snapshots': [], 'actions': [], 'logs': [],
-        'external_attribution': [], 'quote_observations': [], 'scores': [], 'prices': [], 'minute_prices': [], 'code': {}, 'sources': [],
+        'external_attribution': [], 'quote_observations': [], 'scores': [], 'prices': [], 'minute_prices': [], 'day_ranges': [], 'code': {}, 'sources': [],
         'quality': {'fills_inferred': False, 'holdings_header_repaired': False,
                     'price_basis': 'unconfirmed', 'snapshots_complete': False}}
     seen, cash, assets = set(), {}, {}
@@ -422,12 +422,20 @@ def other_platform(files, *, adapter, name, opening_cash=None):
                     minute = hhmm(row['time'])
                     if not minute:
                         raise ValueError(f'分钟价第 {index} 行：time 须为 HH:MM 或 HH:MM:SS')
-                    opened = (row.get('open') or '').strip()
-                    vol = (row.get('volume') or '').strip()
+                    optional = {k: (row.get(k) or '').strip() for k in ('open', 'high', 'low', 'volume')}
                     result['minute_prices'].append({'date': date_value(row['date'], '分钟价日期'), 'time': minute,
                         'code': code_value(row['code']), 'close': numeric(row['close'], '分钟收盘价'),
-                        'open': numeric(opened, '分钟开盘价') if opened else None,
-                        'volume': numeric(vol, '分钟成交量') if vol else None, 'ref': _ref(kind, index)})
+                        **{k: numeric(v, '分钟' + k) if v else None for k, v in optional.items()},
+                        'ref': _ref(kind, index)})
+            elif {'date', 'code', 'high', 'low'} <= fields and not {'close', 'quantity', 'time'} & fields:
+                # Each fill day's full high and low, for where a fill price sits in the day's range.
+                kind = 'day_ranges'
+                for index, row in rows:
+                    high, low = numeric(row['high'], '当日最高价'), numeric(row['low'], '当日最低价')
+                    if high < low:
+                        raise ValueError(f'当日区间第 {index} 行：最高价低于最低价')
+                    result['day_ranges'].append({'date': date_value(row['date'], '区间日期'), 'code': code_value(row['code']),
+                                                 'high': high, 'low': low, 'ref': _ref(kind, index)})
             elif {'date', 'code', 'close'} <= fields and 'quantity' not in fields:
                 # Candidate closing prices, for checking the strategy's premise across its whole pool.
                 kind = 'prices'

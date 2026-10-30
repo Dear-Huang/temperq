@@ -22,12 +22,37 @@ _RULES = {
     "cash_buffer": ("T-CASH-SHORT", "T-CASH-BUFFER"),
     "fill_timing": ("M-FILL-TIMING", "T-TIMING-SHARE"),
     "partial_entry": ("M-PARTIAL-ENTRY", "T-PARTIAL-DAYS"),
+    "fill_quality": ("M-FILL-RANGE", "M-FILL-FLOOR", "T-FILL-BEST-SHARE"),
 }
 STATES = {"act": "建议处理", "review": "建议核对", "hold": "暂不改"}
 
 
 def _yuan(value):
     return f"¥{value:,.0f}"
+
+
+def _quality_card(quality):
+    """Fill prices that look too good, or a result that does not survive the worst nearby price."""
+    if not quality or quality.get("status") != "suspicious":
+        return None
+    parts = [x["verdict"] for x in (quality.get("range"), quality.get("floor")) if x]
+    rng = quality.get("range") or {}
+    return {
+        "id": "fill_quality", "state": "act", "title": "成交价是否拿得到",
+        "finding": "；".join(parts) + "。",
+        "headline": ("成交价系统性落在当天最有利的位置，疑似偷看了当天走势" if rng.get("status") == "suspicious"
+                     else "按成交后几分钟的最差价重算就不再盈利：收益依赖理想成交"),
+        "edits": [],
+        "options": [{"label": "核对信号所用数据的时间", "effect": "确认选股只用了下单之前已经公开的数据，没有用当天收盘价、全天成交量或当天走势"},
+                    {"label": "延后执行重跑", "effect": "信号不动，把执行时点延后到 9:35、10:00，并调高滑点，回平台重跑，用 qwb audit compare 比较"},
+                    {"label": "改用更保守的撮合", "effect": "按下一根分钟线或成交量加权均价撮合，限制单笔占当分钟成交量"}],
+        "saving": "不省钱；结果更接近实盘能拿到的价格",
+        "sacrifice": "回测收益会下降",
+        "net": "需要回原平台按更保守的执行重跑",
+        "evidence": "scenario",
+        "basis": "成交日全天最高最低价与成交后分钟价；股数和费用不变",
+        "overturn": "策略确实只用前一日数据、在竞价截止前提交，并且单笔远小于当分钟成交量；或延后执行重跑后结论不变。",
+    }
 
 
 def _partial_card(completion):
@@ -461,7 +486,8 @@ def cards(result, bundle=None):
            _churn_card(modules.get("signal_mapping"), edits, result.get("opening_state"), thresholds),
            _cash_buffer_card(modules.get("signal_mapping"), edits, thresholds),
            _timing_card(modules.get("fill_timing")),
-           _partial_card(modules.get("partial_entry"))]
+           _partial_card(modules.get("partial_entry")),
+           _quality_card(modules.get("fill_quality"))]
     order = {"act": 0, "review": 1, "hold": 2}
     cards = sorted((c for c in out if c), key=lambda c: order[c["state"]])
     for card in cards:

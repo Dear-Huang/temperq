@@ -133,6 +133,9 @@ def summary(bundle, result):
         "premise": premise and {k: premise.get(k) for k in ("premise", "source", "status", "verdict", "overall",
                                                             "spread_mean", "spread_t", "held_years", "reversed_years")},
         "attribution": attr and attr["summary"],
+        "fill_quality": (lambda q: q and {"status": q.get("status"),
+                                          "range": (q.get("range") or {}).get("verdict"), "floor": (q.get("floor") or {}).get("verdict")})(
+            result["modules"].get("fill_quality")),
         "partial_entry": (lambda c: c and {k: c.get(k) for k in ("status", "verdict", "partial_buys", "long_episodes", "worst")})(
             result["modules"].get("partial_entry")),
         "fill_timing": (lambda t: t and {k: t.get(k) for k in ("status", "verdict", "open_share", "low", "high", "net_pnl",

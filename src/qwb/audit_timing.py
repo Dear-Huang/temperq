@@ -47,7 +47,9 @@ def analyze(bundle, accounting, thresholds=None):
     bars = {(m["date"], m["code"], m["time"]): m for m in minutes}
     net = sum(d["net_pnl"] for d in accounting.get("daily") or []) if accounting.get("status") == "verified" else None
     rows = []
-    for label, minute, field in [(x, x, "close") for x in TIMES] + [("竞价（09:31 开盘价）", "09:31", "open")]:
+    # The 09:31 bar's open is near the auction price, but only an order submitted before the auction closed
+    # could have filled there; an order generated at 9:30 could not.
+    for label, minute, field in [(x, x, "close") for x in TIMES] + [("09:31 开盘价（仅限竞价截止前已提交的订单）", "09:31", "open")]:
         gain, value, n = 0., 0., 0
         for f in timed:
             bar = bars.get((f["date"], f["code"], minute))

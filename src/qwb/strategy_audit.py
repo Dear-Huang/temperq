@@ -230,6 +230,10 @@ def analyze(bundle, settings=None, *, policy=None):
     timing = audit_timing.analyze(bundle, context["accounting"], thresholds)
     if timing:
         context["fill_timing"] = timing
+    from . import audit_fill_quality
+    quality = audit_fill_quality.analyze(bundle, context["accounting"], thresholds)
+    if quality:
+        context["fill_quality"] = quality
     from . import audit_completion
     completion = audit_completion.analyze(bundle, context["accounting"], thresholds)
     if completion:

@@ -251,7 +251,7 @@ def bigquant(files, *, name, opening_cash=None):
               "opening": {"kind": "empty" if opening_cash is not None else "first_close",
                           "cash": opening_cash},
               "fills": [], "positions": [], "snapshots": [], "actions": [],
-              "logs": [], "external_attribution": [], "quote_observations": [], "scores": [], "prices": [], "minute_prices": [], "code": {}, "sources": []}
+              "logs": [], "external_attribution": [], "quote_observations": [], "scores": [], "prices": [], "minute_prices": [], "day_ranges": [], "code": {}, "sources": []}
     seen = set()
     for source in files:
         text, encoding = decode_source(source)
@@ -276,6 +276,10 @@ def bigquant(files, *, name, opening_cash=None):
                 kind = "quote_observations"; required = set()
             elif {'date', 'code', 'score'} <= columns:
                 kind = 'scores'; required = set()
+            elif {'date', 'time', 'code', 'close'} <= columns:
+                kind = 'minute_prices'; required = set()
+            elif {'date', 'code', 'high', 'low'} <= columns and not {'close', 'quantity', 'time'} & columns:
+                kind = 'day_ranges'; required = set()
             elif {'date', 'code', 'close'} <= columns:
                 kind = 'prices'; required = set()
             else:
@@ -335,6 +339,20 @@ def bigquant(files, *, name, opening_cash=None):
                     result["quote_observations"].append({"date": date_value(row["date"], label),
                         "code": stock_code(row["code"]), "quoted_spread_bp": spread, "sample_count": int(count),
                         "measurement_scope": row["measurement_scope"], "ref": ref})
+                elif kind == 'minute_prices':
+                    from .audit_timing import hhmm
+                    minute = hhmm(row['time'])
+                    if not minute:
+                        raise ValueError(label + '：time 须为 HH:MM 或 HH:MM:SS')
+                    optional = {k: (row.get(k) or '').strip() for k in ('open', 'high', 'low', 'volume')}
+                    result['minute_prices'].append({'date': date_value(row['date'], label), 'time': minute,
+                        'code': stock_code(row['code'].replace('.XSHG', '.SH').replace('.XSHE', '.SZ')),
+                        'close': numeric(row['close'], label), **{k: numeric(v, label) if v else None for k, v in optional.items()},
+                        'ref': ref})
+                elif kind == 'day_ranges':
+                    result['day_ranges'].append({'date': date_value(row['date'], label),
+                        'code': stock_code(row['code'].replace('.XSHG', '.SH').replace('.XSHE', '.SZ')),
+                        'high': numeric(row['high'], label), 'low': numeric(row['low'], label), 'ref': ref})
                 elif kind == 'prices':
                     result['prices'].append({'date': date_value(row['date'], label),
                         'code': stock_code(row['code'].replace('.XSHG', '.SH').replace('.XSHE', '.SZ')),

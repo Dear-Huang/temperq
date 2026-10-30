@@ -221,6 +221,10 @@ def coverage(bundle, result):
                       algorithm("成交时点敏感性", inputs="ready" if (modules.get("fill_timing") or {}).get("status") in ("sensitive", "stable", "unscaled")
                                 else "missing", missing=[] if (modules.get("fill_timing") or {}).get("status") in ("sensitive", "stable", "unscaled")
                                 else ["成交时间与成交日分钟价（date, time, code, close）"]),
+                      algorithm("成交价位置与最差价下限", inputs="ready" if (modules.get("fill_quality") or {}).get("status") in ("normal", "suspicious")
+                                else "missing", missing=[] if (modules.get("fill_quality") or {}).get("status") in ("normal", "suspicious")
+                                else ["成交日全天区间（date, code, high, low）", "成交日分钟价含 high、low"]),
+                      algorithm("排队位置与盘口深度", "not_implemented", "missing", ["逐笔成交或 L2 盘口"]),
                       algorithm("部分成交与补单", inputs="ready" if modules.get("partial_entry") else "missing",
                                 missing=[] if modules.get("partial_entry") else ["委托记录（下单数与成交数）"]),
                       algorithm("实现短缺及延迟分解", "not_implemented", "missing", ["带时点的目标订单、决策价及完整生命周期"])],

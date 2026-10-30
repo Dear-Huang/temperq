@@ -484,6 +484,23 @@ def render(record, bundle, result):
             rows.append(("年化双边换手（成交额 / 期初权益）", f'{notional / perf["start_equity"] / perf["years"]:.1f} 倍'))
     h.append('<div class="tw"><table><tr><th>项目</th><th class="n">数值</th></tr>' + "".join(f'<tr><td>{a}</td><td class="n">{b}</td></tr>' for a, b in rows) + '</table></div>')
     h.append('<p class="mut">价差为按最小价位估算的情景，不是实测成本；原回测若已计滑点，需先分离再比较。逐笔费用见附件 fees.csv、tick-costs.csv。</p>')
+    quality = modules.get("fill_quality")
+    if quality and quality.get("status") in ("normal", "suspicious"):
+        h.append('<h3>成交价是否拿得到</h3>')
+        rng, floor = quality.get("range"), quality.get("floor")
+        if rng:
+            tone = "adjust" if rng["status"] == "suspicious" else "pass"
+            h.append(f'<p><span class="tag {tone}">位置</span>{esc(rng["verdict"])}。</p>')
+            h.append('<div class="tw"><table><tr><th>方向</th><th class="n">笔数</th><th class="n">在当天区间的平均位置</th>'
+                     '<th class="n">落在最有利一成以内</th></tr>' + "".join(
+                f'<tr><td>{"买入" if side == "buy" else "卖出"}</td><td class="n">{v["fills"]}</td>'
+                f'<td class="n">{v["mean_position"]:.0%}</td><td class="n">{v["best_tenth_share"]:.0%}</td></tr>'
+                for side, v in rng["sides"].items()) + '</table></div>'
+                     '<p class="mut">位置 0% 是当天最低价，100% 是最高价。随机成交时平均约 50%，落在最有利一成以内约 10%。</p>')
+        if floor:
+            tone = "adjust" if floor.get("net_after") is not None and floor["net_after"] <= 0 < (floor.get("net_pnl") or 0) else "evidence"
+            h.append(f'<p><span class="tag {tone}">最差价下限</span>{esc(floor["verdict"])}。</p>')
+        h.append(f'<p class="mut">{esc(quality["scope"])}。</p>')
     partial = modules.get("partial_entry")
     if partial:
         h.append('<h3>部分成交与补单</h3>')
