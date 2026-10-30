@@ -440,6 +440,15 @@ def other_platform(files, *, adapter, name, opening_cash=None):
                         'selected': flag in {'true', '1', 'yes', '是'} if flag else None,
                         'available_at': stamp[11:19] if len(stamp) > 10 else row.get('available_at', ''),
                         'ref': _ref(kind, index)})
+            elif {'date', 'code', 'cash', 'quantity_change'} <= fields:
+                # Actual corporate actions (ex-date, cash per holding, share change), e.g. from the data vendor.
+                kind = 'actions'
+                for index, row in rows:
+                    result['actions'].append({'date': date_value(row['date'], '公司行动日期'), 'code': code_value(row['code']),
+                        'cash': numeric(row['cash'] or '0', '分红金额'),
+                        'quantity_change': int(numeric(row['quantity_change'] or '0', '送转股数', nonnegative=False)),
+                        'kind': (row.get('kind') or 'actual').strip(), 'source': 'supplied', 'ref': _ref(kind, index)})
+                result['quality']['actions_supplied'] = True
             elif {'date', 'time', 'code', 'close'} <= fields and 'quantity' not in fields:
                 # Minute prices on fill days, for checking how much the result depends on the fill minute.
                 kind = 'minute_prices'
@@ -519,7 +528,8 @@ def other_platform(files, *, adapter, name, opening_cash=None):
         identities = [(r['date'], r.get('code', '')) for r in result[key]]
         if key != 'fills' and len(identities) != len(set(identities)):
             raise ValueError('同日持仓、账户或打分重复')
-    if result['snapshots'] and (adapter == 'ricequant' or any(s.get('receivable_dividend') for s in result['snapshots'])):
+    if result['snapshots'] and not result['quality'].get('actions_supplied') and (
+            adapter == 'ricequant' or any(s.get('receivable_dividend') for s in result['snapshots'])):
         _receivable_dividends(result)
     if adapter == 'ricequant' and result['snapshots'] and result['fills']:
         _settle_rounded_prices(result)

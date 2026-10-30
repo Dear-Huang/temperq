@@ -24,6 +24,10 @@ PLATFORMS = {"bigquant_v1": "BigQuant", "joinquant_v1": "聚宽", "ricequant_v1"
 CHECK_WORDS = {"consistent": "一致", "review": "需核对", "missing": "未提供", "inconsistent": "不一致"}
 
 
+def _t(v):
+    return "不可计算" if v is None else f"{v:.2f}"
+
+
 def _yuan(v):
     return "—" if v is None else f"¥{(0. if abs(v) < .5 else v):,.0f}"
 
@@ -389,15 +393,16 @@ def render(record, bundle, result):
             bar = premise["thresholds"]["t"]
             sig = lambda v: v is not None and abs(v) >= bar
             h.append('<div class="tw"><table><tr><th>问题</th><th>指标</th><th class="n">数值</th><th>读法</th></tr>')
-            h.append(f'<tr><td>对不对</td><td>秩相关 {term("IC")} 均值（{term("t")}）</td><td class="n">{o["mean"]:+.3f}（{o["t"]:.2f}）</td>'
-                     f'<td>{o["periods"]} 期中 {o["positive_share"]:.0%} 为正；|t| ≥ {bar:g} 才算显著</td></tr>')
+            h.append(f'<tr><td>对不对</td><td>秩相关 {term("IC")} 均值（{term("t")}）</td><td class="n">{o["mean"]:+.3f}（{_t(o["t"])}）</td>'
+                     f'<td>{o["periods"]} 期' + (f'中 {o["positive_share"]:.0%} 为正' if o["positive_share"] is not None else '，期数太少') +
+                     f'；|t| ≥ {bar:g} 才算显著</td></tr>')
             if premise.get("spread_mean") is not None:
                 ann = (f'，约年化 {premise["spread_annual"]:+.1%}' if sig(premise.get("spread_t")) and premise.get("spread_annual") is not None
                        else "；不显著，不折年化")
-                h.append(f'<tr><td>对多少</td><td>前 1/3 减后 1/3（每期，{term("t")}）</td><td class="n">{premise["spread_mean"]:+.2%}（{premise["spread_t"]:.2f}）</td>'
+                h.append(f'<tr><td>对多少</td><td>前 1/3 减后 1/3（每期，{term("t")}）</td><td class="n">{premise["spread_mean"]:+.2%}（{_t(premise["spread_t"])}）</td>'
                          f'<td>不计费用{ann}</td></tr>')
             if premise.get("selected_excess_mean") is not None:
-                h.append(f'<tr><td>选股</td><td>选中减候选池（每期，t）</td><td class="n">{premise["selected_excess_mean"]:+.2%}（{premise["selected_excess_t"]:.2f}）</td>'
+                h.append(f'<tr><td>选股</td><td>选中减候选池（每期，t）</td><td class="n">{premise["selected_excess_mean"]:+.2%}（{_t(premise.get("selected_excess_t"))}）</td>'
                          f'<td>{premise["selected_beat_share"]:.0%} 的周期跑赢候选池</td></tr>')
             if premise.get("pool_compound") is not None:
                 h.append(f'<tr><td>收益来源</td><td>候选池等权 / 选中 累计</td><td class="n">{premise["pool_compound"]:+.1%} / {premise["selected_compound"]:+.1%}</td>'
@@ -449,6 +454,10 @@ def render(record, bundle, result):
 
     # 4. Attribution
     h.append('<h2>四、盈亏归因</h2>')
+    estimated = [a for a in bundle.get("actions") or [] if a.get("cash") and a.get("source") != "supplied"]
+    if estimated:
+        h.append(f'<p class="mut">有 {len(estimated)} 条现金分红是从账户现金变化推断、按前一日市值分到各持仓的：总额与账户一致，'
+                 '但逐只标的的分红归属是估计，可能分给了没有分红权的标的。上传实际公司行动表（date, code, cash, quantity_change）可消除。</p>')
     if attr:
         h.append('<ul>' + "".join(f'<li>{esc(x)}</li>' for x in attr["summary"]) + '</ul>')
         h.append('<div class="tw"><table><tr><th>项目</th><th class="n">金额</th></tr>' + "".join(

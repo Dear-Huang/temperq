@@ -61,7 +61,7 @@ def funding(bundle):
         out["verdict"] = "没有买单需要靠同一时刻卖出的钱才付得起"
     else:
         out["verdict"] = (f"{len(rows)} 次换仓的买入要靠同一时刻卖出的钱才付得起（最多差 {max(r['from_sale'] for r in rows):,.0f} 元）："
-                          "回测默认卖单先全部成交、钱马上可用")
+                          "卖单没成交完时，这笔买入就付不起；回测引擎是否按实际回款撮合，以平台日志为准")
         if out["partial_sell_days"]:
             out["verdict"] += f"；其中 {out['partial_sell_days']} 次的卖单只成交了一部分"
     return out

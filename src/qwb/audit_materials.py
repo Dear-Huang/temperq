@@ -119,6 +119,7 @@ def material_kind(source):
         ('positions', {'合约代码', '仓位', '最新价'}),
         ('snapshots', {'账户类型', '可用资金', '总权益'}),
         ('scores', {'date', 'code', 'score'}),
+        ('actions', {'date', 'code', 'cash', 'quantity_change'}),
         ('minute_prices', {'date', 'time', 'code', 'close'}),
         ('day_ranges', {'date', 'code', 'high', 'low'}),
         ('prices', {'date', 'code', 'close'}),

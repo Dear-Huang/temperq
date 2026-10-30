@@ -17,6 +17,8 @@ from . import rules as tax_rules
 from .code_parse import parse
 from .securities import asset_class
 
+RQ_STOCK_COMMISSION = .0008     # RQAlpha 6.x base stock commission before the multiplier
+RQ_STOCK_TAX = .0005            # RQAlpha 6.x stamp tax before the multiplier, when pit_tax is off
 ROUNDING = .011          # exports round each fee to 0.01 yuan
 SCENARIO_BP = (1., 2., 3.)
 CLASS_NAMES = {"stock": "股票", "fund": "ETF/基金", "bond": "债券"}
@@ -70,9 +72,17 @@ def declared(bundle):
                               "minimum_applies_to": "commission", "line": line,
                               "source": "配置 sys_transaction_cost.etf_commission"}
             sources.append({"line": line, "key": "sys_transaction_cost.etf_commission"})
-        if "stock_commission_multiplier" in cost:
-            missing["stock"] = ("只定位到 stock_commission_multiplier；倍数要和引擎版本、基础费率表一起才能换算成费率，"
-                                "导出里没有这两项")
+        if "stock_commission_multiplier" in cost and not cost.get("pit_tax"):
+            # RQAlpha 6.x StockTransactionCostDecider: base commission 0.08%, stamp tax 0.05%, both scaled.
+            rate = RQ_STOCK_COMMISSION * float(cost["stock_commission_multiplier"])
+            models["stock"] = {"commission_buy": rate, "commission_sell": rate,
+                               "minimum": float(cost.get("stock_min_commission", 5)), "tax_buy": 0.,
+                               "tax_sell": RQ_STOCK_TAX * float(cost.get("tax_multiplier", 1)),
+                               "minimum_applies_to": "commission", "line": line,
+                               "source": "配置 sys_transaction_cost（按 RQAlpha 6.x 股票基础佣金 0.08%、印花税 0.05% 换算）"}
+            sources.append({"line": line, "key": "sys_transaction_cost.stock_commission_multiplier"})
+        elif "stock_commission_multiplier" in cost:
+            missing["stock"] = "配置开启了按日期的印花税（pit_tax），本审计不按它复算"
             sources.append({"line": line, "key": "sys_transaction_cost.stock_commission_multiplier"})
     else:
         for node in ast.walk(tree):

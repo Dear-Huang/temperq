@@ -51,6 +51,7 @@ FACTORS = (
 SORT_HIGH = re.compile(r"reverse\s*=\s*True|['\"]?ascending['\"]?\s*[=:]\s*False|\.desc\(\)")
 SORT_LOW = re.compile(r"['\"]?ascending['\"]?\s*[=:]\s*True|\.asc\(\)")
 # Window lengths are statements (g.m_days = 25, N=21), not keyword arguments such as timedelta(days=250).
+SCORE_SET = re.compile(r"""['"]?score['"]?\s*(?:=(?!=)|:)""")
 LOOKBACK = re.compile(r"^\s*(?:\w+\.)?(lookback|LOOKBACK|m_days|n_days|momentum_days|mom_days|period|window|N)\s*=\s*(\d+)\s*$")
 WINDOWED = {"momentum", "reversal", "low_vol", "trend_fit", "trend_momentum"}
 
@@ -131,6 +132,15 @@ def from_code(bundle):
     if sort_line and factors:
         # The factor on (or nearest to) the line that orders the candidates is the one the strategy acts on.
         factors.sort(key=lambda f: abs(f["line"] - sort_line[0]))
+    # A factor written into the score itself wins, and a leading minus (score = -market_cap) reverses it.
+    for f in factors:
+        rx = re.compile(next(p for k, _, p in FACTORS if k == f["key"]), re.I)
+        for i, ln in code_lines:
+            m = SCORE_SET.search(ln)
+            if m and rx.search(ln[m.end():]):
+                f.update(line=i, code=ln.strip()[:160], in_score=True, negated=ln[m.end():].lstrip().startswith("-"))
+                break
+    factors.sort(key=lambda f: not f.get("in_score"))
     keys = [f["key"] for f in factors]
     if "momentum" in keys and "trend_fit" in keys and abs(keys.index("momentum") - keys.index("trend_fit")) <= 1:
         # The common ETF rotation score: annualised slope of log price times R² of the fit.
@@ -187,6 +197,7 @@ def _segment(rows, t_bar, label):
             "start": rows[0]["date"] if rows else None, "end": rows[-1]["next"] if rows else None}
 
 
+MAX_MISSING = .02  # share of candidate-periods without a next price above which no conclusion is given
 Z_POWER = .84      # one-sided normal quantile for 80% power (M-PREMISE-POWER)
 
 
@@ -218,7 +229,8 @@ def _premise_text(direction, code):
     if factor:
         name = factor[0]["name"].split("（")[0]
         window = f"过去{code['lookback']}日" if code.get("lookback") else ""
-        return f"{window}{name}{'越高' if direction == 'higher' else '越低'}的标的，到下一次调仓前涨得更多"
+        high = (direction == "higher") != bool(factor[0].get("negated"))      # score = -factor reverses the factor
+        return f"{window}{name}{'越高' if high else '越低'}的标的，到下一次调仓前涨得更多"
     return f"{DIRECTIONS[direction]}的标的，到下一次调仓前涨得更多"
 
 
@@ -276,8 +288,14 @@ def analyze(bundle, premise=None, partition=None, thresholds=None):
                 "missing": "candidate_prices"}
     sign = 1 if direction == "higher" else -1
     rows = []
+    offered = observed = incomplete = 0
+    dropped = []
     for a, b in zip(days, days[1:]):
         codes = [c for c in by_day[a] if c in prices.get(a, {}) and c in prices.get(b, {}) and prices[a][c] > 0]
+        offered += len(by_day[a]); observed += len(codes)
+        if len(codes) < len(by_day[a]):
+            incomplete += 1
+            dropped += [(a, c) for c in by_day[a] if c not in codes][:3]
         if len(codes) < 3:
             continue
         forward = {c: prices[b][c] / prices[a][c] - 1 for c in codes}
@@ -318,14 +336,22 @@ def analyze(bundle, premise=None, partition=None, thresholds=None):
     if status == "too_few":
         status = "insufficient"
     status = {"unclear": "not_supported"}.get(status, status)
+    missing_share = 1 - observed / offered if offered else 0.
+    coverage = {"candidate_periods": offered, "with_next_price": observed, "missing_share": missing_share,
+                "incomplete_periods": incomplete, "examples": [{"date": d, "code": c} for d, c in dropped[:10]]}
+    if missing_share > MAX_MISSING:
+        status = "incomplete_prices"
     verdict = {
+        "incomplete_prices": (f"候选里有 {offered - observed:,} 个标的周期缺下一期价格（占 {missing_share:.0%}，"
+                              f"{incomplete} 期不完整）：停牌或退市的标的被丢掉会让检验偏乐观，不下结论；"
+                              "补齐候选池全部标的的后续价格后再检验"),
         "insufficient": f"只有 {overall['periods']} 个调仓周期，少于 {min_periods} 个，不能下结论",
         "held": "回测期间前提成立：分数和随后收益的排序一致，且统计上显著",
         "reversed": "回测期间前提反了：分数越符合前提的标的，随后反而涨得更少，且统计上显著",
         "not_supported": "回测期间前提没有得到支持：分数和随后收益的排序没有稳定关系",
     }[status]
     power = _power(rows, overall, t_bar, per_year)
-    if status == "not_supported" and power:
+    if status == "not_supported" and power and missing_share <= MAX_MISSING:
         verdict = ("回测期间没有测出前提的效果，这不等于前提错了：" + power["text"])
     val = segments.get("validation")
     if status == "held" and val and val["periods"] >= 2 and (val["mean"] or 0) <= 0:
@@ -334,6 +360,7 @@ def analyze(bundle, premise=None, partition=None, thresholds=None):
     bad = [s["label"] for s in by_year if s["status"] == "reversed"]
     pool_c, sel_c = compound([r["pool"] for r in rows]), compound([r["selected"] for r in rows if r["selected"] is not None])
     return {**base, "status": status, "verdict": verdict, "overall": overall, "segments": segments, "power": power,
+            "price_coverage": coverage,
             "by_year": by_year, "by_market": by_market, "held_years": good, "reversed_years": bad,
             "spread_mean": statistics.mean(spreads) if spreads else None,
             "spread_t": _summary(spreads)["t"] if spreads else None,

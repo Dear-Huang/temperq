@@ -137,7 +137,8 @@ def analyze(bundle, accounting, thresholds=None):
     elif net == 0 or swing >= share_bar * abs(net):
         out.update(status="sensitive", verdict=span + (f"，达到净盈亏的 {swing / abs(net):.0%}" if net else "") + "：结论依赖成交时点")
     else:
-        out.update(status="stable", verdict=span + f"，不超过净盈亏的 {swing / abs(net):.0%}：成交稍晚不改变结论")
+        out.update(status="stable", verdict=span + f"，不超过净盈亏的 {swing / abs(net):.0%}：固定原成交路径下，"
+                   "成交稍晚不改变结论；这不代表执行稳健，现金、量限和后续持仓的变化要重跑才知道")
     if all(r["gain"] < -.5 for r in judged):
         out["open_flatters"] = True          # every later fill would have been worse than the minute used
     return out

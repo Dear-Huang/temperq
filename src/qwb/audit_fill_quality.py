@@ -49,15 +49,20 @@ def analyze(bundle, accounting, thresholds=None):
            "thresholds": {"best_share": best_bar}}
 
     # 1. position in the day's range
+    from . import audit_slippage
+    slippage = audit_slippage.declared(bundle)
     placed = []
     for f in fills:
         r = ranges.get((f["date"], f["code"]))
         if not r or r["high"] <= r["low"]:
             continue
+        side_bp = audit_slippage.per_side_bp(slippage, f["code"], f["price"]) or 0.
+        slip = f["price"] * side_bp / 1e4 + 1e-6
         pos = (f["price"] - r["low"]) / (r["high"] - r["low"])
+        beyond = f["price"] < r["low"] - slip or f["price"] > r["high"] + slip
         good = 1 - pos if f["side"] == "buy" else pos          # 1 = best possible price of the day
         placed.append({"side": f["side"], "pos": min(max(pos, 0.), 1.), "good": min(max(good, 0.), 1.),
-                       "outside": pos < -1e-9 or pos > 1 + 1e-9})
+                       "outside": beyond})
     if placed:
         n = len(placed)
         good_mean = sum(p["good"] for p in placed) / n
@@ -80,7 +85,8 @@ def analyze(bundle, accounting, thresholds=None):
                                     f"成交价在当天区间的位置接近随机（落在最有利一成以内的占 {best_share:.0%}，随机约 10%），"
                                     f"没有专挑当天低点买、高点卖的迹象")}
         if out["range"]["outside"]:
-            out["range"]["verdict"] += f"；另有 {out['range']['outside']} 笔成交价在当天最高最低价之外，需核对价格口径（复权）"
+            out["range"]["verdict"] += (f"；另有 {out['range']['outside']} 笔成交价超出当天最高最低价加声明滑点的范围，"
+                                        "需核对价格口径（复权）或撮合方式")
 
     # 2. worst price in the minutes after the fill
     worse, value, used, truncated = 0., 0., 0, 0

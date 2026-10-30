@@ -470,7 +470,8 @@ def normalize(files, *, adapter="auto", name="导入策略", opening_cash=None):
         if result['adapter'] in {'joinquant_v1', 'ricequant_v1', 'generic_v1'}:
             # These exports omit dividend and bonus-share records; recover the ones the account pins down.
             from . import corporate_actions
-            result = corporate_actions.apply(result, corporate_actions.infer(result))
+            if not result.get('quality', {}).get('actions_supplied'):
+                result = corporate_actions.apply(result, corporate_actions.infer(result))
         return result
     except csv.Error:
         raise ValueError("CSV 格式损坏或单元格过长，请重新导出") from None

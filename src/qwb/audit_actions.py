@@ -28,6 +28,11 @@ _RULES = {
 STATES = {"act": "建议处理", "review": "建议核对", "hold": "暂不改"}
 
 
+def _clock(text):
+    from .audit_timing import hhmm
+    return hhmm(text)
+
+
 def _yuan(value):
     return f"¥{value:,.0f}"
 
@@ -48,7 +53,7 @@ def _sequence_card(sequence):
         "finding": "；".join(parts) + "。",
         "headline": ("有买入用了下单时还不存在的信号" if late.get("late") else
                      "换仓的买入依赖同一时刻卖出的钱，且有卖单只成交了一部分" if serious else
-                     "换仓的买入依赖同一时刻卖出的钱：回测默认卖单先全部成交"),
+                     "换仓的买入依赖同一时刻卖出的回款：卖单没成交完时，这笔买入付不起"),
         "edits": [],
         "options": [{"label": "维持原样", "effect": "卖出标的流动性好、单笔远小于成交量，且平台确实先撮合卖单时"},
                     {"label": "按已成交卖单的回款再买", "effect": "先卖、确认成交后用实际到账资金买入；卖单没成交时不买或只买够得上的部分"},
@@ -303,7 +308,8 @@ def _fee_model_card(model, edits, t):
             lines.append(f"成交导出的税费列：卖出股票实收印花税约 {stamp['declared_bp']:.1f}bp，成交日适用税率为 "
                          f"{'/'.join(f'{b:g}' for b in stamp['rule_bp'])}bp，{stamp['mismatched_sells']}/{stamp['sells']} 笔不符；"
                          f"实收 {_yuan(stamp['charged'])}，按适用税率应为 {_yuan(stamp['due'])}，"
-                         f"回测少扣 {_yuan(stamp['due'] - stamp['charged'])}。")
+                         + (f"回测多扣 {_yuan(stamp['charged'] - stamp['due'])}。" if stamp['charged'] >= stamp['due']
+                            else f"回测少扣 {_yuan(stamp['due'] - stamp['charged'])}。"))
         else:
             lines.append(f"声明的卖出印花税约 {stamp['declared_bp']:.1f}bp，与成交日适用税率 {'/'.join(f'{b:g}' for b in stamp['rule_bp'])}bp "
                          f"不符的卖出 {stamp['mismatched_sells']} 笔。")
@@ -413,16 +419,17 @@ def _cash_buffer_card(signals, edits, t=None):
         "id": "cash_buffer", "state": "review", "title": "全仓下单没留费用余量",
         "finding": f"有 {signals['cash_short_orders']} 笔买单因“可用资金不足”被拒，差额最多 {_yuan(signals['cash_short_gap'])}："
                    f"例如 {ex['date']} 有 {_yuan(ex['available'])}，下单需要 {_yuan(ex['required'])}。"
-                   f"策略用全部现金下单，佣金和滑点一加就超了，结果这 {signals['cash_short_days']} 天账户空仓，没有持有信号选中的标的。",
-        "headline": f"下单留约 {keep:.0%} 余量可消除这 {signals['cash_short_orders']} 笔拒单；收益和回撤影响需重跑",
+                   f"策略用全部现金下单，佣金和滑点一加就超了，结果这 {signals['cash_short_days']} 天信号选中的标的没买到"
+                   "（账户可能仍持有其他标的）。",
+        "headline": f"按原订单金额，下单留约 {keep:.0%} 余量可覆盖这 {signals['cash_short_orders']} 笔缺口；改代码后价格和股数会变，需重跑",
         "edits": edits.get("cash_buffer", []),
-        "options": [{"label": "维持原样", "effect": "空仓天数由当天价格碰巧决定，回测结果含这部分偶然"},
+        "options": [{"label": "维持原样", "effect": "没买到目标的天数由当天价格碰巧决定，回测结果含这部分偶然"},
                     {"label": f"下单金额乘 {1 - keep:g}", "effect": "留出佣金和滑点，买单不再被拒；比例是经验值"},
                     {"label": "按预算算最大整手数", "effect": "下单前按 价格+滑点、佣金（含最低佣金）和整手单位，算出现金买得起的最大股数再下单；"
                                                           "不需要经验比例，现金留得最少"}],
-        "saving": "不省钱：修的是本该持仓却空仓的天数",
+        "saving": "不省钱：修的是本该买到却没买到目标的天数",
         "sacrifice": f"每次少买约 {keep:.0%} 的金额，现金略多",
-        "net": "空仓这些天的涨跌原回测没有吃到，改后结果可能更好也可能更差，需回原平台重跑",
+        "net": "没买到目标这些天的涨跌原回测没有吃到，改后结果可能更好也可能更差，需回原平台重跑",
         "evidence": "scenario",
         "basis": "委托详情里平台给出的拒单原因和金额",
         "overturn": "这些天恰好是下跌日，空仓反而躲过了亏损；重跑后对比即可看出。",
@@ -445,19 +452,21 @@ def _churn_card(signals, edits, opening=None, t=None):
     missed = signals["days"] - signals["followed_days"] - retained
     groups = signals.get("missed_groups") or []
     reasons = "；".join(f"{g['days']} 天{'全部' if g['days'] > 1 else ''}是 {g['code']}，"
-                       f"{(g['time'][:5] + ' 下单，') if g['time'] else ''}平台原因：{g['reason'].replace('委托未成交：', '')}"
+                       f"{(_clock(g['time']) + ' 下单，') if _clock(g['time']) else ''}平台原因：{g['reason'].replace('委托未成交：', '')}"
                        for g in groups[:3]) or "、".join(f"{k} {v} 天" for k, v in signals["missed_reasons"].items())
     if groups and groups[0]["days"] >= max(3, .5 * missed):
         reasons += ("。要确定原因，需要该标的这些日期的分钟数据（区分成交量为 0 和缺数据），"
                     "或原平台同区间的委托和成交导出")
     return {
         "id": "rank_churn", "state": "review" if worth else "hold", "title": "排名一变就换仓",
-        "finding": f"按策略自己的每日排名，{signals['days']} 个交易日里第一名换了 {switches} 次，平均每 {signals['average_hold_days']:.0f} 天换一次；"
-                   f"每次换仓的费用和价差约 {_yuan(signals['cost_per_round_trip'])}。"
+        "finding": (f"按策略自己的排名，{signals['days']} 个信号日里第一名换了 {signals.get('top_switches', switches)} 次"
+                    + (f"，目标组合（约 {signals['target_size']} 只）换了 {switches} 次" if signals.get("target_size", 1) > 1 else "")
+                    + f"，平均每 {signals['average_hold_days']:.1f} 个信号日换一次；")
+                   + f"每次换仓的费用和价差约 {_yuan(signals['cost_per_round_trip'])}。"
                    f"有 {signals['whipsaw_lots']} 笔卖出后 5 天内又排回第一，这些交易付出约 {_yuan(signals['whipsaw_cost'])}。"
                    + (f"另有 {missed} 天没有持有选中的目标（{reasons}）。" if missed else "持仓每天都跟上了信号。")
-                   + (f"{retained} 天没有下单、继续持有紧随第一之后的标的，像是策略自带的保留规则，未计入上面的天数；"
-                      "要确认，需要策略每天的最终目标（不只排名）。" if retained else ""),
+                   + (f"{retained} 天没有下单、继续持有紧随第一之后的标的：现象与保留规则一致，但没有策略每天的最终目标记录，"
+                      "不能确认是规则还是漏单，未计入上面的天数。" if retained else ""),
         "headline": (f"固定成交下，排进前 {signals['buffer_rank']} 就不卖可少换 {avoided} 次，费用和价差情景约 "
                      f"{_yuan(signals['avoided_cost'])}；收益影响需重跑" if worth
                      else f"固定成交下保留带只能少换 {avoided} 次，暂不改"),

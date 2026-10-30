@@ -72,6 +72,8 @@ def analyze(bundle, context, thresholds=None):
 
     # 2. How often the top name changed, and how many changes a buffer would skip.
     switches = sum(chosen[a] != chosen[b] for a, b in zip(days, days[1:]))
+    top = {d: min(ranks[d], key=ranks[d].get) for d in days}
+    top_switches = sum(top[a] != top[b] for a, b in zip(days, days[1:]))
     target_size = max(1, round(sum(len(chosen[d]) for d in days) / len(days)))
     keep, buffered = None, 0
     for d in days:
@@ -100,7 +102,7 @@ def analyze(bundle, context, thresholds=None):
     return {
         "id": "signal_mapping", "days": len(days), "followed_days": len(days) - len(missed) - len(retained),
         "retained_days": len(retained),
-        "retained_note": "没有下单、继续持有排名紧随第一之后的标的：像是策略自带的保留规则，不算执行失败；"
+        "retained_note": "没有下单、继续持有排名紧随第一之后的标的：现象与保留规则一致，不计入执行缺口；"
                          "只有排名、没有策略的最终目标时，审计无法区分保留规则和漏单",
         "cash_short_orders": len(short), "cash_short_days": sum(m["date"] in short_days for m in missed),
         "cash_short_gap": max((o["required_cash"] - o["available_cash"] for o in short), default=0.),
@@ -112,7 +114,8 @@ def analyze(bundle, context, thresholds=None):
         "avoided_switches": avoided, "cost_per_round_trip": per_switch, "avoided_cost": avoided * per_switch,
         "whipsaw_lots": len(whipsaw), "whipsaw_cost": sum(l["fees"] + l["tick_scenario_cost"] for l in whipsaw),
         "whipsaw_net": sum(l["net_after_tick_scenario"] for l in whipsaw),
-        "average_hold_days": len(days) / (switches + 1),
+        "average_hold_days": len(days) / (switches + 1),      # signal days per change, not trading days held
+        "top_switches": top_switches, "target_size": target_size,
         "scope": "按策略自己的每日排名描述实际发生的换仓；保留带只数少换的次数，收益影响需在原平台重跑",
     }
 

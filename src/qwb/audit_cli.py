@@ -205,6 +205,10 @@ def compare_runs(original_dir, optimized_dir, sensitivity=False):
     out = audit_verification.compare(a, b)
     if out is None:
         raise ValueError("其中一版账目未闭合或材料不全，无法比较")
+    sources = [json.loads((Path(d) / "evidence.json").read_text(encoding="utf-8"))["input"].get("code", {}).get("source")
+               for d in (original_dir, optimized_dir)]
+    same_code = bool(sources[0]) and sources[0] == sources[1]
+    sensitivity = sensitivity or same_code
     keep = ("comparable", "reason", "start", "end", "same_period", "full_gain", "validation_gain", "drawdown",
             "same_trades", "drawdown_deeper", "evidence", "verdict", "state")
     out = {k: out.get(k) for k in keep if k in out}
@@ -220,7 +224,8 @@ def compare_runs(original_dir, optimized_dir, sensitivity=False):
                   f"最大回撤从 {a_perf['max_drawdown']:.1%} 变为 {b_perf['max_drawdown']:.1%}") if a_perf and b_perf else ""
         out["verdict"] = (change + "。这是成交模型的敏感性实验：两次的撮合或滑点不同，结果变化说明结论依赖成交模型有多深；"
                           "不能按收益高低判断哪个模型更真实，也不要据此选版本"
-                          + ("。两次交易完全相同，差异只来自费用或价格" if out.get("same_trades") else ""))
+                          + ("。两次交易完全相同，差异只来自费用或价格" if out.get("same_trades") else "")
+                          + ("。两版策略代码完全相同，已按敏感性实验处理" if same_code else ""))
     else:
         out["note"] = "full_gain 和 drawdown 按审计费率与价差情景重算，不是回测原值"
     return out

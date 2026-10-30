@@ -27,11 +27,12 @@ def fill(side, notional, fee, code="510300.SH", day="2024-01-02"):
     return {"date": day, "code": code, "side": side, "notional": notional, "fee": fee, "quantity": 100, "price": notional / 100}
 
 
-def test_declared_model_reads_etf_rate_but_not_a_bare_multiplier():
+def test_declared_model_converts_the_rqalpha_stock_multiplier():
+    # RQAlpha 6.x: base stock commission 0.08% and stamp tax 0.05%, each scaled by its multiplier.
     d = audit_fee_model.declared(bundle([fill("buy", 100000., 20.), fill("buy", 100000., 20., "600000.SH")]))
     assert d["models"]["fund"]["commission_buy"] == .0002
-    assert "stock" not in d["models"] and "倍数" in d["missing"]["stock"]
-    assert d["status"] == "incomplete"
+    assert abs(d["models"]["stock"]["commission_buy"] - .0008 * .25) < 1e-12      # CONFIG multiplier 0.25
+    assert "RQAlpha 6.x" in d["models"]["stock"]["source"]
 
 
 def test_self_check_is_a_fact_independent_of_audit_rate():
@@ -176,3 +177,4 @@ def test_rerun_lifts_card_to_e4_and_never_says_verified():
     assert out["reruns"][0]["label"] == "更差"
     untouched = audit_actions.attach_reruns(audit_actions.cards({"modules": {"signal_mapping": signals()}}), {})[0]
     assert untouched["evidence"] in {"E3", "E3c"} and "reruns" not in untouched
+
