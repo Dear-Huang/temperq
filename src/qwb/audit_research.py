@@ -151,7 +151,7 @@ def holding_analysis(bundle, account, tick):
             return stamp.hour, stamp.minute, stamp.second, stamp.microsecond
         except (ValueError, TypeError):
             return None
-    same_day_ok = {(r["date"], r["code"]) for r in account.get("same_day_resales") or [] if r["asset"] != "stock"}
+    same_day_ok = {(r["date"], r["code"]) for r in account.get("same_day_resales") or [] if r.get("t0") is not False}
 
     def sell(fill, day):
         remaining = fill["quantity"]

@@ -34,6 +34,27 @@ def security_code(value):
     return stock_code(code)
 
 
+# ETFs that may be bought and sold on the same day (T+0): cross-border, gold/commodity, bond and money funds.
+# Prefixes are the common ranges; anything else is treated as T+1 like a stock ETF.
+T0_FUND_PREFIX = ("159920", "159941", "159934", "159937", "159980", "159981", "159985", "159812", "159866",
+                  "511", "513", "518", "159001", "159003", "159005")
+
+
+def same_day_resale(code):
+    """True for instruments that may be sold the same day they are bought (T+0); False for T+1; None if unknown."""
+    kind = asset_class(code)
+    if kind == "bond":
+        return True
+    if kind == "stock":
+        return False
+    digits = code[:6]
+    if digits.startswith(T0_FUND_PREFIX):
+        return True
+    if digits.startswith(("510", "512", "515", "516", "517", "159")):
+        return False          # equity ETFs: T+1
+    return None
+
+
 def asset_class(code):
     digits = code[:6]
     if digits.startswith(FUND_PREFIX):

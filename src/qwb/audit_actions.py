@@ -22,6 +22,8 @@ _RULES = {
     "cash_buffer": ("T-CASH-SHORT", "T-CASH-BUFFER"),
     "fill_timing": ("M-FILL-TIMING", "T-TIMING-SHARE"),
     "partial_entry": ("M-PARTIAL-ENTRY", "T-PARTIAL-DAYS"),
+    "failed_exits": ("M-ACTIVITY",),
+    "idle": ("M-ACTIVITY",),
     "fill_quality": ("M-FILL-RANGE", "M-FILL-FLOOR", "T-FILL-BEST-SHARE"),
     "sequence": ("M-SEQUENCE",),
 }
@@ -91,6 +93,50 @@ def _quality_card(quality):
     }
 
 
+def _exit_card(activity):
+    """Sell orders that did not complete while the name stayed held: the exit the backtest planned did not happen."""
+    exits = (activity or {}).get("exits") or {}
+    if exits.get("failed", 0) < 3:
+        return None
+    return {
+        "id": "failed_exits", "state": "act", "title": "卖单没卖掉",
+        "finding": exits["verdict"] + "。",
+        "headline": f"{exits['failed']} 笔卖单没成交完、收盘仍持有，最长连续 {exits['longest_run']} 个交易日：计划的退出没有发生",
+        "edits": [],
+        "options": [{"label": "维持原样", "effect": "持仓过夜本来就在策略允许范围内时"},
+                    {"label": "提前退出或分笔卖出", "effect": "收盘前几分钟成交量可能为零，改到更早、成交更活跃的时点，或拆成多笔"},
+                    {"label": "卖不掉时次日补卖", "effect": "检查前一日的退出是否完成，没完成就在次日开盘处理"}],
+        "saving": "不省钱；持仓风险按策略本意控制",
+        "sacrifice": "提前卖出可能错过尾盘的价格",
+        "net": "需要回原平台改退出逻辑重跑才能知道",
+        "evidence": "recomputed",
+        "basis": "委托记录里卖单的下单数与成交数，以及当日收盘持仓",
+        "overturn": "策略本来就允许持仓过夜，或这些卖单是可选的减仓而不是必须完成的退出。",
+    }
+
+
+def _idle_card(activity):
+    """Long stretches with nothing held: a low drawdown that comes from not being invested."""
+    idle = (activity or {}).get("idle") or {}
+    from .audit_activity import LONG_IDLE
+    if idle.get("longest", 0) < LONG_IDLE:
+        return None
+    return {
+        "id": "idle", "state": "review", "title": "策略长期没持仓",
+        "finding": idle["verdict"] + "。",
+        "headline": f"最长连续 {idle['longest']} 个交易日没有任何持仓：低回撤可能来自没投资，而不是控制了风险",
+        "edits": [],
+        "options": [{"label": "维持原样", "effect": "长期空仓是策略的择时设计时"},
+                    {"label": "核对空仓的触发条件", "effect": "查看策略判断空仓、决定建仓的代码，确认是信号使然还是状态变量出错（如用浮点数精确相等判断）"}],
+        "saving": "不省钱",
+        "sacrifice": "无",
+        "net": "如果空仓是程序错误，修正后收益和回撤都会变，需重跑",
+        "evidence": "recomputed",
+        "basis": "每日收盘持仓与账户现金",
+        "overturn": "策略的目标持仓在这些天本来就是空仓。",
+    }
+
+
 def _partial_card(completion):
     """A buy that filled in part and was never topped up: the target is held, the order is not complete."""
     if not completion or completion.get("status") != "found":
@@ -118,7 +164,8 @@ def _timing_card(timing):
     if not timing or timing.get("status") not in ("sensitive", "stable"):
         return None
     sensitive = timing["status"] == "sensitive"
-    delayed = [r for r in timing["rows"] if r.get("delay")]
+    judged = set(timing.get("judged_delays") or [])
+    delayed = [r for r in timing["rows"] if r.get("delay") in judged] or [r for r in timing["rows"] if r.get("delay")]
     worst = min(delayed, key=lambda r: r["gain"])
     best = max(delayed, key=lambda r: r["gain"])
     flatter = timing.get("open_flatters")
@@ -530,6 +577,8 @@ def cards(result, bundle=None):
            _cash_buffer_card(modules.get("signal_mapping"), edits, thresholds),
            _timing_card(modules.get("fill_timing")),
            _partial_card(modules.get("partial_entry")),
+           _exit_card(modules.get("activity")),
+           _idle_card(modules.get("activity")),
            _quality_card(modules.get("fill_quality")),
            _sequence_card(modules.get("sequence"))]
     order = {"act": 0, "review": 1, "hold": 2}

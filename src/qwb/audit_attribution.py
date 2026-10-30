@@ -105,7 +105,11 @@ def summary(net, gross, fees, spread, conc, by_holding, drawdown):
     lines.append(line + "。")
     if by_holding:
         worst = min(by_holding, key=lambda r: r["after_tick"])
-        lines.append(f"按持有期看，亏得最多的是「{worst['label']}」的 {worst['matches']} 笔交易，扣价差情景后 {_y(worst['after_tick'])}。")
+        if worst["after_tick"] < 0:
+            lines.append(f"按持有期看，亏得最多的是「{worst['label']}」的 {worst['matches']} 笔交易，扣价差情景后 {_y(worst['after_tick'])}。")
+        else:
+            lines.append(f"按持有期看，各组扣价差情景后都盈利，贡献最少的是「{worst['label']}」的 {worst['matches']} 笔交易，"
+                         f"{_y(worst['after_tick'])}。")
     elif drawdown:
         lines.append(f"最大回撤 {drawdown['ratio']:.1%}，从 {drawdown['peak']} 到 {drawdown['trough']}。")
     return lines

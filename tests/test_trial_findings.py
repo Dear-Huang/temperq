@@ -83,3 +83,40 @@ def test_tq08_and_tq11_messages_name_the_file_and_the_sample_zip_imports():
     assert bundle["fills"]
     with pytest.raises(ValueError, match="empty.csv"):
         imp.normalize([imp.SourceFile("empty.csv", b""), imp.SourceFile("c.py", CODE)])
+
+
+def test_batch_p02_equity_etf_is_t_plus_one_and_cross_border_is_t_zero():
+    from qwb.securities import same_day_resale
+    assert same_day_resale("510300.SH") is False and same_day_resale("513030.SH") is True
+    assert same_day_resale("518880.SH") is True and same_day_resale("600000.SH") is False
+    account = audit.accounting(t0_bundle("510300.SH"))
+    assert [e for e in account["exceptions"] if e["key"] == "prior_inventory_for_sales"]
+
+
+def test_batch_p06_p07_failed_exits_and_idle_stretches():
+    from qwb import audit_activity
+    days = [f"2024-01-{d:02d}" for d in range(2, 30)]
+    snaps = [{"date": d, "cash": 100. if i < 25 else 10., "equity": 100.} for i, d in enumerate(days)]
+    positions = [{"date": d, "code": "A.SH", "quantity": 100} for d in days[25:]]
+    orders = [{"date": d, "code": "A.SH", "side": "sell", "quantity": 100, "filled": 0, "reason": "无成交量"} for d in days[25:]]
+    out = audit_activity.analyze({"snapshots": snaps, "positions": positions, "orders": orders}, {"status": "verified"})
+    assert out["exits"]["failed"] == 3 and out["exits"]["longest_run"] == 3
+    assert out["idle"]["longest"] == 25 and "低回撤可能来自" in out["idle"]["verdict"]
+
+
+def test_batch_p05_all_profitable_groups_are_not_called_losses():
+    from qwb import audit_attribution
+    lines = audit_attribution.summary(100., 110., 10., None, {"stocks": 1, "winners": 1, "losers": 0, "top": [], "noun": "标的"},
+                                      [{"label": "超过10自然日", "matches": 4, "after_tick": 18471.}], None)
+    assert not any("亏得最多" in l for l in lines) and any("贡献最少" in l for l in lines)
+
+
+def test_long_idle_keeps_the_first_screen_from_saying_pass():
+    from datetime import date, timedelta
+    days = [(date(2024, 1, 2) + timedelta(days=i)).isoformat() for i in range(40)]
+    bundle = {"fills": [{"date": days[0]}], "snapshots": [{"date": d, "equity": 100., "cash": 100.} for d in days],
+              "platform_summary": {"累计收益率": "0", "最大回撤": "0"}}
+    result = {"modules": {"accounting": {"status": "verified"},
+                          "activity": {"idle": {"longest": 40, "verdict": "长期空仓"}}}}
+    first = audit_report.answers(bundle, result, audit_report.performance(bundle), None, [])[0]
+    assert first["tone"] != "pass" and "长期空仓" in first["notes"]

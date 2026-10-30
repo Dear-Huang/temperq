@@ -93,7 +93,8 @@ def test_compare_two_audited_versions(tmp_path, capsys):
     for d in (a, b):
         assert run(["audit", "run", str(SAMPLES / "generic"), "--out", str(d), "--json"], capsys)[0] == 0
     code, out = run(["audit", "compare", str(a), str(b), "--json"], capsys)
-    assert code == 0 and out["comparable"] and out["same_trades"] and out["evidence"] == "E4"
+    # Same input twice: nothing to compare, and no claim that a model or setting changed.
+    assert code == 0 and out["mode"] == "identical" and "没有可比较的变化" in out["verdict"]
     c = tmp_path / "c"
     assert run(["audit", "run", str(SAMPLES / "generic"), "--out", str(c), "--commission-bp", "1", "--json"], capsys)[0] == 0
     code, out = run(["audit", "compare", str(a), str(c), "--json"], capsys)

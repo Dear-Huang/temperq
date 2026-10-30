@@ -216,7 +216,9 @@ def coverage(bundle, result):
         "signal_age": [algorithm("冻结信号年龄曲线", "not_implemented", "missing", STAGES[6]["needs"])],
         "costs": [algorithm("逐笔费用核验与合单情景", "connected" if cost else "not_connected"), algorithm("完整STRUCT流动性分量", "not_connected", "missing", ["历史原始行情和上月校准特征", "适用域与成本模型选择"])],
         "capacity": [algorithm("参与预算与可达金额", "not_implemented", "missing", STAGES[8]["needs"])],
-        "completion": [algorithm("情景供给下完成期限", "not_implemented", "missing", STAGES[9]["needs"])],
+        "completion": [algorithm("退出完成与长期空仓", inputs="ready" if modules.get("activity") else "missing",
+                                 missing=[] if modules.get("activity") else ["委托记录与每日收盘持仓"]),
+                       algorithm("情景供给下完成期限", "not_implemented", "missing", STAGES[9]["needs"])],
         "execution": [algorithm("库存必要条件与成交核验", inputs=reconciled),
                       algorithm("成交时点敏感性", inputs="ready" if (modules.get("fill_timing") or {}).get("status") in ("sensitive", "stable", "unscaled")
                                 else "missing", missing=[] if (modules.get("fill_timing") or {}).get("status") in ("sensitive", "stable", "unscaled")

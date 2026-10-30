@@ -234,6 +234,14 @@ def answers(bundle, result, perf, premise, cards):
         notes.append(claim["verdict"])
         trust = "adjust" if "复现不出" in claim["verdict"] else trust
     timing = modules.get("fill_timing") or {}
+    activity = modules.get("activity") or {}
+    if (activity.get("exits") or {}).get("failed", 0) >= 3:
+        notes.append(activity["exits"]["verdict"])
+        trust = "adjust"
+    from .audit_activity import LONG_IDLE
+    idle_long = (activity.get("idle") or {}).get("longest", 0) >= LONG_IDLE
+    if idle_long:
+        notes.append(activity["idle"]["verdict"])
     if timing.get("status") in ("sensitive", "stable"):
         notes.append(timing["verdict"])
         trust = "adjust" if timing["status"] == "sensitive" else trust
@@ -243,7 +251,8 @@ def answers(bundle, result, perf, premise, cards):
     if tick.get("profit_covers_scenario") is False:
         notes.append("扣掉最小价位的买卖价差情景后不再盈利")
         trust = "adjust"
-    if account == "verified" and trust == "evidence" and checks and not timing.get("status") == "sensitive":
+    # A long idle stretch keeps the answer at "缺乏证据": the return may be real, but the strategy was not invested.
+    if account == "verified" and trust == "evidence" and checks and not timing.get("status") == "sensitive" and not idle_long:
         trust = "pass"
     ret = (f"区间收益 {_pct(perf['total'])}，最大回撤 {_pct(perf['max_drawdown'])}"
            + (f"，同期基准 {_pct(perf['benchmark_total'])}" if perf.get("benchmark_total") is not None else "")) if perf else "无法计算收益"
@@ -493,6 +502,13 @@ def render(record, bundle, result):
             rows.append(("年化双边换手（成交额 / 期初权益）", f'{notional / perf["start_equity"] / perf["years"]:.1f} 倍'))
     h.append('<div class="tw"><table><tr><th>项目</th><th class="n">数值</th></tr>' + "".join(f'<tr><td>{a}</td><td class="n">{b}</td></tr>' for a, b in rows) + '</table></div>')
     h.append('<p class="mut">价差为按最小价位估算的情景，不是实测成本；原回测若已计滑点，需先分离再比较。逐笔费用见附件 fees.csv、tick-costs.csv。</p>')
+    activity = modules.get("activity")
+    if activity:
+        h.append('<h3>退出完成与空仓</h3><ul>')
+        if activity.get("exits"):
+            h.append(f'<li><strong>退出</strong>：{esc(activity["exits"]["verdict"])}。</li>')
+        h.append(f'<li><strong>空仓</strong>：{esc(activity["idle"]["verdict"])}。</li>')
+        h.append(f'</ul><p class="mut">{esc(activity["scope"])}。</p>')
     sequence = modules.get("sequence")
     if sequence:
         h.append('<h3>先后顺序</h3><ul>')
@@ -544,7 +560,9 @@ def render(record, bundle, result):
             h.append('<div class="tw"><table><tr><th>延后成交</th><th class="n">笔数</th><th class="n">盈亏变化</th>'
                      '<th class="n">每边（bp）</th><th class="n">成交额覆盖</th></tr>' + "".join(
                 f'<tr><td>{esc(r["label"])}</td><td class="n">{r["fills"]}</td><td class="n{" neg" if r["gain"] < 0 else ""}">{_yuan(r["gain"])}</td>'
-                f'<td class="n">{r["gain_bp"]:+.1f}</td><td class="n">{_pct(r["coverage"], 0)}</td></tr>' for r in timing["rows"]) + '</table></div>')
+                f'<td class="n">{r["gain_bp"]:+.1f}</td><td class="n">{_pct(r["coverage"], 0)}'
+                + ('' if not r.get("delay") or r["delay"] in (timing.get("judged_delays") or []) else '（覆盖不足，不计入结论）')
+                + '</td></tr>' for r in timing["rows"]) + '</table></div>')
         if timing.get("max_volume_share") is not None:
             h.append(f'<p>单笔成交最多占当分钟成交量的 {timing["max_volume_share"]:.0%}（核对 {timing["volume_checked"]} 笔）。</p>')
         h.append(f'<p class="mut">{esc(timing["scope"])}。正数表示延后成交反而更好；收盘前来不及延后的成交不计入。</p>')

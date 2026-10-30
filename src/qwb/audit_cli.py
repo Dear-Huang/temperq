@@ -141,6 +141,8 @@ def summary(bundle, result):
         "fill_quality": (lambda q: q and {"status": q.get("status"),
                                           "range": (q.get("range") or {}).get("verdict"), "floor": (q.get("floor") or {}).get("verdict")})(
             result["modules"].get("fill_quality")),
+        "activity": (lambda a: a and {"exits": (a.get("exits") or {}).get("verdict"), "idle": a["idle"]["verdict"],
+                                       "status": a.get("status")})(result["modules"].get("activity")),
         "partial_entry": (lambda c: c and {k: c.get(k) for k in ("status", "verdict", "partial_buys", "long_episodes", "worst")})(
             result["modules"].get("partial_entry")),
         "fill_timing": (lambda t: t and {k: t.get(k) for k in ("status", "verdict", "open_share", "low", "high", "net_pnl",
@@ -208,6 +210,10 @@ def compare_runs(original_dir, optimized_dir, sensitivity=False):
     sources = [json.loads((Path(d) / "evidence.json").read_text(encoding="utf-8"))["input"].get("code", {}).get("source")
                for d in (original_dir, optimized_dir)]
     same_code = bool(sources[0]) and sources[0] == sources[1]
+    digests = [json.loads((Path(d) / "evidence.json").read_text(encoding="utf-8"))["result"].get("input_digest")
+               for d in (original_dir, optimized_dir)]
+    if digests[0] and digests[0] == digests[1]:
+        return {"comparable": True, "mode": "identical", "verdict": "两次审计的输入完全相同：没有可比较的变化"}
     sensitivity = sensitivity or same_code
     keep = ("comparable", "reason", "start", "end", "same_period", "full_gain", "validation_gain", "drawdown",
             "same_trades", "drawdown_deeper", "evidence", "verdict", "state")
@@ -222,10 +228,10 @@ def compare_runs(original_dir, optimized_dir, sensitivity=False):
                            "max_drawdown": [a_perf and a_perf["max_drawdown"], b_perf and b_perf["max_drawdown"]]}
         change = (f"回测原值：收益从 {a_perf['total']:.1%} 变为 {b_perf['total']:.1%}，"
                   f"最大回撤从 {a_perf['max_drawdown']:.1%} 变为 {b_perf['max_drawdown']:.1%}") if a_perf and b_perf else ""
-        out["verdict"] = (change + "。这是成交模型的敏感性实验：两次的撮合或滑点不同，结果变化说明结论依赖成交模型有多深；"
-                          "不能按收益高低判断哪个模型更真实，也不要据此选版本"
-                          + ("。两次交易完全相同，差异只来自费用或价格" if out.get("same_trades") else "")
-                          + ("。两版策略代码完全相同，已按敏感性实验处理" if same_code else ""))
+        out["verdict"] = (change + ("。两版策略代码完全相同，差异来自代码以外的设置或数据（撮合、滑点、量限、数据版本等），"
+                                    "按敏感性实验处理" if same_code else "。按敏感性实验处理")
+                          + "：结果变化说明结论对这些设置有多敏感；不能按收益高低判断哪个设置更真实，也不要据此选版本"
+                          + ("。两次交易完全相同" if out.get("same_trades") else ""))
     else:
         out["note"] = "full_gain 和 drawdown 按审计费率与价差情景重算，不是回测原值"
     return out

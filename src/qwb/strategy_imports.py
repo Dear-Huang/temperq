@@ -189,8 +189,8 @@ def unpack_archives(files):
             raise ValueError(f"{source.name}：解压后超过 40MB")
         for member in members:
             inner = member.filename.rsplit('/', 1)[-1]
-            if not inner.lower().endswith(('.csv', '.txt', '.py', '.json')):
-                raise ValueError(f"{source.name}：压缩包里只能是 CSV、TXT/PY 或回测配置 JSON（{inner} 不行）")
+            if not inner.lower().endswith(('.csv', '.txt', '.py', '.json', '.xlsx')):
+                raise ValueError(f"{source.name}：压缩包里只能是 CSV、TXT/PY、回测配置 JSON 或平台绩效汇总 xlsx（{inner} 不行）")
             out.append(SourceFile(inner, archive.read(member)))
     return out
 

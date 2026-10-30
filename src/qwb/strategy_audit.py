@@ -8,7 +8,7 @@ from .strategy_imports import SCHEMA
 from .audit_catalog import coverage
 from .audit_diagnostics import fee_analysis, risk_analysis, trading_behavior
 from .audit_research import tick_analysis, holding_analysis
-from .securities import asset_class
+from .securities import asset_class, same_day_resale
 
 VERSION = "strategy_audit_v1"
 TOLERANCE = .05
@@ -90,8 +90,10 @@ def accounting(bundle):
             if excess and _intraday_ok(fills[day], code, start):
                 # Sold out of the same day's earlier buys: legal for T+0 instruments (cross-border, gold, bond and
                 # money ETFs, convertible bonds), a T+1 breach for stocks. Not a books error either way.
-                same_day.append({"date": day, "code": code, "quantity": excess, "asset": asset_class(code)})
-                if asset_class(code) != "stock":
+                rule = same_day_resale(code)
+                same_day.append({"date": day, "code": code, "quantity": excess, "asset": asset_class(code),
+                                 "t0": rule})
+                if rule is not False:      # T+0, or unknown: not a books error; listed for confirmation
                     excess = 0
             check("prior_inventory_for_sales", excess, day, code, tolerance=0)
         check("cash_flow", snapshot["cash"] - prior_cash + sum(flow.values()) + sum(fees.values()) - sum(action_cash.values()), day)
@@ -263,6 +265,10 @@ def analyze(bundle, settings=None, *, policy=None):
     sequence = audit_sequence.analyze(bundle, context["accounting"], thresholds)
     if sequence:
         context["sequence"] = sequence
+    from . import audit_activity
+    activity = audit_activity.analyze(bundle, context["accounting"], thresholds)
+    if activity:
+        context["activity"] = activity
     from . import audit_completion
     completion = audit_completion.analyze(bundle, context["accounting"], thresholds)
     if completion:
