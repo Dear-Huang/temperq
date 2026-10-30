@@ -23,12 +23,43 @@ _RULES = {
     "fill_timing": ("M-FILL-TIMING", "T-TIMING-SHARE"),
     "partial_entry": ("M-PARTIAL-ENTRY", "T-PARTIAL-DAYS"),
     "fill_quality": ("M-FILL-RANGE", "M-FILL-FLOOR", "T-FILL-BEST-SHARE"),
+    "sequence": ("M-SEQUENCE",),
 }
 STATES = {"act": "建议处理", "review": "建议核对", "hold": "暂不改"}
 
 
 def _yuan(value):
     return f"¥{value:,.0f}"
+
+
+def _sequence_card(sequence):
+    """Trades whose order of events the backtest took for granted: sale proceeds, signal time, code hints."""
+    if not sequence:
+        return None
+    fund = sequence.get("funding") or {}
+    late = sequence.get("signal_after_fill") or {}
+    hints = sequence.get("code_hints") or {}
+    parts = [x["verdict"] for x in (late, fund, hints) if x and (x.get("late") or x.get("dependent") or x.get("hints"))]
+    if not parts:
+        return None
+    serious = late.get("late", 0) > 0 or fund.get("partial_sell_days", 0) > 0
+    return {
+        "id": "sequence", "state": "act" if late.get("late") else "review", "title": "先后顺序是否成立",
+        "finding": "；".join(parts) + "。",
+        "headline": ("有买入用了下单时还不存在的信号" if late.get("late") else
+                     "换仓的买入依赖同一时刻卖出的钱，且有卖单只成交了一部分" if serious else
+                     "换仓的买入依赖同一时刻卖出的钱：回测默认卖单先全部成交"),
+        "edits": [],
+        "options": [{"label": "维持原样", "effect": "卖出标的流动性好、单笔远小于成交量，且平台确实先撮合卖单时"},
+                    {"label": "按已成交卖单的回款再买", "effect": "先卖、确认成交后用实际到账资金买入；卖单没成交时不买或只买够得上的部分"},
+                    {"label": "按下一根分钟线撮合重跑", "effect": "平台改为下一根K线开盘价撮合（米筐 matching_type=next_bar），区分看完行情再成交的乐观程度"}],
+        "saving": "不省钱；资金衔接和先后顺序更接近实盘",
+        "sacrifice": "卖单没成交的那几次会少买或晚买",
+        "net": "需要回原平台改订单管理或撮合方式重跑，用 qwb audit compare 比较",
+        "evidence": "recomputed" if late.get("late") else "descriptive",
+        "basis": "成交时间、上一收盘的可用现金、打分可用时间、代码文字",
+        "overturn": "平台撮合先成交卖单且全部成交；打分时间记录的是写入时刻而不是计算所用数据的时刻。",
+    }
 
 
 def _quality_card(quality):
@@ -487,7 +518,8 @@ def cards(result, bundle=None):
            _cash_buffer_card(modules.get("signal_mapping"), edits, thresholds),
            _timing_card(modules.get("fill_timing")),
            _partial_card(modules.get("partial_entry")),
-           _quality_card(modules.get("fill_quality"))]
+           _quality_card(modules.get("fill_quality")),
+           _sequence_card(modules.get("sequence"))]
     order = {"act": 0, "review": 1, "hold": 2}
     cards = sorted((c for c in out if c), key=lambda c: order[c["state"]])
     for card in cards:

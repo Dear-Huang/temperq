@@ -224,6 +224,8 @@ def coverage(bundle, result):
                       algorithm("成交价位置与最差价下限", inputs="ready" if (modules.get("fill_quality") or {}).get("status") in ("normal", "suspicious")
                                 else "missing", missing=[] if (modules.get("fill_quality") or {}).get("status") in ("normal", "suspicious")
                                 else ["成交日全天区间（date, code, high, low）", "成交日分钟价含 high、low"]),
+                      algorithm("先后顺序与资金衔接", inputs="ready" if modules.get("sequence") else "missing",
+                                missing=[] if modules.get("sequence") else ["带成交时间的成交记录与每日现金"]),
                       algorithm("排队位置与盘口深度", "not_implemented", "missing", ["逐笔成交或 L2 盘口"]),
                       algorithm("部分成交与补单", inputs="ready" if modules.get("partial_entry") else "missing",
                                 missing=[] if modules.get("partial_entry") else ["委托记录（下单数与成交数）"]),

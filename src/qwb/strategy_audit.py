@@ -234,6 +234,10 @@ def analyze(bundle, settings=None, *, policy=None):
     quality = audit_fill_quality.analyze(bundle, context["accounting"], thresholds)
     if quality:
         context["fill_quality"] = quality
+    from . import audit_sequence
+    sequence = audit_sequence.analyze(bundle, context["accounting"], thresholds)
+    if sequence:
+        context["sequence"] = sequence
     from . import audit_completion
     completion = audit_completion.analyze(bundle, context["accounting"], thresholds)
     if completion:

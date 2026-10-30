@@ -484,6 +484,14 @@ def render(record, bundle, result):
             rows.append(("年化双边换手（成交额 / 期初权益）", f'{notional / perf["start_equity"] / perf["years"]:.1f} 倍'))
     h.append('<div class="tw"><table><tr><th>项目</th><th class="n">数值</th></tr>' + "".join(f'<tr><td>{a}</td><td class="n">{b}</td></tr>' for a, b in rows) + '</table></div>')
     h.append('<p class="mut">价差为按最小价位估算的情景，不是实测成本；原回测若已计滑点，需先分离再比较。逐笔费用见附件 fees.csv、tick-costs.csv。</p>')
+    sequence = modules.get("sequence")
+    if sequence:
+        h.append('<h3>先后顺序</h3><ul>')
+        for key, label in (("signal_after_fill", "信号与成交"), ("funding", "资金衔接"), ("code_hints", "代码提示")):
+            part = sequence.get(key)
+            if part:
+                h.append(f'<li><strong>{label}</strong>：{esc(part["verdict"])}。</li>')
+        h.append(f'</ul><p class="mut">{esc(sequence["scope"])}。代码提示只是提醒人工核对，不是结论。</p>')
     quality = modules.get("fill_quality")
     if quality and quality.get("status") in ("normal", "suspicious"):
         h.append('<h3>成交价是否拿得到</h3>')

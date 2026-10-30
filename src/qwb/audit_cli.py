@@ -133,6 +133,8 @@ def summary(bundle, result):
         "premise": premise and {k: premise.get(k) for k in ("premise", "source", "status", "verdict", "overall",
                                                             "spread_mean", "spread_t", "held_years", "reversed_years")},
         "attribution": attr and attr["summary"],
+        "sequence": (lambda s: s and {k: (s.get(k) or {}).get("verdict") for k in ("funding", "signal_after_fill", "code_hints")})(
+            result["modules"].get("sequence")),
         "fill_quality": (lambda q: q and {"status": q.get("status"),
                                           "range": (q.get("range") or {}).get("verdict"), "floor": (q.get("floor") or {}).get("verdict")})(
             result["modules"].get("fill_quality")),
