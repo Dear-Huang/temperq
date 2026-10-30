@@ -57,6 +57,8 @@ def declared(bundle):
         return {"status": "none", "models": {}, "missing": {}, "sources": [], "engine": engine,
                 "note": "代码无法解析，读不到费用设置"}
     config, line = _engine_config(tree)
+    if not config and isinstance(bundle.get("engine_config"), dict):
+        config, line = bundle["engine_config"], None      # an uploaded RQAlpha config.json
     cost = ((config or {}).get("mod") or {}).get("sys_transaction_cost") if config else None
     if cost:
         engine = "RQAlpha（导出未给引擎版本）"

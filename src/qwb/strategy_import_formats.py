@@ -7,7 +7,7 @@ from hashlib import sha256
 import io
 import re
 
-from .strategy_imports import (LOG_LINE, is_platform_log, parse_log, SCHEMA, MAX_ROWS, _ref, date_value, decode_source,
+from .strategy_imports import (LOG_LINE, is_platform_log, parse_log, SCHEMA, MAX_ROWS, MAX_MINUTE_ROWS, _ref, date_value, decode_source,
                                inspect_code, numeric)
 from .securities import security_code as stock_code
 from .audit_fee_units import order_fields
@@ -24,8 +24,14 @@ def code_value(value):
 def table(source):
     text, encoding = decode_source(source)
     rows = list(csv.reader(io.StringIO(text), strict=True))
-    if not rows or len(rows) > MAX_ROWS + 1:
-        raise ValueError('CSV 为空或超过行数上限')
+    if not rows:
+        raise ValueError(f'{source.name}：CSV 为空')
+    header = {v.strip().lstrip('\ufeff') for v in rows[0]}
+    limit = MAX_MINUTE_ROWS if {'date', 'time', 'code', 'close'} <= header else MAX_ROWS
+    if len(rows) > limit + 1:
+        raise ValueError(f'{source.name}：{len(rows) - 1:,} 行，超过上限 {limit:,} 行。'
+                         + ('分钟价只需要成交日的对照时点和每笔成交后 10 分钟，用 temperq_supplement.py 导出即可大幅缩小'
+                            if limit == MAX_MINUTE_ROWS else '请确认没有把多次回测合在一个文件里'))
     header = [v.strip().lstrip('\ufeff') for v in rows[0]]
     if {'order_book_id', 'last_quantity', 'transaction_cost'} <= set(header) and header.count('datetime') == 2:
         header[len(header) - 1 - header[::-1].index('datetime')] = 'datetime_2'   # native RQAlpha duplicate
@@ -114,7 +120,7 @@ def detect_adapter(files):
     found = set()
     generic_account = False
     for source in files:
-        if source.name.lower().endswith(('.py', '.txt')):
+        if source.name.lower().endswith(('.py', '.txt', '.xlsx', '.json')):
             continue
         text, _ = decode_source(source)
         header = next(csv.reader(io.StringIO(text), strict=True), [])
@@ -187,13 +193,33 @@ def other_platform(files, *, adapter, name, opening_cash=None):
                     'price_basis': 'unconfirmed', 'snapshots_complete': False}}
     seen, cash, assets = set(), {}, {}
     for source in files:
-        text, encoding = decode_source(source)
+        text, encoding = ('', 'binary') if source.name.lower().endswith('.xlsx') else decode_source(source)
         if source.name.lower().endswith('.txt') and is_platform_log(text):
             kind = 'logs'
             for row in parse_log(text):
                 line = row.pop('line')
                 result['logs'].append({**row, 'ref': _ref(kind, line)})
             row_count = len(result['logs'])
+        elif source.name.lower().endswith('.xlsx'):
+            # RQAlpha's native summary.xlsx: one metric per row. Kept to compare with the audit's own figures.
+            from .strategy_imports import xlsx_pairs
+            kind = 'platform_summary'
+            pairs = xlsx_pairs(source.data)
+            if not pairs:
+                raise ValueError(f'{source.name}：没有读到“指标, 数值”两列')
+            result['platform_summary'] = {k: v for k, v in pairs}
+            row_count = len(pairs)
+        elif source.name.lower().endswith('.json'):
+            kind = 'engine_config'
+            import json
+            try:
+                config = json.loads(text)
+            except ValueError:
+                raise ValueError(f'{source.name}：不是有效的 JSON') from None
+            if not isinstance(config, dict) or not isinstance(config.get('mod'), dict):
+                raise ValueError(f'{source.name}：不是 RQAlpha 运行配置（缺少 mod 段）')
+            result['engine_config'] = config
+            row_count = 1
         elif source.name.lower().endswith(('.py', '.txt')):
             kind = 'code'
             result['code'] = {**inspect_code(text), 'source': text}

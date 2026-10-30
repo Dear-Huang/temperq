@@ -20,13 +20,16 @@ WINDOW = 10          # minutes after the fill for the worst-price floor
 BEST_TENTH = .1
 
 
-def _minutes_after(hhmm, n):
+def _minutes_after(hhmm, n, own=True):
+    """The fill's minute (if own) and the n minutes after it, skipping lunch and stopping at the close."""
     h, m = int(hhmm[:2]), int(hhmm[3:5])
     out = []
-    for k in range(n + 1):
+    for k in range(0 if own else 1, n + 1):
         t = h * 60 + m + k
         if 11 * 60 + 30 < t < 13 * 60 + 1:      # lunch break: jump to the afternoon session
             t += 90
+        if t > 15 * 60:
+            break
         out.append(f"{t // 60:02d}:{t % 60:02d}")
     return out
 
@@ -80,12 +83,18 @@ def analyze(bundle, accounting, thresholds=None):
             out["range"]["verdict"] += f"；另有 {out['range']['outside']} 笔成交价在当天最高最低价之外，需核对价格口径（复权）"
 
     # 2. worst price in the minutes after the fill
-    worse, value, used = 0., 0., 0
+    worse, value, used, truncated = 0., 0., 0, 0
     for f in fills:
         clock = hhmm(f.get("time"))
         if not clock:
             continue
-        bars = [minutes.get((f["date"], f["code"], m)) for m in _minutes_after(clock, WINDOW)]
+        # Bars are labelled by their end, so the fill's own bar may have traded its high or low before the fill;
+        # only the bars after it count. A fill too near the close has no full window and is left out.
+        after = _minutes_after(clock, WINDOW, own=False)
+        if len(after) < WINDOW:
+            truncated += 1
+            continue
+        bars = [minutes.get((f["date"], f["code"], m)) for m in after]
         bars = [b for b in bars if b and (b.get("high") if f["side"] == "buy" else b.get("low"))]
         if not bars:
             continue
@@ -101,14 +110,16 @@ def analyze(bundle, accounting, thresholds=None):
         total = sum(f["quantity"] * f["price"] for f in fills)
         coverage = value / total if total else 0.
         floor = {"fills": used, "coverage": coverage, "change": worse, "change_bp": worse / value * 1e4,
-                 "net_pnl": net, "net_after": net + worse if net is not None else None}
+                 "net_pnl": net, "net_after": net + worse if net is not None else None,
+                 "truncated": truncated, "window": WINDOW}
         if net is None:
             floor["verdict"] = f"按成交后 {WINDOW} 分钟内最差价重算，盈亏变化 {worse:,.0f} 元（账目未闭合，不和净盈亏比较）"
         elif coverage < .9:
-            floor["verdict"] = f"分钟价只覆盖 {coverage:.0%} 的成交额，最差价下限不完整"
+            floor["verdict"] = (f"只有 {coverage:.0%} 的成交额有成交后完整 {WINDOW} 分钟的分钟价"
+                                + (f"（{truncated} 笔离收盘不足 {WINDOW} 分钟）" if truncated else "") + "，最差价下限不完整，不下结论")
         elif net + worse <= 0 < net:
             floor["verdict"] = (f"按成交后 {WINDOW} 分钟内最差价重算，盈亏少 {-worse:,.0f} 元，净盈亏从 {net:,.0f} 元变为 {net + worse:,.0f} 元："
-                                "收益依赖理想成交，不能当成可实现收益")
+                                "收益依赖较好的成交价；这是每笔都取最差价的压力情景，不能单独证明实盘成交不了")
         else:
             floor["verdict"] = (f"按成交后 {WINDOW} 分钟内最差价重算，盈亏少 {-worse:,.0f} 元"
                                 f"（净盈亏的 {-worse / abs(net):.0%}），仍为 {net + worse:,.0f} 元")
@@ -118,7 +129,8 @@ def analyze(bundle, accounting, thresholds=None):
         return {**out, "status": "needs_prices",
                 "verdict": "没有成交日的全天最高最低价或成交后分钟价，无法检验成交价是否现实",
                 "missing": ["成交日全天区间（date, code, high, low）", "成交日分钟价含 high、low"]}
+    floor = out.get("floor") or {}
     out["status"] = ("suspicious" if (out.get("range") or {}).get("status") == "suspicious"
-                     or (out.get("floor") or {}).get("net_after") is not None and out["floor"]["net_after"] <= 0 < (net or 0)
+                     or floor.get("coverage", 0) >= .9 and floor.get("net_after") is not None and floor["net_after"] <= 0 < (net or 0)
                      else "normal")
     return out

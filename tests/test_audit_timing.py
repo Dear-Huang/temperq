@@ -7,7 +7,7 @@ def bundle(gain_per_share=0., net=1000.):
              {"date": "2024-01-05", "time": "09:31:00", "code": "510300.SH", "side": "sell", "quantity": 1000, "price": 4.2}]
     minutes = []
     for f in fills:
-        for t in audit_timing.TIMES:
+        for t in [audit_timing.shift("09:31", k) for k in range(75)]:
             # buys get cheaper and sells dearer by gain_per_share at every later minute
             shift = 0 if t == "09:31" else (-gain_per_share if f["side"] == "buy" else gain_per_share)
             minutes.append({"date": f["date"], "time": t, "code": f["code"], "close": f["price"] + shift,

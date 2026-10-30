@@ -18,6 +18,7 @@ MAX_FILES = 16
 MAX_FILE_BYTES = 8_000_000
 MAX_TOTAL_BYTES = 24_000_000
 MAX_ROWS = 50_000
+MAX_MINUTE_ROWS = 300_000      # fill-day minute prices: many names x many days
 MAX_CODE_BYTES = 200_000
 
 
@@ -62,8 +63,10 @@ def _rows(text, name):
         raise ValueError(f"{name}：表头为空或重复")
     rows = []
     for index, row in enumerate(reader, 2):
-        if index > MAX_ROWS + 1:
-            raise ValueError(f"{name}：最多 {MAX_ROWS} 行")
+        if index > MAX_ROWS + 1 and not {"date", "time", "code", "close"} <= set(fields):
+            raise ValueError(f"{name}：超过 {MAX_ROWS:,} 行上限，请确认没有把多次回测合在一个文件里")
+        if index > MAX_MINUTE_ROWS + 1:
+            raise ValueError(f"{name}：超过 {MAX_MINUTE_ROWS:,} 行上限；分钟价只需要成交日的对照时点和成交后 10 分钟")
         if None in row or any(v is None for v in row.values()):
             raise ValueError(f"{name} 第 {index} 行：列数不一致")
         rows.append((index, row))
@@ -180,16 +183,49 @@ def unpack_archives(files):
             raise ValueError(f"{source.name}：压缩包损坏，请重新下载") from None
         members = [m for m in archive.infolist() if not m.is_dir()
                    and not m.filename.startswith(('__MACOSX/', '.')) and '/._' not in m.filename]
-        if not members or len(members) > 3:
-            raise ValueError(f"{source.name}：压缩包应只含一个导出文件")
+        if not members or len(members) > MAX_FILES:
+            raise ValueError(f"{source.name}：压缩包里没有文件，或超过 {MAX_FILES} 个文件")
         if sum(m.file_size for m in members) > MAX_UNPACKED_BYTES:
             raise ValueError(f"{source.name}：解压后超过 40MB")
         for member in members:
             inner = member.filename.rsplit('/', 1)[-1]
-            if not inner.lower().endswith(('.csv', '.txt', '.py')):
-                raise ValueError(f"{source.name}：压缩包里只能是 CSV 或 TXT")
+            if not inner.lower().endswith(('.csv', '.txt', '.py', '.json')):
+                raise ValueError(f"{source.name}：压缩包里只能是 CSV、TXT/PY 或回测配置 JSON（{inner} 不行）")
             out.append(SourceFile(inner, archive.read(member)))
     return out
+
+
+def xlsx_pairs(data):
+    """Two-column (name, value) rows of the first sheet of an .xlsx, from the zip's XML. Only text and numbers."""
+    import zipfile
+    from xml.etree import ElementTree as ET
+    ns = {"m": "http://schemas.openxmlformats.org/spreadsheetml/2006/main"}
+    try:
+        book = zipfile.ZipFile(io.BytesIO(data))
+        names = book.namelist()
+        shared = []
+        if "xl/sharedStrings.xml" in names:
+            for si in ET.fromstring(book.read("xl/sharedStrings.xml")).findall("m:si", ns):
+                shared.append("".join(t.text or "" for t in si.iter("{%s}t" % ns["m"])))
+        sheet = next(n for n in sorted(names) if n.startswith("xl/worksheets/sheet"))
+        if book.getinfo(sheet).file_size > 5_000_000:
+            raise ValueError("工作表过大")
+        rows = []
+        for row in ET.fromstring(book.read(sheet)).iter("{%s}row" % ns["m"]):
+            cells = []
+            for c in row.findall("m:c", ns):
+                kind = c.get("t")
+                if kind == "inlineStr":
+                    cells.append("".join(t.text or "" for t in c.iter("{%s}t" % ns["m"])))
+                else:
+                    v = c.find("m:v", ns)
+                    text = v.text if v is not None else ""
+                    cells.append(shared[int(text)] if kind == "s" and text.isdigit() and int(text) < len(shared) else text)
+            if len(cells) >= 2 and cells[0].strip():
+                rows.append((cells[0].strip(), cells[1].strip()))
+        return rows
+    except (zipfile.BadZipFile, KeyError, StopIteration, ET.ParseError, ValueError) as exc:
+        raise ValueError(f"无法读取 xlsx：{exc}") from None
 
 
 def is_platform_log(text):
@@ -411,8 +447,8 @@ def normalize(files, *, adapter="auto", name="导入策略", opening_cash=None):
     for source in files:
         if not source.name or len(source.name) > 120 or any(c in source.name for c in '/\\:\x00'):
             raise ValueError("文件名无效，请只上传文件本身")
-        if not source.name.lower().endswith((".csv", ".py", ".txt")):
-            raise ValueError("只支持 CSV、TXT/PY，或平台下载的 ZIP")
+        if not source.name.lower().endswith((".csv", ".py", ".txt", ".json", ".xlsx")):
+            raise ValueError("只支持 CSV、TXT/PY、回测配置 JSON、平台绩效汇总 xlsx，或平台下载的 ZIP")
         if len(source.data) > MAX_FILE_BYTES:
             raise ValueError(f"{source.name}：单个文件不能超过 8MB")
         total += len(source.data)

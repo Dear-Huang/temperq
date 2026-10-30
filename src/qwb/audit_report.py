@@ -108,7 +108,7 @@ def performance(bundle):
 
 # Platform summary names for the same quantity, across RiceQuant and JoinQuant-style exports.
 PLATFORM_METRICS = (
-    ("total", "区间收益", ("累计收益率", "回测收益")),
+    ("total", "区间收益", ("累计收益率", "回测收益", "收益率")),
     ("annual", "年化收益", ("年化收益率", "回测年化收益")),
     ("max_drawdown", "最大回撤", ("最大回撤",)),
     ("benchmark_total", "基准收益", ("基准累计收益率", "基准收益")),
@@ -532,13 +532,13 @@ def render(record, bundle, result):
         tone = {"sensitive": "evidence", "stable": "pass"}.get(timing["status"], "evidence")
         h.append(f'<p><span class="tag {tone}">结论</span>{esc(timing["verdict"])}</p>')
         if timing.get("rows"):
-            h.append('<div class="tw"><table><tr><th>换到这个时点成交</th><th class="n">笔数</th><th class="n">盈亏变化</th>'
+            h.append('<div class="tw"><table><tr><th>延后成交</th><th class="n">笔数</th><th class="n">盈亏变化</th>'
                      '<th class="n">每边（bp）</th><th class="n">成交额覆盖</th></tr>' + "".join(
                 f'<tr><td>{esc(r["label"])}</td><td class="n">{r["fills"]}</td><td class="n{" neg" if r["gain"] < 0 else ""}">{_yuan(r["gain"])}</td>'
                 f'<td class="n">{r["gain_bp"]:+.1f}</td><td class="n">{_pct(r["coverage"], 0)}</td></tr>' for r in timing["rows"]) + '</table></div>')
         if timing.get("max_volume_share") is not None:
             h.append(f'<p>单笔成交最多占当分钟成交量的 {timing["max_volume_share"]:.0%}（核对 {timing["volume_checked"]} 笔）。</p>')
-        h.append(f'<p class="mut">{esc(timing["scope"])}。正数表示换到该时点成交会更好。</p>')
+        h.append(f'<p class="mut">{esc(timing["scope"])}。正数表示延后成交反而更好；收盘前来不及延后的成交不计入。</p>')
 
     # 6. Findings
     h.append('<h2>六、发现与建议</h2>')

@@ -12,7 +12,7 @@ import json
 import sys
 from pathlib import Path
 
-ACCEPTED = (".csv", ".txt", ".py", ".zip")
+ACCEPTED = (".csv", ".txt", ".py", ".zip", ".json", ".xlsx")
 
 
 def add_parser(sub):
@@ -39,6 +39,9 @@ def add_parser(sub):
     cmp = commands.add_parser("compare", help="original vs optimized: was the change worth it (from two qwb audit run outputs)")
     cmp.add_argument("original", help="output directory of the original version's qwb audit run")
     cmp.add_argument("optimized", help="output directory of the optimized version's qwb audit run")
+    cmp.add_argument("--sensitivity", action="store_true",
+                     help="the two runs differ in the engine model (matching, slippage), not the strategy: "
+                          "describe the change, never pick a version by return")
     cmp.add_argument("--json", action="store_true")
     fac = commands.add_parser("interaction", help="two changes alone and together: can the suggestions be added up")
     for name in ("base", "only_a", "only_b", "both"):
@@ -187,7 +190,7 @@ def _evidence(directory):
     return json.loads(path.read_text(encoding="utf-8"))["result"]
 
 
-def compare_runs(original_dir, optimized_dir):
+def compare_runs(original_dir, optimized_dir, sensitivity=False):
     """The engine's same-method comparison of two audited versions; nothing is computed here."""
     from . import audit_verification
     loaded = []
@@ -204,7 +207,23 @@ def compare_runs(original_dir, optimized_dir):
         raise ValueError("其中一版账目未闭合或材料不全，无法比较")
     keep = ("comparable", "reason", "start", "end", "same_period", "full_gain", "validation_gain", "drawdown",
             "same_trades", "drawdown_deeper", "evidence", "verdict", "state")
-    return {k: out.get(k) for k in keep if k in out}
+    out = {k: out.get(k) for k in keep if k in out}
+    if sensitivity:
+        from .audit_report import performance
+        a_perf, b_perf = (performance(json.loads((Path(d) / "evidence.json").read_text(encoding="utf-8"))["input"])
+                          for d in (original_dir, optimized_dir))
+        out.pop("state", None)
+        out["mode"] = "model_sensitivity"
+        out["reported"] = {"total": [a_perf and a_perf["total"], b_perf and b_perf["total"]],
+                           "max_drawdown": [a_perf and a_perf["max_drawdown"], b_perf and b_perf["max_drawdown"]]}
+        change = (f"回测原值：收益从 {a_perf['total']:.1%} 变为 {b_perf['total']:.1%}，"
+                  f"最大回撤从 {a_perf['max_drawdown']:.1%} 变为 {b_perf['max_drawdown']:.1%}") if a_perf and b_perf else ""
+        out["verdict"] = (change + "。这是成交模型的敏感性实验：两次的撮合或滑点不同，结果变化说明结论依赖成交模型有多深；"
+                          "不能按收益高低判断哪个模型更真实，也不要据此选版本"
+                          + ("。两次交易完全相同，差异只来自费用或价格" if out.get("same_trades") else ""))
+    else:
+        out["note"] = "full_gain 和 drawdown 按审计费率与价差情景重算，不是回测原值"
+    return out
 
 
 def _now():
@@ -215,7 +234,7 @@ def _now():
 def main(args):
     try:
         if args.audit_cmd == "compare":
-            result = compare_runs(args.original, args.optimized)
+            result = compare_runs(args.original, args.optimized, sensitivity=args.sensitivity)
             print(json.dumps(result, ensure_ascii=False, indent=None if args.json else 1, default=str))
             return 0 if result.get("comparable") else 1
         if args.audit_cmd == "interaction":

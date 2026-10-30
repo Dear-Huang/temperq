@@ -39,11 +39,23 @@ def _number(node):
     return float(value) if isinstance(value, (int, float)) and not isinstance(value, bool) and value >= 0 else None
 
 
+def _from_config(config):
+    sim = ((config or {}).get("mod") or {}).get("sys_simulation") or {}
+    if "slippage" not in sim:
+        return None
+    value = sim["slippage"]
+    model = str(sim.get("slippage_model") or "PriceRatioSlippage").rsplit(".", 1)[-1]
+    if not isinstance(value, (int, float)) or value < 0:
+        return {"settings": [], "unknown": [{"model": model, "value": None, "scope": None, "line": None}]}
+    entry = {"model": model, "value": float(value), "scope": None, "line": None, "source": "运行配置 config.json"}
+    return {"settings": [entry], "unknown": []} if model in KNOWN else {"settings": [], "unknown": [entry]}
+
+
 def declared(bundle):
-    """Return {'settings': [...], 'unknown': [...]} or None when the code sets no slippage."""
+    """Return {'settings': [...], 'unknown': [...]} or None when neither the code nor a config sets slippage."""
     tree, _ = parse((bundle.get("code") or {}).get("source") or "")
     if tree is None:
-        return None
+        return _from_config(bundle.get("engine_config"))
     settings, unknown = [], []
     for node in ast.walk(tree):
         if isinstance(node, ast.Call) and _name(node) == "set_slippage" and node.args:
@@ -63,7 +75,7 @@ def declared(bundle):
             entry = {"model": model, "value": value, "scope": None, "line": keys["slippage"].lineno}
             (settings if model in KNOWN and value is not None else unknown).append(entry)
     if not settings and not unknown:
-        return None
+        return _from_config(bundle.get("engine_config"))
     return {"settings": sorted(settings, key=lambda s: s["line"]), "unknown": unknown}
 
 
@@ -90,11 +102,11 @@ def per_side_bp(slippage, code, price):
 
 def describe(slippage):
     if not slippage:
-        return "代码里没有设置滑点"
+        return "代码里没有读到滑点设置（若滑点写在平台设置或运行配置里，请一并上传 config.json，否则价差情景可能重复计算）"
     if slippage["unknown"]:
         names = "、".join(sorted({u["model"] or "未识别写法" for u in slippage["unknown"]}))
         return f"代码设置了滑点（{names}），但无法换算，价差情景未扣除这部分，可能重复计算"
-    parts = [f"第 {s['line']} 行 {s['model']}({s['value']:g})" + (f" type='{s['scope']}'" if s["scope"] else "")
+    parts = [(f"第 {s['line']} 行 " if s.get("line") else "运行配置 ") + f"{s['model']}({s['value']:g})" + (f" type='{s['scope']}'" if s["scope"] else "")
              for s in slippage["settings"]]
     if all(s["value"] == 0 for s in slippage["settings"]):
         return "代码把滑点设为 0（" + "；".join(parts) + "），成交价不含价差"

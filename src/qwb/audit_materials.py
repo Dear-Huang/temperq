@@ -90,8 +90,14 @@ def replace_version(originals, previous, additions):
 
 
 def material_kind(source):
+    if source.name.lower().endswith('.xlsx'):
+        return 'platform_summary'
     if source.name.lower().endswith('.txt') and imports.is_platform_log(imports.decode_source(source)[0]):
         return 'logs'
+    if source.name.lower().endswith('.xlsx'):
+        return 'platform_summary'
+    if source.name.lower().endswith('.json'):
+        return 'engine_config'
     if source.name.lower().endswith(('.py', '.txt')):
         return 'code'
     from .strategy_import_formats import table

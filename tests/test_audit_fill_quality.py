@@ -38,13 +38,14 @@ def test_worst_price_floor_can_erase_the_profit():
     data = bundle(lucky=False, after=.05)                    # 60 fills x 100 shares x 0.05 = 300 yuan worse
     out = audit_fill_quality.analyze(data, {"status": "verified", "daily": [{"net_pnl": 200.}]})
     assert abs(out["floor"]["change"] + 300.) < 1e-6 and out["floor"]["net_after"] < 0
-    assert out["status"] == "suspicious" and "依赖理想成交" in out["floor"]["verdict"]
+    assert out["status"] == "suspicious" and "压力情景" in out["floor"]["verdict"]
     kept = audit_fill_quality.analyze(data, {"status": "verified", "daily": [{"net_pnl": 2000.}]})
     assert kept["floor"]["net_after"] > 0 and "仍为" in kept["floor"]["verdict"]
 
 
 def test_lunch_break_is_skipped_and_missing_inputs_are_named():
     assert audit_fill_quality._minutes_after("11:28", 4) == ["11:28", "11:29", "11:30", "13:01", "13:02"]
+    assert audit_fill_quality._minutes_after("14:58", 10, own=False) == ["14:59", "15:00"]
     out = audit_fill_quality.analyze({"fills": bundle(False)["fills"]}, {"status": "verified", "daily": []})
     assert out["status"] == "needs_prices" and out["missing"]
 

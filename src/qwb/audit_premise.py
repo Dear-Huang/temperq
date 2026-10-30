@@ -265,6 +265,11 @@ def analyze(bundle, premise=None, partition=None, thresholds=None):
         prices[p["date"]][p["code"]] = p["close"]
     days = sorted(by_day)
     base["signal_days"] = len(days)
+    widest = max((len(v) for v in by_day.values()), default=0)
+    if widest < 3:
+        return {**base, "status": "not_applicable", "candidates": widest,
+                "verdict": f"每期最多只有 {widest} 个候选：前提检验比较的是同一天不同标的的排序，"
+                           "不适用于单标的择时或阈值策略，本项不审；补交易日也不会改变这一点"}
     if not prices:
         return {**base, "status": "needs_prices",
                 "verdict": "要检验这个前提，需要候选池每只标的的每日收盘价（不只是买入的那几只）",

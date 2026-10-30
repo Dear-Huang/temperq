@@ -21,7 +21,7 @@ def parameter_candidates(bundle):
         ('initial_capital', '初始资金', ('capital_base',), None, 1),
         ('commission_bp', '买入佣金（bp）', ('buy_cost', 'open_commission'), 3., 10000),
         ('minimum_commission', '最低佣金（元）', ('min_cost', 'min_commission'), 5., 1),
-        ('max_weight', '单票上限候选', ('max_cash_per_instrument',), .5, 1),
+        ('max_weight', '单票上限候选', ('max_cash_per_instrument',), 1., 1),
         ('holding_count', '选股/持仓数候选', ('stock_count', 'hold_count', 'hold_num', 'n_hold'), None, 1),
         ('holding_days', '代码 hold_days（用途待核）', ('hold_days',), None, 1),
         ('rebalance_days', '调仓间隔候选', ('rebalance_period_days',), None, 1),

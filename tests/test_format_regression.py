@@ -80,7 +80,7 @@ def test_real_headers_are_still_recognised(path):
 
 UNRECOGNISED = [
     ("unknown.csv", b"a,b,c\n1,2,3\n", "未识别"),
-    ("trades.xlsx", b"PK\x03\x04", "只支持"),
+    ("trades.xlsx", b"PK\x03\x04", "xlsx"),
     ("empty.csv", b"", "表头"),
     ("bad.zip", b"not a zip", "压缩包"),
 ]

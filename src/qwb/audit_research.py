@@ -151,25 +151,37 @@ def holding_analysis(bundle, account, tick):
             return stamp.hour, stamp.minute, stamp.second, stamp.microsecond
         except (ValueError, TypeError):
             return None
+    same_day_ok = {(r["date"], r["code"]) for r in account.get("same_day_resales") or [] if r["asset"] != "stock"}
+
+    def sell(fill, day):
+        remaining = fill["quantity"]
+        queue = lots[fill["code"]]
+        while remaining and queue:
+            lot = queue[0]
+            qty = min(remaining, lot["remaining"])
+            if lot["known"]:
+                closed.append(record(lot, qty, sell=fill))
+            else:
+                unknown_sales.append({"code": fill["code"], "date": day, "quantity": qty, "ref": fill["ref"]})
+            lot["remaining"] -= qty; remaining -= qty
+            if not lot["remaining"]:
+                queue.popleft()
+        if remaining:
+            unmatched.append({"code": fill["code"], "date": day, "quantity": remaining, "ref": fill["ref"]})
+
     for day in dates:
-        # Only older lots can fund a sale. Same-day buys cannot hide a T+1 data gap.
-        for fill in (f for f in by_day[day] if f["side"] == "sell"):
-            remaining = fill["quantity"]
-            queue = lots[fill["code"]]
-            while remaining and queue:
-                lot = queue[0]
-                qty = min(remaining, lot["remaining"])
-                if lot["known"]:
-                    closed.append(record(lot, qty, sell=fill))
-                else:
-                    unknown_sales.append({"code": fill["code"], "date": day, "quantity": qty, "ref": fill["ref"]})
-                lot["remaining"] -= qty; remaining -= qty
-                if not lot["remaining"]:
-                    queue.popleft()
-            if remaining:
-                unmatched.append({"code": fill["code"], "date": day, "quantity": remaining, "ref": fill["ref"]})
+        intraday = {c for d, c in same_day_ok if d == day}
+        # A T+0 name sold out of the same day's buys: replay that name's fills in clock order.
+        for fill in sorted((f for f in by_day[day] if f["code"] in intraday), key=lambda f: str(f.get("time") or "")):
+            if fill["side"] == "buy":
+                lots[fill["code"]].append({"remaining": fill["quantity"], "known": True, "fill": fill})
+            else:
+                sell(fill, day)
+        # Otherwise only older lots can fund a sale. Same-day buys cannot hide a T+1 data gap.
+        for fill in (f for f in by_day[day] if f["side"] == "sell" and f["code"] not in intraday):
+            sell(fill, day)
         # Only use clocks if every buy clock is usable; otherwise preserve source order.
-        buys = [f for f in by_day[day] if f["side"] == "buy"]
+        buys = [f for f in by_day[day] if f["side"] == "buy" and f["code"] not in intraday]
         if all(buy_order(f) is not None for f in buys):
             buys.sort(key=buy_order)
         elif len(buys) > 1:

@@ -8,9 +8,23 @@ from .strategy_imports import SCHEMA
 from .audit_catalog import coverage
 from .audit_diagnostics import fee_analysis, risk_analysis, trading_behavior
 from .audit_research import tick_analysis, holding_analysis
+from .securities import asset_class
 
 VERSION = "strategy_audit_v1"
 TOLERANCE = .05
+
+
+def _intraday_ok(day_fills, code, start):
+    """Could the day's sales of `code` be met in clock order from the opening inventory plus earlier buys?"""
+    own = [f for f in day_fills if f["code"] == code]
+    if not own or any(not str(f.get("time") or "").strip() for f in own):
+        return False
+    held = start
+    for f in sorted(own, key=lambda f: str(f["time"])):
+        held += f["quantity"] if f["side"] == "buy" else -f["quantity"]
+        if held < 0:
+            return False
+    return True
 
 
 def accounting(bundle):
@@ -27,7 +41,7 @@ def accounting(bundle):
     prior_cash = bundle["opening"]["cash"] if empty else snapshots[0]["cash"]
     prior_equity = prior_cash if empty else snapshots[0]["equity"]
     prior_equity = float(prior_equity)
-    daily, contributions, checks = [], [], []
+    daily, contributions, checks, same_day = [], [], [], []
 
     def check(key, gap, day, code="", ref=None, tolerance=TOLERANCE):
         checks.append({"key": key, "gap": float(gap), "date": day, "code": code,
@@ -71,7 +85,14 @@ def accounting(bundle):
                                   "fees": fees[code], "net_pnl": net})
             pnl += net
             # Necessary inventory check only: no claim to certify the complete T+1 lifecycle.
-            excess = max(0, sales[code] - prev.get("quantity", 0) - max(0, action_qty[code]))
+            start = prev.get("quantity", 0) + max(0, action_qty[code])
+            excess = max(0, sales[code] - start)
+            if excess and _intraday_ok(fills[day], code, start):
+                # Sold out of the same day's earlier buys: legal for T+0 instruments (cross-border, gold, bond and
+                # money ETFs, convertible bonds), a T+1 breach for stocks. Not a books error either way.
+                same_day.append({"date": day, "code": code, "quantity": excess, "asset": asset_class(code)})
+                if asset_class(code) != "stock":
+                    excess = 0
             check("prior_inventory_for_sales", excess, day, code, tolerance=0)
         check("cash_flow", snapshot["cash"] - prior_cash + sum(flow.values()) + sum(fees.values()) - sum(action_cash.values()), day)
         check("pnl_bridge", pnl - (snapshot["equity"] - prior_equity), day)
@@ -89,7 +110,7 @@ def accounting(bundle):
             "scope": "export_records_only", "baseline": "declared_empty_opening" if empty else "first_exported_close",
             "baseline_equity": bundle["opening"]["cash"] if empty else snapshots[0]["equity"],
             "summary": summary, "exceptions": [r for r in checks if not r["passed"]],
-            "daily": daily, "contributions": contributions}
+            "same_day_resales": same_day, "daily": daily, "contributions": contributions}
 
 
 def attribution(bundle, context):
@@ -146,6 +167,10 @@ def governance(bundle, context, settings):
         {"key": "inventory", "status": ("review" if any(r["key"] == "prior_inventory_for_sales" for r in account["exceptions"]) else "consistent") if account["daily"] else "needs_input",
          "title": "卖出库存必要条件", "observed": sum(r["key"] == "prior_inventory_for_sales" for r in account["exceptions"]) if account["daily"] else None,
          "unit": "条异常", "action": "按前期库存及已记录公司行动核对；完整 T+1、挂单与盘中状态还需订单生命周期", "evidence": []},
+        {"key": "same_day_resale", "status": "review" if account.get("same_day_resales") else "consistent",
+         "title": "当日买入当日卖出", "observed": len(account.get("same_day_resales") or []), "unit": "次",
+         "action": "确认这些标的可以 T+0：跨境、黄金、债券、货币类 ETF 和可转债可以当日回转，股票和股票型 ETF 不行",
+         "evidence": []},
     ]
     return {"id": "governance", "version": 1, "status": "measured", "items": items,
             "settings": settings, "small_fill_count": small_count,
@@ -173,7 +198,7 @@ def opening_state(bundle, context):
 def analyze(bundle, settings=None, *, policy=None):
     if bundle.get("schema_version") != SCHEMA:
         raise ValueError("不支持的策略导入格式")
-    settings = dict(settings or {"commission_bp": 3., "minimum_commission": 5., "max_weight": .5})
+    settings = dict(settings or {"commission_bp": 3., "minimum_commission": 5., "max_weight": 1.})
     import math
     from . import audit_rules
     broker_confirmed = bool(settings.pop("broker_confirmed", False))

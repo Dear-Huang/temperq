@@ -99,7 +99,7 @@ def test_archives_with_unexpected_contents_are_refused():
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w") as z:
         z.writestr("evil.exe", b"MZ")
-    with pytest.raises(ValueError, match="只能是 CSV 或 TXT"):
+    with pytest.raises(ValueError, match="只能是 CSV、TXT/PY"):
         imports.normalize(files(("x.zip", buf.getvalue()), ("代码.txt", CODE)), adapter="auto", name="x")
 
 

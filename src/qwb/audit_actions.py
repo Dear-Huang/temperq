@@ -72,7 +72,7 @@ def _quality_card(quality):
         "id": "fill_quality", "state": "act", "title": "成交价是否拿得到",
         "finding": "；".join(parts) + "。",
         "headline": ("成交价系统性落在当天最有利的位置，疑似偷看了当天走势" if rng.get("status") == "suspicious"
-                     else "按成交后几分钟的最差价重算就不再盈利：收益依赖理想成交"),
+                     else "按成交后几分钟的最差价重算就不再盈利：收益依赖较好的成交价（压力情景）"),
         "edits": [],
         "options": [{"label": "核对信号所用数据的时间", "effect": "确认选股只用了下单之前已经公开的数据，没有用当天收盘价、全天成交量或当天走势"},
                     {"label": "延后执行重跑", "effect": "信号不动，把执行时点延后到 9:35、10:00，并调高滑点，回平台重跑，用 qwb audit compare 比较"},
@@ -113,27 +113,28 @@ def _timing_card(timing):
     if not timing or timing.get("status") not in ("sensitive", "stable"):
         return None
     sensitive = timing["status"] == "sensitive"
-    worst = min(timing["rows"], key=lambda r: r["gain"])
-    best = max(timing["rows"], key=lambda r: r["gain"])
+    delayed = [r for r in timing["rows"] if r.get("delay")]
+    worst = min(delayed, key=lambda r: r["gain"])
+    best = max(delayed, key=lambda r: r["gain"])
     flatter = timing.get("open_flatters")
     finding = (f"{timing['timed_fills']} 笔有成交时间，其中 {timing['open_fills']} 笔在 {timing['open_by']} 以前成交"
-               f"（成交额占 {timing['open_share']:.0%}）。固定股数和费用，只把成交价换成同日其他时点：最差是 {worst['label']}，"
-               f"盈亏 {_yuan(worst['gain'])}；最好是 {best['label']}，盈亏 {_yuan(best['gain'])}；回测净盈亏 {_yuan(timing['net_pnl'])}。")
+               f"（成交额占 {timing['open_share']:.0%}）。固定股数和费用，把每笔成交往后挪：{worst['label']}盈亏变化 {_yuan(worst['gain'])}，"
+               f"{best['label']}盈亏变化 {_yuan(best['gain'])}；回测净盈亏 {_yuan(timing['net_pnl'])}。")
     if timing.get("max_volume_share") is not None:
         finding += f"单笔成交最多占当分钟成交量的 {timing['max_volume_share']:.0%}。"
     return {
         "id": "fill_timing", "state": "review" if sensitive else "hold", "title": "成交时点是否决定了结论",
         "finding": finding,
-        "headline": (("所有对照时点都比回测用的时点差，回测按这个时点成交偏乐观" if flatter else
-                      "换个时点成交，盈亏变化和净盈亏同一量级：结论依赖成交时点") if sensitive
-                     else "换个时点成交，盈亏变化远小于净盈亏：成交时点不改变结论"),
+        "headline": (("每一档延后成交都比回测用的时点差：回测按这个时点成交偏乐观" if flatter else
+                      "成交稍晚，盈亏变化和净盈亏同一量级：结论依赖成交时点") if sensitive
+                     else "成交稍晚，盈亏变化远小于净盈亏：成交时点不改变结论"),
         "edits": [],
         "options": [{"label": "维持原样", "effect": "实盘确实能在回测时点按该价成交时（例如开盘竞价挂单且金额小）"},
                     {"label": "改为更可执行的时点或价格", "effect": "回原平台改调仓时点或改用开盘价/均价撮合重跑，再到『效果验证』比较"},
                     {"label": "分笔或延后执行", "effect": "单笔占当分钟成交量大时，分到多个分钟成交"}],
         "saving": "不省钱；回测结果更接近实盘能拿到的价格",
-        "sacrifice": f"按对照时点计，盈亏最多少 {_yuan(-worst['gain'])}" if worst["gain"] < 0 else "对照时点都不更差",
-        "net": "只换成交价、不重跑决策；换时点后策略的选股可能也会变，需回原平台重跑确认",
+        "sacrifice": f"按延后成交计，盈亏变化最多 {_yuan(worst['gain'])}" if worst["gain"] < 0 else "延后成交都不更差",
+        "net": "只换成交价、不重跑决策；这是价格敏感性，不是延迟回放，需冻结信号回原平台重跑确认",
         "evidence": "scenario",
         "basis": "按用户提供的分钟价重算成交价；股数、费用和交易日期不变",
         "overturn": "实盘成交记录显示能在回测时点按回测价成交；或换时点重跑后选股和盈亏都不变。",
@@ -283,9 +284,11 @@ def _fee_model_card(model, edits, t):
     scenarios = "、".join(f"{s['commission_bp']:g}bp 约 {_yuan(s['fee'])}" for s in model["scenarios"])
     lines = []
     if declared["status"] == "none":
-        lines.append("代码里没有费用设置，回测用的是平台默认费率（默认值未知），无法核对回测是否按自己的设置扣费。")
+        lines.append("代码里没有读到费用设置：可能用的是平台默认费率，也可能写在平台设置或运行配置里。"
+                     "无法核对回测是否按自己的设置扣费；若有运行配置（如 RQAlpha 的 config.json），请一并上传。")
     else:
-        where = "；".join(f"{m['source']}（第 {m['line']} 行）" for m in declared["models"].values()) or "仅定位到配置键"
+        where = "；".join(m["source"] + (f"（第 {m['line']} 行）" if m.get("line") else "（运行配置）")
+                         for m in declared["models"].values()) or "仅定位到配置键"
         lines.append(f"回测声明的费用模型：{where}。")
         for cls, why in declared["missing"].items():
             lines.append(f"{ {'stock': '股票', 'fund': 'ETF/基金', 'bond': '债券'}[cls] }：{why}。")

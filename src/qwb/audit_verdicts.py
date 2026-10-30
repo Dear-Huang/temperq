@@ -55,6 +55,10 @@ def conclusions(bundle, result):
         inventory = next(r for r in gov['items'] if r['key'] == 'inventory')
         if inventory['observed']:
             set_row('execution', 'adjust', f'{int(inventory["observed"])}条卖出不满足已知库存必要条件，需补公司行动或核对成交。')
+        same = next((r for r in gov['items'] if r['key'] == 'same_day_resale'), None)
+        if same and same['observed'] and not inventory['observed']:
+            set_row('execution', 'evidence', f'{int(same["observed"])}次当日买入当日卖出，账目闭合；需确认这些标的可以 T+0'
+                    '（跨境、黄金、债券、货币类 ETF 与可转债可以，股票和股票型 ETF 不行）。')
     if fees and fees['priced_fill_count']:
         if fees['mismatch_count']:
             set_row('costs', 'adjust', f'{fees["mismatch_count"]}个已确认收费单位的费用与确认费率及历史税率不一致；差额需核实，不能直接算作节省。')
