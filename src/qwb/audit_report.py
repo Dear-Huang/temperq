@@ -521,7 +521,8 @@ def render(record, bundle, result):
                 f'<tr><td>{e["date"]}</td><td>{esc(e["code"])}</td><td class="n">{e["ordered"]:,} / {e["filled"]:,}</td>'
                 f'<td class="n">{e["days_without_order"]}</td><td class="n">{_pct(e["mean_cash_share"], 0)}</td><td>{esc(e["reason"])}</td></tr>'
                 for e in long) + '</table></div>')
-        h.append(f'<p class="mut">{esc(partial["scope"])}。</p>')
+        if partial.get("scope"):
+            h.append(f'<p class="mut">{esc(partial["scope"])}。</p>')
     timing = modules.get("fill_timing")
     if timing:
         h.append('<h3>成交时点敏感性</h3>')

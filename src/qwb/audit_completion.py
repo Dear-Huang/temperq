@@ -9,6 +9,8 @@ from __future__ import annotations
 
 from collections import defaultdict
 
+SCOPE = "只按委托记录的下单数与成交数判断；持有该标的不等于完成了原买单；不推断策略是否本该补单"
+
 
 def analyze(bundle, accounting, thresholds=None):
     orders = bundle.get("orders") or []
@@ -43,7 +45,7 @@ def analyze(bundle, accounting, thresholds=None):
                          "reason": o.get("reason") or ""})
     if not partial:
         return {"id": "partial_entry", "status": "none", "orders": len(orders), "partial_buys": 0, "episodes": [],
-                "verdict": "没有部分成交的买单"}
+                "verdict": "没有部分成交的买单", "scope": SCOPE}
     long = [e for e in episodes if e["days_without_order"] >= long_days]
     worst = max(episodes, key=lambda e: e["days_without_order"])
     return {"id": "partial_entry", "status": "found" if long else "short", "orders": len(orders),
@@ -53,4 +55,4 @@ def analyze(bundle, accounting, thresholds=None):
                         f"最长 {worst['days_without_order']} 天（{worst['code']}，{worst['date']} 起，成交 {worst['fill_share']:.0%}），"
                         + (f"期间平均 {worst['mean_cash_share']:.0%} 的权益是现金" if worst["mean_cash_share"] is not None else "")
                         if long else f"{len(partial)} 笔买单只成交了一部分，之后都在 {long_days} 个交易日内补单或换仓"),
-            "scope": "只按委托记录的下单数与成交数判断；持有该标的不等于完成了原买单；不推断策略是否本该补单"}
+            "scope": SCOPE}

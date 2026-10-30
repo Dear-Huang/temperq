@@ -192,3 +192,11 @@ def test_partial_buy_not_topped_up_is_reported():
     out = audit_completion.analyze({"orders": topped, "snapshots": snaps, "positions": positions, "fills": fills},
                                    {"status": "verified"})
     assert out["status"] == "short"
+
+
+def test_report_renders_when_no_buy_was_partly_filled():
+    # Was: KeyError 'scope' on five RiceQuant one-year exports whose orders had no partial buys.
+    from qwb import audit_completion
+    out = audit_completion.analyze({"orders": [{"date": "2024-01-02", "code": "A.SH", "side": "buy", "quantity": 100, "filled": 100}],
+                                    "snapshots": [], "positions": [], "fills": []}, {"status": "verified"})
+    assert out["status"] == "none" and out["scope"]
