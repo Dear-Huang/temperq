@@ -129,7 +129,7 @@ def upload_form(token, error=""):
 <label>导出平台<select name="adapter"><option value="auto">自动识别</option><option value="bigquant">BigQuant</option><option value="joinquant">聚宽</option><option value="ricequant">米筐</option><option value="generic">其他 / 标准 CSV</option></select></label>
 <label>风格（可留空，由你确认）<input name="style" maxlength="40" placeholder="例如短期反转、趋势、多因子"></label>
 </div><p class="notice">推荐至少 2 年，最好 3 年以上，并覆盖至少一段明显下跌。较短回测也可导入，报告会区分可核账目与规则效果。</p>
-<label>原样上传代码、交易和可选持仓、日志、每日打分；平台下载的 ZIP 不用解压（最多16个文件）<input type="file" name="files" accept=".csv,.txt,.py,.zip" multiple></label>
+<label>原样上传代码、交易和可选持仓、日志、每日打分；平台下载的 ZIP 不用解压（最多16个文件）<input type="file" name="files" accept=".csv,.txt,.py,.zip,.json,.xlsx" multiple></label>
 <details><summary>也可以直接粘贴策略代码</summary><label>策略代码<textarea name="code_text" rows="7" maxlength="200000" placeholder="只读解析，不运行代码；已上传代码文件时不必再粘贴"></textarea></label></details>
 <p class="mut">代码必填；仅有代码时可做静态检查。交易必填，聚宽持仓可推算净变动；持仓强烈推荐、日志推荐、每日打分选填。支持 UTF-8 / GBK，不用改列名。</p>
 <details open class="platform-guide"><summary>各平台怎么导出、能拿到什么</summary>
@@ -721,7 +721,7 @@ def verification_page(identity, record, result, versions, compare_with, token):
     body += (f'<form method="post" action="/strategy-audits/{identity}/optimized" enctype="multipart/form-data" class="review-form">'
              f'<input type="hidden" name="token" value="{token}">'
              + card_choice(result) +
-             '<label>上传优化版回测导出（交易、持仓、日志、优化后代码；ZIP 不用解压）<input type="file" name="files" accept=".csv,.txt,.py,.zip" multiple></label>'
+             '<label>上传优化版回测导出（交易、持仓、日志、优化后代码；ZIP 不用解压）<input type="file" name="files" accept=".csv,.txt,.py,.zip,.json,.xlsx" multiple></label>'
              '<button class="primary">上传优化版并核对</button></form>')
     body += '<p class="mut">上传后进入导入核对页，确认后成为新版本；原版本与报告保持不变。</p></section>'
     return body
