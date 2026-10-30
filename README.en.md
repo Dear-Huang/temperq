@@ -78,6 +78,8 @@ Seven sections follow: conclusions, premise check, return and risk (with the pla
 
 The AI version lives in [`skills/strategy-audit/`](skills/strategy-audit/SKILL.md). After converting, the AI must reconcile the books with the engine first; if they do not close, the conversion is wrong and has to be redone.
 
+To use it in Claude Code: install TemperQ as in the quick start below, copy the whole `skills/strategy-audit` folder to `~/.claude/skills/` (all projects) or your project's `.claude/skills/`, then ask Claude to audit your backtest and point it to the folder with the exported files.
+
 ## Want more checks? Add two materials
 
 Platforms do not export these by default. With them, two more checks run:

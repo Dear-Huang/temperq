@@ -142,3 +142,4 @@ qwb audit interaction <原版> <只改A> <只改B> <都改> --labels A名,B名
 - **用户想检验"我的因子有没有用"：需要每日打分 `scores.csv`（覆盖全部候选，不只选中的）和候选池收盘价 `prices.csv`。没有这两份，报告第二节只能记录前提、不能检验。告诉用户怎么补，不要自己判断因子好坏。
 - **用户给了截图或 PDF**：只能转录其中的表格。转录后在 `_convert/` 里写明"由截图转录"，并提醒用户核对；`check` 的对账是最后一道关。
 - **未安装引擎**：`pip install -e <temperq 仓库>`，或用仓库里的 `.venv`。命令也可写成 `python -m qwb.cli audit ...`。
+- **找不到 `src/qwb/static/` 下的脚本**（skill 被复制到别处时）：运行 `python -c "import qwb, os; print(os.path.join(os.path.dirname(qwb.__file__), 'static'))"`，`temperq_recorder.py`、`temperq_supplement.py`、`temperq_budget_lot.py` 都在这个目录。

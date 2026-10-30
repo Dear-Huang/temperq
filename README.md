@@ -76,6 +76,8 @@ TemperQ 只看回测的**输出**：成交、持仓、账户、日志和策略�
 
 AI 版放在 [`skills/strategy-audit/`](skills/strategy-audit/SKILL.md)。AI 转完格式后必须先用引擎对账，账对不上就说明转错了，要重转。
 
+在 Claude Code 里使用：先按下面的快速开始装好 TemperQ，再把 `skills/strategy-audit` 整个文件夹复制到 `~/.claude/skills/`（所有项目可用）或你项目的 `.claude/skills/`，然后对 Claude 说"帮我审计这个回测"，并给出导出文件所在的目录。
+
 ## 想检验更多？补两份材料
 
 平台默认不导出这两份材料，补上后能多做两项检验：
