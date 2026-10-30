@@ -37,6 +37,7 @@ These are real results: public JoinQuant community strategies, migrated to a loc
 | Keep 1% cash and add a retention band, two improvements at once | 1% cash alone adds 0.71 percentage points; together with the band it costs 3.80: **the two suggestions do not add up** |
 | It bought the target ETF, so execution was fine | One buy filled 30%, then 71 trading days with no top-up while 67% of equity sat in cash: **holding the target is not completing the order** |
 | 219 days not holding the rank-1 name means execution failed | 193 of them were the strategy's own retention rule; the real execution gaps were 26 days: **the strategy's design is not mistaken for a fault** |
+| 108.8% in three years, every switch went smoothly | 43 switches could only pay for the buy with the sale made in the same minute; the backtest assumed the sale filled first and the cash arrived at once. Re-run with next-bar matching, the dependence disappears and the return becomes 87.1%: **part of the return came from ideal funding between legs** |
 
 For 10 RiceQuant one-year backtests, the audit's recomputed total return, maximum drawdown and benchmark return match RiceQuant's own figures (the Sharpe ratio differs because RiceQuant subtracts a risk-free rate; the report says so).
 
