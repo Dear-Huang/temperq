@@ -9,7 +9,8 @@ from __future__ import annotations
 
 from collections import defaultdict
 
-SCOPE = "只按委托记录的下单数与成交数判断；持有该标的不等于完成了原买单；不推断策略是否本该补单"
+SCOPE = ("只按委托记录的下单数与成交数判断；持有该标的不等于完成了原买单；补单下了却没成交的不算补上；"
+         "不推断策略是否本该补单")
 
 
 def analyze(bundle, accounting, thresholds=None):
@@ -24,11 +25,16 @@ def analyze(bundle, accounting, thresholds=None):
     held = defaultdict(dict)
     for p in bundle.get("positions") or []:
         held[p["date"]][p["code"]] = p["quantity"]
-    touched = defaultdict(set)                 # (code) -> dates with any order or fill
+    touched = defaultdict(set)                 # (code) -> dates with an order that bought something, or a fill
     for o in orders:
-        touched[o["code"]].add(o["date"])
+        if o.get("filled", 0) > 0 or o["side"] == "sell":
+            touched[o["code"]].add(o["date"])
     for f in bundle.get("fills") or []:
         touched[f["code"]].add(f["date"])
+    retried = defaultdict(set)                 # orders that were placed but filled nothing
+    for o in orders:
+        if o["side"] == "buy" and not o.get("filled"):
+            retried[o["code"]].add(o["date"])
     partial = [o for o in orders if o["side"] == "buy" and 0 < o["filled"] < o["quantity"]]
     episodes = []
     for o in partial:
@@ -39,7 +45,8 @@ def analyze(bundle, accounting, thresholds=None):
                 break
             run.append(d)
         share = [cash[d] for d in run if d in cash]
-        episodes.append({"date": o["date"], "code": o["code"], "ordered": o["quantity"], "filled": o["filled"],
+        episodes.append({"retries_unfilled": sum(1 for d in run if d in retried[o["code"]]),
+                         "date": o["date"], "code": o["code"], "ordered": o["quantity"], "filled": o["filled"],
                          "fill_share": o["filled"] / o["quantity"], "days_without_order": len(run),
                          "end": run[-1] if run else o["date"], "mean_cash_share": sum(share) / len(share) if share else None,
                          "reason": o.get("reason") or ""})

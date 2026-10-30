@@ -287,7 +287,7 @@ def bigquant(files, *, name, opening_cash=None):
               "opening": {"kind": "empty" if opening_cash is not None else "first_close",
                           "cash": opening_cash},
               "fills": [], "positions": [], "snapshots": [], "actions": [],
-              "logs": [], "external_attribution": [], "quote_observations": [], "scores": [], "prices": [], "minute_prices": [], "day_ranges": [], "code": {}, "sources": []}
+              "logs": [], "external_attribution": [], "quote_observations": [], "scores": [], "prices": [], "minute_prices": [], "day_ranges": [], "target_weights": [], "code": {}, "sources": []}
     seen = set()
     for source in files:
         text, encoding = decode_source(source)

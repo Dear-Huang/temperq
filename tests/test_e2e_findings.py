@@ -173,7 +173,16 @@ def test_holding_the_runner_up_without_an_order_is_retention_not_a_miss():
         positions.append({"date": d, "code": "B.SH"})             # always keeps B, never trades
     bundle = {"scores": scores, "positions": positions, "fills": [], "orders": []}
     out = audit_signals.analyze(bundle, {"accounting": {"status": "verified", "daily": [{"date": days[0]}]}})
-    assert out["retained_days"] == 12 and out["days"] - out["followed_days"] - out["retained_days"] == 0
+    # The target is stated (selected=True), so these 12 days are a deviation, not excused as retention.
+    assert out["retained_days"] == 0 and out["days"] - out["followed_days"] == 12
+    # With a fixed stated target the reason says the neighbour was kept without an order, not that execution failed.
+    fixed = [{**s, "rank": 1 if s["code"] == "A.SH" else 2, "selected": s["code"] == "A.SH"} for s in scores]
+    out = audit_signals.analyze({**bundle, "scores": fixed}, {"accounting": {"status": "verified", "daily": [{"date": days[0]}]}})
+    assert out["missed_reasons"] == {"未下单，继续持有紧随其后的标的（是否保留规则需策略目标记录确认）": 24}
+    ranked_only = [{k: v for k, v in s.items() if k != "selected"} for s in scores]
+    out = audit_signals.analyze({**bundle, "scores": ranked_only},
+                                {"accounting": {"status": "verified", "daily": [{"date": days[0]}]}})
+    assert out["retained_days"] == 12
 
 
 def test_partial_buy_not_topped_up_is_reported():

@@ -141,6 +141,7 @@ def summary(bundle, result):
         "fill_quality": (lambda q: q and {"status": q.get("status"),
                                           "range": (q.get("range") or {}).get("verdict"), "floor": (q.get("floor") or {}).get("verdict")})(
             result["modules"].get("fill_quality")),
+        "allocation": (lambda a: a and {"status": a.get("status"), "verdict": a.get("verdict")})(result["modules"].get("allocation")),
         "activity": (lambda a: a and {"exits": (a.get("exits") or {}).get("verdict"), "idle": a["idle"]["verdict"],
                                        "status": a.get("status")})(result["modules"].get("activity")),
         "partial_entry": (lambda c: c and {k: c.get(k) for k in ("status", "verdict", "partial_buys", "long_episodes", "worst")})(

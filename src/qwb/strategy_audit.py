@@ -265,6 +265,10 @@ def analyze(bundle, settings=None, *, policy=None):
     sequence = audit_sequence.analyze(bundle, context["accounting"], thresholds)
     if sequence:
         context["sequence"] = sequence
+    from . import audit_allocation
+    allocation = audit_allocation.analyze(bundle, context["accounting"], thresholds)
+    if allocation:
+        context["allocation"] = allocation
     from . import audit_activity
     activity = audit_activity.analyze(bundle, context["accounting"], thresholds)
     if activity:

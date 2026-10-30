@@ -75,3 +75,56 @@ def test_supplied_corporate_actions_replace_inferred_ones():
     ]
     bundle = imp.normalize(files, opening_cash=10005)
     assert [a["source"] for a in bundle["actions"]] == ["supplied"]
+
+
+def _signal_case(selected, held_code):
+    days = [f"2024-01-{d:02d}" for d in range(2, 28)]
+    scores, positions = [], []
+    for d in days:
+        for r, c in enumerate(("A.SH", "B.SH", "C.SH"), 1):
+            row = {"date": d, "code": c, "rank": r}
+            if selected is not None:
+                row["selected"] = c in selected
+            scores.append(row)
+        if held_code:
+            positions.append({"date": d, "code": held_code})
+    return audit_signals.analyze({"scores": scores, "positions": positions, "fills": [], "orders": []},
+                                 {"accounting": {"status": "verified", "daily": [{"date": days[0]}]}})
+
+
+def test_n01_explicit_empty_selection_is_not_a_missed_buy():
+    out = _signal_case(selected=set(), held_code=None)
+    assert out["empty_target_days"] == out["days"] and out["days"] - out["followed_days"] - out["retained_days"] == 0
+    held = _signal_case(selected=set(), held_code="B.SH")
+    assert held["empty_target_but_held_days"] == held["days"]
+
+
+def test_n02_explicit_target_is_never_excused_as_retention():
+    out = _signal_case(selected={"A.SH"}, held_code="B.SH")
+    assert out["retained_days"] == 0 and out["days"] - out["followed_days"] == out["days"]
+    ranked_only = _signal_case(selected=None, held_code="B.SH")
+    assert ranked_only["retained_days"] == ranked_only["days"]
+
+
+def test_n05_a_retry_that_filled_nothing_is_not_a_top_up():
+    from qwb import audit_completion
+    days = [f"2024-02-{d:02d}" for d in range(1, 12)]
+    snaps = [{"date": d, "equity": 100., "cash": 30.} for d in days]
+    positions = [{"date": d, "code": "A.SH", "quantity": 100} for d in days]
+    orders = [{"date": days[0], "code": "A.SH", "side": "buy", "quantity": 300, "filled": 100, "reason": ""}]
+    orders += [{"date": d, "code": "A.SH", "side": "buy", "quantity": 200, "filled": 0, "reason": "无成交量"} for d in days[1:7]]
+    out = audit_completion.analyze({"orders": orders, "snapshots": snaps, "positions": positions,
+                                    "fills": [{"date": days[0], "code": "A.SH"}]}, {"status": "verified"})
+    assert out["status"] == "found" and out["worst"]["days_without_order"] == 10 and out["worst"]["retries_unfilled"] == 6
+
+
+def test_n04_target_weights_against_holdings_and_lot_size():
+    from qwb import audit_allocation
+    days = [f"2024-03-{d:02d}" for d in range(1, 21)]
+    snaps = [{"date": d, "equity": 10000., "cash": 4000.} for d in days]
+    positions = [{"date": d, "code": "511010.SH", "quantity": 600, "price": 10., "market_value": 6000.} for d in days]
+    targets = [{"date": days[0], "code": "511010.SH", "target_weight": .7}]
+    out = audit_allocation.analyze({"target_weights": targets, "snapshots": snaps, "positions": positions}, {"status": "verified"})
+    row = out["names"][0]
+    assert abs(row["actual"] - .6) < 1e-9 and row["over_days"] == 0           # 0.6 vs 0.7 is within 15% of target
+    assert abs(row["lot_share"] - .1) < 1e-9

@@ -512,6 +512,9 @@ def _churn_card(signals, edits, opening=None, t=None):
                    + f"每次换仓的费用和价差约 {_yuan(signals['cost_per_round_trip'])}。"
                    f"有 {signals['whipsaw_lots']} 笔卖出后 5 天内又排回第一，这些交易付出约 {_yuan(signals['whipsaw_cost'])}。"
                    + (f"另有 {missed} 天没有持有选中的目标（{reasons}）。" if missed else "持仓每天都跟上了信号。")
+                   + (f"{signals['extra_holding_days']} 天收盘持有目标以外的标的"
+                      + (f"，其中 {signals['empty_target_but_held_days']} 天策略选择空仓却仍有持仓" if signals.get("empty_target_but_held_days") else "")
+                      + "：卖出没有完成，或策略内部状态与实际账户不一致。" if signals.get("extra_holding_days") else "")
                    + (f"{retained} 天没有下单、继续持有紧随第一之后的标的：现象与保留规则一致，但没有策略每天的最终目标记录，"
                       "不能确认是规则还是漏单，未计入上面的天数。" if retained else ""),
         "headline": (f"固定成交下，排进前 {signals['buffer_rank']} 就不卖可少换 {avoided} 次，费用和价差情景约 "

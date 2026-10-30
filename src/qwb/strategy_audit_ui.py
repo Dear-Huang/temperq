@@ -230,7 +230,7 @@ def overview(identity, bundle, token, inherited=None):
     fill_label = '条持仓净变动（由持仓推算）' if review['fills_inferred'] else '笔成交'
     body += f'<p class="review-meta">{period} · {len(days)} 个账户快照 · {len(bundle["fills"])} {fill_label}</p>'
     body += '<section class="review-section"><h2>01 · 材料核对</h2><div class="tw"><table><tr><th>文件</th><th>识别类型</th><th>行数</th></tr>'
-    labels = {"fills": "交易", "positions": "持仓与账户汇总", "snapshots": "账户汇总", "logs": "日志", "code": "策略代码", "external_attribution": "平台归因（待核口径）", "quote_observations": "日均报价价差（核对用途）", 'scores': '每日打分', 'platform_returns': '平台收益表（核对用途）', 'orders': '委托详情', 'auxiliary': '辅助表（不参与审计）', 'platform_summary': '平台绩效汇总（核对用途）', 'prices': '候选池收盘价', 'minute_prices': '成交日分钟价', 'day_ranges': '成交日全天区间', 'engine_config': '回测运行配置', 'empty': '空表（无数据）'}
+    labels = {"fills": "交易", "positions": "持仓与账户汇总", "snapshots": "账户汇总", "logs": "日志", "code": "策略代码", "external_attribution": "平台归因（待核口径）", "quote_observations": "日均报价价差（核对用途）", 'scores': '每日打分', 'platform_returns': '平台收益表（核对用途）', 'orders': '委托详情', 'auxiliary': '辅助表（不参与审计）', 'platform_summary': '平台绩效汇总（核对用途）', 'prices': '候选池收盘价', 'minute_prices': '成交日分钟价', 'target_weights': '目标权重', 'day_ranges': '成交日全天区间', 'engine_config': '回测运行配置', 'empty': '空表（无数据）'}
     for source in bundle["sources"]:
         body += f'<tr><td>{esc(source["name"])}</td><td>{labels[source["kind"]]} · {esc(source.get("encoding", "历史记录"))}</td><td>{source["rows"]}</td></tr>'
     body += '</table></div>'

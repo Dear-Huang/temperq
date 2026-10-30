@@ -70,6 +70,7 @@ RULES = {r.id: r for r in (
     Rule("M-FILL-RANGE", "method", "把每笔成交价放进当天最高最低价区间，和均匀分布比较；买在低位、卖在高位的比例显著超过随机即可疑", "本项目，见 audit_fill_quality"),
     Rule("M-FILL-FLOOR", "method", "每笔买入按成交后 10 分钟内的最高价、卖出按最低价重算，股数费用不变；是执行的悲观下限，不是估计", "本项目，见 audit_fill_quality"),
     Rule("M-SEQUENCE", "method", "同一时刻先卖后买、买入金额超过上一收盘现金的，视为依赖卖出回款；打分可用时间晚于成交时间的，视为信号晚于成交", "本项目，见 audit_sequence"),
+    Rule("T-ALLOC-GAP", "threshold", "实际权重偏离目标超过目标的这个比例，记为偏离日", UNTESTED, .15, "比例", range=(.01, 1.)),
     Rule("M-ACTIVITY", "method", "卖单没成交完且收盘仍持有，记为退出未完成；收盘无任何持仓的交易日记为空仓，统计最长连续空仓", "本项目，见 audit_activity"),
     Rule("T-PARTIAL-DAYS", "threshold", "买单只成交一部分后，连续这么多个交易日没有补单才列出", UNTESTED, 5, "交易日", range=(1, 60)),
     Rule("M-PARTIAL-ENTRY", "method", "按委托记录的下单数和成交数找部分成交的买单，跟踪到该标的下一次委托或成交为止", "本项目，见 audit_completion"),

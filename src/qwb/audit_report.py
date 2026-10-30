@@ -502,6 +502,15 @@ def render(record, bundle, result):
             rows.append(("年化双边换手（成交额 / 期初权益）", f'{notional / perf["start_equity"] / perf["years"]:.1f} 倍'))
     h.append('<div class="tw"><table><tr><th>项目</th><th class="n">数值</th></tr>' + "".join(f'<tr><td>{a}</td><td class="n">{b}</td></tr>' for a, b in rows) + '</table></div>')
     h.append('<p class="mut">价差为按最小价位估算的情景，不是实测成本；原回测若已计滑点，需先分离再比较。逐笔费用见附件 fees.csv、tick-costs.csv。</p>')
+    allocation = modules.get("allocation")
+    if allocation:
+        h.append(f'<h3>目标权重兑现</h3><p>{esc(allocation["verdict"])}。</p><div class="tw"><table><tr><th>标的</th>'
+                 '<th class="n">目标</th><th class="n">实际日均</th><th class="n">偏离日</th><th class="n">其中一手以内</th>'
+                 '<th class="n">一手占权益</th></tr>' + "".join(
+            f'<tr><td>{esc(r["code"])}</td><td class="n">{r["target"]:.0%}</td><td class="n">{r["actual"]:.1%}</td>'
+            f'<td class="n">{r["over_days"]}</td><td class="n">{r["within_lot_days"]}</td>'
+            f'<td class="n">{_pct(r["lot_share"], 1)}</td></tr>' for r in allocation["names"]) + '</table></div>'
+                 f'<p class="mut">{esc(allocation["scope"])}。</p>')
     activity = modules.get("activity")
     if activity:
         h.append('<h3>退出完成与空仓</h3><ul>')

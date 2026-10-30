@@ -188,7 +188,7 @@ def other_platform(files, *, adapter, name, opening_cash=None):
     result = {'schema_version': SCHEMA, 'adapter': adapter + '_v1', 'name': name,
         'opening': {'kind': 'empty' if opening_cash is not None else 'first_close', 'cash': opening_cash},
         'fills': [], 'positions': [], 'snapshots': [], 'actions': [], 'logs': [],
-        'external_attribution': [], 'quote_observations': [], 'scores': [], 'prices': [], 'minute_prices': [], 'day_ranges': [], 'code': {}, 'sources': [],
+        'external_attribution': [], 'quote_observations': [], 'scores': [], 'prices': [], 'minute_prices': [], 'day_ranges': [], 'target_weights': [], 'code': {}, 'sources': [],
         'quality': {'fills_inferred': False, 'holdings_header_repaired': False,
                     'price_basis': 'unconfirmed', 'snapshots_complete': False}}
     seen, cash, assets = set(), {}, {}
@@ -439,6 +439,13 @@ def other_platform(files, *, adapter, name, opening_cash=None):
                         'score': numeric(raw, '打分', nonnegative=False) if raw else -rank, 'rank': int(rank),
                         'selected': flag in {'true', '1', 'yes', '是'} if flag else None,
                         'available_at': stamp[11:19] if len(stamp) > 10 else row.get('available_at', ''),
+                        'ref': _ref(kind, index)})
+            elif ({'date', 'code', 'target_weight'} <= fields or {'time', 'code', 'target_weight'} <= fields) and 'quantity' not in fields:
+                # The strategy's own target weights, for comparing with what the account held.
+                kind = 'target_weights'
+                for index, row in rows:
+                    result['target_weights'].append({'date': date_value(row.get('date') or row['time'], '目标日期'),
+                        'code': code_value(row['code']), 'target_weight': numeric(row['target_weight'], '目标权重'),
                         'ref': _ref(kind, index)})
             elif {'date', 'code', 'cash', 'quantity_change'} <= fields:
                 # Actual corporate actions (ex-date, cash per holding, share change), e.g. from the data vendor.

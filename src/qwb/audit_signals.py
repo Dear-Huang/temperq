@@ -20,8 +20,11 @@ def analyze(bundle, context, thresholds=None):
         return None
     ranks = defaultdict(dict)
     chosen = defaultdict(set)
+    flagged = set()                           # days whose selection is stated, even if it is "none"
     for s in ranked:
         ranks[s["date"]][s["code"]] = s["rank"]
+        if s.get("selected") is not None:
+            flagged.add(s["date"])
         if s.get("selected"):
             chosen[s["date"]].add(s["code"])
     days = sorted(d for d in ranks if d >= account["daily"][0]["date"]) if account.get("daily") else []
@@ -31,8 +34,9 @@ def analyze(bundle, context, thresholds=None):
     if len(days) < 20:
         return None
     for d in days:
-        if not chosen[d]:  # no explicit flag: the top-ranked name is the target
+        if not chosen[d] and d not in flagged:  # no flag at all: the top-ranked name is the target
             chosen[d] = {min(ranks[d], key=ranks[d].get)}
+    explicit = {d for d in days if d in flagged}
     held = defaultdict(set)
     for p in bundle["positions"]:
         held[p["date"]].add(p["code"])
@@ -55,20 +59,33 @@ def analyze(bundle, context, thresholds=None):
         orders = failed.get(d, [])
         platform = orders[-1]["message"] if orders and orders[-1].get("message") else ""
         held_ranks = [ranks[d][c] for c in held[d] if c in ranks[d]]
-        if (not orders and not traded[d] and held[d] and len(held_ranks) == len(held[d])
+        if (d not in explicit and want and not orders and not traded[d] and held[d] and len(held_ranks) == len(held[d])
                 and max(held_ranks) <= len(want) + 1):
             # Holding a name just behind the top with no order that day looks like the strategy's own retention
             # rule (keep while still near the top), not an execution gap. Reported apart from misses.
             retained.append({"date": d, "wanted": sorted(want), "held": sorted(held[d])})
             continue
+        near = (want and not orders and not traded[d] and held[d] and len(held_ranks) == len(held[d])
+                and max(held_ranks) <= len(want) + 1)
         if orders:
             reason = "委托未成交：" + (orders[-1]["reason"] or "未说明")
         elif changed or traded[d]:
             reason = "换仓当天未成交"
+        elif near:
+            # The target was stated, so this is a deviation; but not an execution failure either.
+            reason = "未下单，继续持有紧随其后的标的（是否保留规则需策略目标记录确认）"
         else:
             reason = "策略当天未下单"
         missed.append({"date": d, "wanted": sorted(want), "held": sorted(held[d]), "reason": reason,
                        "platform_message": platform, "order_time": orders[-1].get("time", "") if orders else ""})
+
+    extra_days, empty_but_held = [], []
+    for d in days:
+        outside = held[d] - chosen[d]
+        if outside:
+            extra_days.append(d)
+            if not chosen[d]:
+                empty_but_held.append(d)
 
     # 2. How often the top name changed, and how many changes a buffer would skip.
     switches = sum(chosen[a] != chosen[b] for a, b in zip(days, days[1:]))
@@ -116,6 +133,8 @@ def analyze(bundle, context, thresholds=None):
         "whipsaw_net": sum(l["net_after_tick_scenario"] for l in whipsaw),
         "average_hold_days": len(days) / (switches + 1),      # signal days per change, not trading days held
         "top_switches": top_switches, "target_size": target_size,
+        "explicit_target_days": len(explicit), "empty_target_days": sum(1 for d in days if not chosen[d]),
+        "extra_holding_days": len(extra_days), "empty_target_but_held_days": len(empty_but_held),
         "scope": "按策略自己的每日排名描述实际发生的换仓；保留带只数少换的次数，收益影响需在原平台重跑",
     }
 
