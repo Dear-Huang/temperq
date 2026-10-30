@@ -269,6 +269,13 @@ def analyze(bundle, settings=None, *, policy=None):
     allocation = audit_allocation.analyze(bundle, context["accounting"], thresholds)
     if allocation:
         context["allocation"] = allocation
+    from . import audit_fulfilment, audit_capital
+    fulfilment = audit_fulfilment.analyze(bundle, context["accounting"], thresholds)
+    if fulfilment:
+        context["fulfilment"] = fulfilment
+    capital = audit_capital.analyze(bundle, context["accounting"], thresholds)
+    if capital:
+        context["capital"] = capital
     from . import audit_activity
     activity = audit_activity.analyze(bundle, context["accounting"], thresholds)
     if activity:

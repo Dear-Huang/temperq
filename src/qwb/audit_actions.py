@@ -23,6 +23,8 @@ _RULES = {
     "fill_timing": ("M-FILL-TIMING", "T-TIMING-SHARE"),
     "partial_entry": ("M-PARTIAL-ENTRY", "T-PARTIAL-DAYS"),
     "failed_exits": ("M-ACTIVITY",),
+    "off_target_pnl": ("M-FULFILMENT",),
+    "capital": ("M-CAPITAL-FLOOR", "T-CAPITAL-L1"),
     "idle": ("M-ACTIVITY",),
     "fill_quality": ("M-FILL-RANGE", "M-FILL-FLOOR", "T-FILL-BEST-SHARE"),
     "sequence": ("M-SEQUENCE",),
@@ -90,6 +92,48 @@ def _quality_card(quality):
         "evidence": "scenario",
         "basis": "成交日全天最高最低价与成交后分钟价；股数和费用不变",
         "overturn": "策略确实只用前一日数据、在竞价截止前提交，并且单笔远小于当分钟成交量；或延后执行重跑后结论不变。",
+    }
+
+
+def _off_target_card(fulfilment):
+    """A large part of the return came from holdings already outside the strategy's own target."""
+    by = (fulfilment or {}).get("by_target") or {}
+    if (fulfilment or {}).get("status") != "flagged" or not by:
+        return None
+    return {
+        "id": "off_target_pnl", "state": "review", "title": "收益来自目标外的持仓",
+        "finding": by["verdict"] + "。",
+        "headline": f"{by['outside_share']:.0%} 的净盈利来自策略目标之外的持仓：收益不完全对应声明的策略",
+        "edits": [],
+        "options": [{"label": "维持原样", "effect": "目标外持仓本来就是策略允许的过渡状态时"},
+                    {"label": "按实际成交更新策略状态", "effect": "下单后按成交回报更新内部持仓，没卖掉的仓位继续纳入管理"}],
+        "saving": "不省钱；持仓更符合策略的设计",
+        "sacrifice": "这部分收益如果来自没管住的仓位，修正后可能消失，也可能反过来",
+        "net": "会计分组不能直接扣掉；要在原平台修正后重跑，才知道收益变多少",
+        "evidence": "descriptive",
+        "basis": "逐标的逐日盈亏、前一日收盘持仓和策略每日目标",
+        "overturn": "策略明确允许这些仓位留在目标外，或修正后重跑收益不变。",
+    }
+
+
+def _capital_card(capital):
+    """The capital cannot hold the target weights in whole lots, even before fees and timing."""
+    if (capital or {}).get("status") != "limited":
+        return None
+    return {
+        "id": "capital", "state": "review", "title": "资金太小，凑不出目标配置",
+        "finding": capital["verdict"] + "。",
+        "headline": "小账户按整手买不出这组目标权重：同样的权重换个本金，实际运行的是另一个策略",
+        "edits": [],
+        "options": [{"label": "维持原样", "effect": "实际资金在下界可接受的规模以上时"},
+                    {"label": "换单价更低的标的或允许零股", "effect": "同类资产里换一手金额更小的品种"},
+                    {"label": "写明最低资金", "effect": "在策略说明里注明适用的最低本金"}],
+        "saving": "不省钱",
+        "sacrifice": "无",
+        "net": "下界只证明做不到，做得到要按真实约束另行验证",
+        "evidence": "scenario",
+        "basis": "目标权重、当时价格、一手 100 份与资金规模的整数规划",
+        "overturn": "实际账户资金在下界可接受的规模以上；或交易品种允许零股。",
     }
 
 
@@ -571,7 +615,8 @@ def cards(result, bundle=None):
                  "fees": audit_levers.fees(levers, bundle, more, (result.get("settings") or {}).get("commission_bp")),
                  "buffer": audit_levers.buffer(levers, (modules.get("signal_mapping") or {}).get("buffer_rank", 2)),
                  "cash_buffer": audit_levers.cash_buffer(levers, thresholds["T-CASH-BUFFER"])}
-    out = [_tick_card(modules.get("tick_analysis") or {}),
+    out = [_off_target_card(modules.get("fulfilment")),
+           _tick_card(modules.get("tick_analysis") or {}),
            _holding_card(modules.get("holding_analysis") or {}, edits, thresholds),
            _price_card(modules.get("holding_analysis") or {}, modules.get("tick_analysis") or {}, edits, thresholds),
            _fee_card(fees_module, edits, modules.get("fee_model"), thresholds),
@@ -581,6 +626,7 @@ def cards(result, bundle=None):
            _timing_card(modules.get("fill_timing")),
            _partial_card(modules.get("partial_entry")),
            _exit_card(modules.get("activity")),
+           _capital_card(modules.get("capital")),
            _idle_card(modules.get("activity")),
            _quality_card(modules.get("fill_quality")),
            _sequence_card(modules.get("sequence"))]

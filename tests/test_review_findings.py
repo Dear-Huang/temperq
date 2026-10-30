@@ -128,3 +128,38 @@ def test_n04_target_weights_against_holdings_and_lot_size():
     row = out["names"][0]
     assert abs(row["actual"] - .6) < 1e-9 and row["over_days"] == 0           # 0.6 vs 0.7 is within 15% of target
     assert abs(row["lot_share"] - .1) < 1e-9
+
+
+def test_fulfilment_splits_pnl_by_prior_target_and_measures_overnight():
+    from qwb import audit_fulfilment
+    days = ["2024-04-01", "2024-04-02", "2024-04-03"]
+    snaps = [{"date": d, "equity": 1000., "cash": 0.} for d in days]
+    positions = [{"date": d, "code": "B.SH", "quantity": 100, "price": 10., "market_value": 1000.} for d in days]
+    scores = [{"date": d, "code": c, "score": 1., "selected": c == "A.SH"} for d in days for c in ("A.SH", "B.SH")]
+    contributions = [{"date": "2024-04-02", "code": "B.SH", "net_pnl": 50.}, {"date": "2024-04-03", "code": "B.SH", "net_pnl": 30.}]
+    minutes = [{"date": d, "code": "B.SH", "time": "09:31", "open": 10.2, "close": 10.2} for d in days[1:]]
+    out = audit_fulfilment.analyze({"snapshots": snaps, "positions": positions, "scores": scores, "minute_prices": minutes},
+                                   {"status": "verified", "contributions": contributions})
+    assert out["by_target"]["outside"] == 80. and out["by_target"]["inside"] == 0. and out["status"] == "flagged"
+    assert abs(out["overnight"]["gap_pnl"] - 40.) < 1e-9          # 2 nights x 100 shares x (10.2 - 10.0)
+
+
+def test_capital_floor_proves_a_small_account_cannot_hold_the_target():
+    from qwb import audit_capital
+    assert abs(audit_capital.floor([.7, .3], [120., 4.], 10_000.) - 1.4) < 1e-6 or \
+        audit_capital.floor([.7, .3], [120., 4.], 10_000.) > 1.     # one lot of the 120-yuan fund costs 12,000
+    assert audit_capital.floor([.7, .3], [120., 4.], 1_000_000.) < .02
+
+
+def test_rank1_test_separates_from_ic():
+    out = audit_premise.analyze(premise_bundle())
+    assert out["top_excess_mean"] is not None and out["top_excess_t"] is not None
+
+
+def test_intraday_day_that_ends_flat_is_not_idle():
+    from qwb import audit_activity
+    days = [f"2024-05-{d:02d}" for d in range(1, 31)]
+    snaps = [{"date": d, "cash": 100., "equity": 100.} for d in days]
+    fills = [{"date": d} for d in days]                              # traded every day, flat at every close
+    out = audit_activity.analyze({"snapshots": snaps, "positions": [], "fills": fills, "orders": []}, {"status": "verified"})
+    assert out["idle"]["longest"] == 0

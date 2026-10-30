@@ -413,6 +413,9 @@ def render(record, bundle, result):
             if premise.get("selected_excess_mean") is not None:
                 h.append(f'<tr><td>选股</td><td>选中减候选池（每期，t）</td><td class="n">{premise["selected_excess_mean"]:+.2%}（{_t(premise.get("selected_excess_t"))}）</td>'
                          f'<td>{premise["selected_beat_share"]:.0%} 的周期跑赢候选池</td></tr>')
+            if premise.get("top_excess_mean") is not None:
+                h.append(f'<tr><td>第一名</td><td>排第一的标的减候选池（每期，t）</td><td class="n">{premise["top_excess_mean"]:+.2%}'
+                         f'（{_t(premise.get("top_excess_t"))}）</td><td>全排名 IC 和“买第一名”回答不同问题：IC 为零时第一名仍可能更好，反之亦然</td></tr>')
             if premise.get("pool_compound") is not None:
                 h.append(f'<tr><td>收益来源</td><td>候选池等权 / 选中 累计</td><td class="n">{premise["pool_compound"]:+.1%} / {premise["selected_compound"]:+.1%}</td>'
                          '<td>不计费用；候选池涨幅是不靠前提也能拿到的部分</td></tr>')
@@ -502,6 +505,24 @@ def render(record, bundle, result):
             rows.append(("年化双边换手（成交额 / 期初权益）", f'{notional / perf["start_equity"] / perf["years"]:.1f} 倍'))
     h.append('<div class="tw"><table><tr><th>项目</th><th class="n">数值</th></tr>' + "".join(f'<tr><td>{a}</td><td class="n">{b}</td></tr>' for a, b in rows) + '</table></div>')
     h.append('<p class="mut">价差为按最小价位估算的情景，不是实测成本；原回测若已计滑点，需先分离再比较。逐笔费用见附件 fees.csv、tick-costs.csv。</p>')
+    fulfilment = modules.get("fulfilment")
+    if fulfilment:
+        h.append('<h3>收益对应的是不是声明的策略</h3>')
+        by = fulfilment.get("by_target")
+        if by:
+            h.append(f'<p>{esc(by["verdict"])}。</p><div class="tw"><table><tr><th>前一日收盘状态</th><th class="n">当日盈亏合计</th></tr>'
+                     f'<tr><td>在策略目标内</td><td class="n">{_yuan(by["inside"])}</td></tr>'
+                     f'<tr><td>在策略目标外</td><td class="n">{_yuan(by["outside"])}</td></tr>'
+                     f'<tr><td>前一日未持有（含当日新买入）</td><td class="n">{_yuan(by["fresh"])}</td></tr></table></div>')
+        h.append(f'<p>{esc(fulfilment["overnight"]["verdict"])}。</p><p class="mut">{esc(fulfilment["scope"])}。</p>')
+    capital = modules.get("capital")
+    if capital:
+        h.append('<h3>资金规模能否兑现配置</h3>'
+                 f'<p>{esc(capital["verdict"])}。</p><div class="tw"><table><tr><th class="n">资金</th>'
+                 '<th class="n">乐观下界平均</th><th class="n">最差</th><th class="n">超过容忍度的调仓日</th></tr>' + "".join(
+            f'<tr><td class="n">{g["capital"]:,.0f}</td><td class="n">{g["mean"]:.1%}</td><td class="n">{g["worst"]:.1%}</td>'
+            f'<td class="n">{g["infeasible_share"]:.0%}</td></tr>' for g in capital["grid"]) + '</table></div>'
+                 f'<p class="mut">{esc(capital["scope"])}。L1 同时计资产和现金两侧，0 到 200%。</p>')
     allocation = modules.get("allocation")
     if allocation:
         h.append(f'<h3>目标权重兑现</h3><p>{esc(allocation["verdict"])}。</p><div class="tw"><table><tr><th>标的</th>'

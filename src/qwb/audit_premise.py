@@ -307,8 +307,10 @@ def analyze(bundle, premise=None, partition=None, thresholds=None):
         spread = (statistics.mean(forward[c] for c in ordered[-third:]) - statistics.mean(forward[c] for c in ordered[:third])
                   if third else None)
         chosen = [forward[c] for c in selected[a] if c in forward]
+        best = ordered[-1]                                   # the name the premise ranks first
         rows.append({"date": a, "next": b, "ic": ic, "candidates": len(codes), "pool": statistics.mean(forward.values()),
-                     "selected": statistics.mean(chosen) if chosen else None, "spread": spread})
+                     "selected": statistics.mean(chosen) if chosen else None, "spread": spread,
+                     "top": forward[best] - statistics.mean(forward.values())})
     overall = _summary([r["ic"] for r in rows])
     spreads = [r["spread"] for r in rows if r["spread"] is not None]
     picked = [r["selected"] - r["pool"] for r in rows if r["selected"] is not None]
@@ -369,5 +371,7 @@ def analyze(bundle, premise=None, partition=None, thresholds=None):
             "selected_excess_mean": statistics.mean(picked) if picked else None,
             "selected_beat_share": sum(x > 0 for x in picked) / len(picked) if picked else None,
             "selected_excess_t": _summary(picked)["t"] if picked else None,
+            "top_excess_mean": statistics.mean(r["top"] for r in rows) if rows else None,
+            "top_excess_t": _summary([r["top"] for r in rows])["t"] if len(rows) > 1 else None,
             "pool_compound": pool_c, "selected_compound": sel_c,
             "periods": rows, "thresholds": {"min_periods": min_periods, "t": t_bar}}

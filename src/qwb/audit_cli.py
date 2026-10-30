@@ -141,6 +141,9 @@ def summary(bundle, result):
         "fill_quality": (lambda q: q and {"status": q.get("status"),
                                           "range": (q.get("range") or {}).get("verdict"), "floor": (q.get("floor") or {}).get("verdict")})(
             result["modules"].get("fill_quality")),
+        "fulfilment": (lambda f: f and {"by_target": (f.get("by_target") or {}).get("verdict"),
+                                         "overnight": f["overnight"]["verdict"]})(result["modules"].get("fulfilment")),
+        "capital": (lambda c: c and {"status": c.get("status"), "verdict": c.get("verdict")})(result["modules"].get("capital")),
         "allocation": (lambda a: a and {"status": a.get("status"), "verdict": a.get("verdict")})(result["modules"].get("allocation")),
         "activity": (lambda a: a and {"exits": (a.get("exits") or {}).get("verdict"), "idle": a["idle"]["verdict"],
                                        "status": a.get("status")})(result["modules"].get("activity")),

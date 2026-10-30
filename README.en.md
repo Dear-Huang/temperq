@@ -182,6 +182,28 @@ The visual training (LightGBM / Ridge), account adjustment diagnostics, historic
 
 TemperQ is at an early stage. Try it on one of your own backtests. If it finds a problem, if the report is hard to read, or if you think a judgement is wrong, please [open an issue](https://github.com/Dear-Huang/temperq/issues). If your platform is not supported yet, attach the headers of an anonymised export and we will prioritise it.
 
+## Recent changes (October 2026)
+
+This round came from repeated independent reviews: real RiceQuant and JoinQuant strategies were audited end to end, and a second party checked the report line by line. The changes share one theme: **the audit no longer treats its own inferences as facts**. It uses explicit materials when given, and says what it could not read when not.
+
+New checks:
+
+- **Does the return belong to the declared strategy**: each security-day's P&L is grouped by whether the name was inside the strategy's target at the previous close. In one rotation case, 37% of net profit came from holdings already outside the target. This is an accounting split; it is not subtracted from the return and does not predict a fixed version.
+- **Overnight exposure**: days still holding at the close, and the P&L from that close to the next open, so a strategy that claims to close out daily can be checked.
+- **Can the capital hold the allocation**: an integer program gives the smallest whole-lot distance from the target weights (an optimistic floor). A floor above the tolerance proves that capital cannot meet it; a small floor proves nothing.
+- **Target weight fulfilment**: optional `target_weights.csv`, comparing closing weights with targets and marking gaps within one board lot.
+- **Buying the top name, tested on its own**: besides the full-rank IC, the return of the top-ranked name against the candidate pool, with its t statistic. They answer different questions.
+- **Exits that failed, long idle stretches**: sells that did not complete and the days still held after; the longest run with no fills and no holdings (an intraday strategy that ends flat is not idle).
+
+Corrected judgements:
+
+- A day whose scores are all `selected=false` is an empty target, not "the top name by default"; a stated target is never excused by an inferred retention rule.
+- A top-up order that filled nothing is not a top-up; long gaps after a partial buy are reported.
+- Holdings outside the target, and days the strategy chose cash but still held something, are counted.
+- Dividends by recorded shares, no same-day resale for T+1 equity ETFs, platform default fees, and "contributed least" rather than "lost most" when every group made money.
+
+The source of every rule and threshold is in [Audit rules](docs/AUDIT_RULES.md).
+
 ## License
 
 Code under [AGPL-3.0](LICENSE), copyright Dear-Huang. Third-party components follow their own licenses; see [NOTICE](NOTICE).

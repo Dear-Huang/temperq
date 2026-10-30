@@ -58,12 +58,13 @@ def analyze(bundle, accounting, thresholds=None):
         else:
             out["exits"]["verdict"] = f"{len(sells)} 笔卖单都在当天成交完，或收盘时已不再持有"
 
-    # 2. idle stretches
-    idle = [d for d in days if not held.get(d)]
+    # 2. idle stretches: nothing held at the close and nothing traded that day (an intraday strategy ends flat)
+    traded = {f["date"] for f in bundle.get("fills") or []}
+    idle = [d for d in days if not held.get(d) and d not in traded]
     run = best = 0
     start = best_start = best_end = None
     for d in days:
-        if not held.get(d):
+        if not held.get(d) and d not in traded:
             run += 1
             start = start or d
             if run > best:
@@ -75,10 +76,10 @@ def analyze(bundle, accounting, thresholds=None):
                    "longest_from": best_start, "longest_to": best_end,
                    "mean_cash_share": sum(cash) / len(cash) if cash else None}
     if best >= LONG_IDLE:
-        out["idle"]["verdict"] = (f"{len(days)} 个交易日里 {len(idle)} 天收盘没有任何持仓，最长连续 {best} 个交易日"
+        out["idle"]["verdict"] = (f"{len(days)} 个交易日里 {len(idle)} 天既没有成交、收盘也没有任何持仓，最长连续 {best} 个交易日"
                                   f"（{best_start} 至 {best_end}），平均 {out['idle']['mean_cash_share']:.0%} 的权益是现金：低回撤可能来自策略长期没有投资，"
                                   "不等于控制了风险；要确认是不是本意，需要策略每天的目标持仓")
     else:
-        out["idle"]["verdict"] = f"{len(idle)} 天收盘没有持仓，最长连续 {best} 个交易日"
+        out["idle"]["verdict"] = f"{len(idle)} 天既没有成交也没有持仓，最长连续 {best} 个交易日"
     out["status"] = ("flagged" if (out.get("exits") or {}).get("failed", 0) >= 3 or best >= LONG_IDLE else "normal")
     return out
